@@ -1,0 +1,30 @@
+{
+  "name": "mind-tree-nature",
+  "version": "0.1.0",
+  "description": "An offline-first mind tree view for Obsidian notes.",
+  "type": "module",
+  "scripts": {
+    "build": "node esbuild.config.mjs production",
+    "dev": "node esbuild.config.mjs",
+    "check": "tsc --noEmit",
+    "test": "tsx --test --test-isolation=none test/*.test.ts"
+  },
+  "keywords": [
+    "obsidian",
+    "mind-map",
+    "markdown"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "monkey-around": "^2.3.0",
+    "yaml": "^2.9.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.2",
+    "esbuild": "^0.28.1",
+    "obsidian": "^1.13.1",
+    "tsx": "^4.23.5",
+    "typescript": "^7.0.2"
+  }
+}
