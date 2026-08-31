@@ -9,6 +9,22 @@
   box-shadow: none;
 }
 
+/* Keep accessible names available to assistive technology without creating a
+   visible element or a pointer target inside the canvas. */
+.mtn-visually-hidden {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  margin: -1px !important;
+  padding: 0 !important;
+  overflow: hidden !important;
+  clip: rect(0 0 0 0) !important;
+  clip-path: inset(50%) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+  pointer-events: none !important;
+}
+
 .mtn-view {
   --mtn-toolbar-height: 42px;
   --mtn-theme-root-accent: #6366f1;
@@ -275,15 +291,16 @@
 .mtn-connection.is-dashed { stroke-dasharray: var(--mtn-connection-dash, 8 6); }
 
 .mtn-node {
-  /* The node hugs its title. File controls occupy only their real right-hand
-     width, so left-aligned text and controls read as one visually centered group. */
+  /* The title track is measured independently. Markers and file controls append
+     to its screen-right without changing the title's left edge. */
+  --mtn-node-title-width: 1px;
   --mtn-node-control-width: 0px;
   --mtn-node-marker-width: 0px;
   --mtn-node-accent: var(--mtn-branch-color, var(--mtn-theme-root-accent));
   position: absolute;
   box-sizing: border-box;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--mtn-node-marker-width) var(--mtn-node-control-width);
+  grid-template-columns: var(--mtn-node-title-width) var(--mtn-node-marker-width) var(--mtn-node-control-width);
   align-items: center;
   justify-items: center;
   padding: 2px;
@@ -396,22 +413,6 @@
   overflow-wrap: anywhere;
   word-break: break-all;
   line-height: inherit;
-}
-
-/* A node without visible markers or file controls does not use the three-column
-   grid at all. Removing those tracks is more robust than assigning them 0px:
-   host-theme min-width/gap rules can otherwise leave an apparent trailing slot.
-   The title block is centered, while wrapped lines remain left-aligned. */
-.mtn-node.is-content-only:not(.is-editing) {
-  display: flex;
-  justify-content: center;
-}
-
-.mtn-node.is-content-only:not(.is-editing) > .mtn-node-title {
-  flex: 0 1 auto;
-  width: auto;
-  max-width: 100%;
-  margin-inline: auto;
 }
 
 .mtn-node > .mtn-node-title,

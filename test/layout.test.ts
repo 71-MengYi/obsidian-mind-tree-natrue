@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { addNode, createEmptyDocument, moveNode } from "../src/domain/tree";
 import {
   connectionPath,
+  getNodeBoxSize,
   getNodeFontSize,
   getNodeHorizontalInsets,
   getNodeLineHeight,
@@ -31,6 +32,22 @@ test("node width follows content while typography and minimum height retain thre
   assert.deepEqual([getNodeFontSize(0), getNodeFontSize(1), getNodeFontSize(2), getNodeFontSize(20)], [18, 16, 13, 13]);
   assert.deepEqual([getNodeLineHeight(0), getNodeLineHeight(1), getNodeLineHeight(2), getNodeLineHeight(20)], [23, 20, 17, 17]);
   assert.equal(getNodeSizeClass(3), getNodeSizeClass(99));
+});
+
+test("trailing UI has an independent width and never changes title measurement", () => {
+  const document = createEmptyDocument("Root");
+  const node = addNode(document, document.rootId, "Same title");
+  const plain = getNodeBoxSize(1, node.title, 200, node);
+
+  node.markers = [{ type: "progress", value: "todo" }];
+  node.resource = { type: "file", resourceId: "note", pathHint: "Same title.md", fileKind: "note" };
+  node.titleSync = "bidirectional";
+  const decorated = getNodeBoxSize(1, node.title, 200, node);
+
+  assert.equal(decorated.contentWidth, plain.contentWidth);
+  assert.equal(decorated.height, plain.height);
+  assert.equal(decorated.trailingWidth, 42);
+  assert.equal(decorated.width, plain.width + decorated.trailingWidth);
 });
 
 test("first-level branches use ordered unique slots and descendants inherit them", () => {
@@ -163,6 +180,59 @@ test("node alignment switches between shared level columns and compact parent-re
     compactWideChild.x - compactWideParent.x - compactWideParent.width);
 });
 
+test("level columns align title anchors even when sibling trailing widths differ", () => {
+  const document = createEmptyDocument("Root");
+  const plain = addNode(document, document.rootId, "Same");
+  const decorated = addNode(document, document.rootId, "Same");
+  decorated.markers = [{ type: "priority", value: "red" }];
+  decorated.resource = { type: "file", resourceId: "same", pathHint: "Same.md", fileKind: "note" };
+  decorated.titleSync = "off";
+
+  for (const mode of ["right", "left"] as const) {
+    const layout = layoutTree(document, document.rootId, true, 200, mode, "level");
+    const plainPosition = layout.nodes.find((node) => node.id === plain.id)!;
+    const decoratedPosition = layout.nodes.find((node) => node.id === decorated.id)!;
+    assert.equal(plainPosition.x, decoratedPosition.x, mode);
+    assert.equal(plainPosition.contentWidth, decoratedPosition.contentWidth, mode);
+    assert.equal(decoratedPosition.width - decoratedPosition.contentWidth, 64, mode);
+  }
+
+  const balancedDocument = createEmptyDocument("Root");
+  const branches = Array.from({ length: 4 }, (_, index) =>
+    addNode(balancedDocument, balancedDocument.rootId, `B${index}`));
+  branches[3]!.markers = [{ type: "progress", value: "done" }];
+  const balanced = layoutTree(balancedDocument, balancedDocument.rootId, true, 200, "balanced", "level");
+  const root = balanced.nodes.find((node) => node.id === balancedDocument.rootId)!;
+  const levelOne = balanced.nodes.filter((node) => node.depth === 1);
+  const leftAnchors = new Set(levelOne.filter((node) => node.x < root.x).map((node) => node.x));
+  const rightAnchors = new Set(levelOne.filter((node) => node.x > root.x).map((node) => node.x));
+  assert.equal(leftAnchors.size, 1);
+  assert.equal(rightAnchors.size, 1);
+});
+
+test("a node's trailing UI extends right from a stable title anchor in every layout", () => {
+  for (const mode of ["balanced", "right", "left", "tree", "radial"] as const) {
+    const document = createEmptyDocument("Root");
+    const first = addNode(document, document.rootId, "First");
+    addNode(document, document.rootId, "Second");
+    addNode(document, first.id, "Leaf");
+    const before = layoutTree(document, document.rootId, true, 200, mode, "level");
+    const beforeRoot = before.nodes.find((node) => node.id === document.rootId)!;
+
+    document.nodes[document.rootId]!.markers = [{ type: "priority", value: "blue" }];
+    document.nodes[document.rootId]!.resource = {
+      type: "file", resourceId: "root-note", pathHint: "Root.md", fileKind: "note"
+    };
+    document.nodes[document.rootId]!.titleSync = "bidirectional";
+    const after = layoutTree(document, document.rootId, true, 200, mode, "level");
+    const afterRoot = after.nodes.find((node) => node.id === document.rootId)!;
+
+    assert.equal(afterRoot.x, beforeRoot.x, mode);
+    assert.equal(afterRoot.contentWidth, beforeRoot.contentWidth, mode);
+    assert.equal(afterRoot.width - beforeRoot.width, 42, mode);
+  }
+});
+
 test("reparenting keeps every depth free of vertical overlap", () => {
   const document = createEmptyDocument("Root");
   const first = addNode(document, document.rootId, "First");
@@ -276,8 +346,16 @@ test("compact alignment keeps node rectangles separate in every layout mode", ()
   const document = createEmptyDocument("Root");
   for (let branchIndex = 0; branchIndex < 6; branchIndex += 1) {
     const branch = addNode(document, document.rootId, `Branch ${branchIndex} with varied width`);
+    if (branchIndex % 2 === 0) branch.markers = [{ type: "progress", value: "inprogress" }];
+    if (branchIndex % 3 === 0) {
+      branch.resource = {
+        type: "file", resourceId: `note-${branchIndex}`, pathHint: `Note ${branchIndex}.md`, fileKind: "note"
+      };
+      branch.titleSync = branchIndex === 0 ? "off" : "bidirectional";
+    }
     for (let childIndex = 0; childIndex <= branchIndex % 3; childIndex += 1) {
-      addNode(document, branch.id, `Child ${branchIndex}.${childIndex} with content`);
+      const child = addNode(document, branch.id, `Child ${branchIndex}.${childIndex} with content`);
+      if (childIndex === 1) child.markers = [{ type: "priority", value: "yellow" }];
     }
   }
 
@@ -298,12 +376,16 @@ test("compact alignment keeps node rectangles separate in every layout mode", ()
 });
 
 test("connection styles generate smooth, straight, and orthogonal paths", () => {
-  const from = { id: "from", depth: 0, x: 0, y: 10, width: 100, height: 40 };
-  const to = { id: "to", depth: 1, x: 200, y: 80, width: 80, height: 30 };
+  const from = { id: "from", depth: 0, x: 0, y: 10, contentWidth: 100, width: 100, height: 40 };
+  const to = { id: "to", depth: 1, x: 200, y: 80, contentWidth: 80, width: 80, height: 30 };
 
   assert.match(connectionPath(from, to, "right", "smooth"), / C /);
   assert.match(connectionPath(from, to, "right", "smooth-dashed"), / C /);
   assert.match(connectionPath(from, to, "right", "straight"), / L /);
   assert.match(connectionPath(from, to, "right", "orthogonal"), / H .* V .* H /);
   assert.match(connectionPath(from, to, "tree", "orthogonal-dashed"), / V .* H .* V /);
+
+  // Connection geometry deliberately continues to use the complete outer box.
+  const decoratedFrom = { ...from, width: 140 };
+  assert.match(connectionPath(decoratedFrom, to, "right", "straight"), /^M 140 /);
 });

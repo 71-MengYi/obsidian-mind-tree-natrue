@@ -63,5 +63,5 @@ test("radial controls follow the dominant outward axis and prefer horizontal tie
 });
 
 function position(id: string, x: number, y: number): PositionedNode {
-  return { id, depth: 0, x, y, width: 20, height: 20 };
+  return { id, depth: 0, x, y, contentWidth: 20, width: 20, height: 20 };
 }

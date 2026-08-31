@@ -72,6 +72,11 @@ export function getNodeHorizontalInsets(node?: MindTreeNode): number {
   return (node.titleSync === "bidirectional" ? 26 : 48) + markerWidth;
 }
 
+/** Width appended after the title-bearing node box. */
+export function getNodeTrailingWidth(node?: MindTreeNode): number {
+  return Math.max(0, getNodeHorizontalInsets(node) - 4);
+}
+
 export function getNodeFontSize(depth: number): number {
   return getDepthMetrics(depth).fontSize;
 }
@@ -156,6 +161,36 @@ export function getNodeSize(
   return { width, height };
 }
 
+export interface NodeBoxSize {
+  /** Complete visible width, including markers and file controls. */
+  width: number;
+  height: number;
+  /** Title width plus the node's 2 px padding on both sides. */
+  contentWidth: number;
+  /** Markers and file controls appended to the screen-right. */
+  trailingWidth: number;
+}
+
+/**
+ * Measure the title box independently from trailing UI. Layout algorithms use
+ * contentWidth as the stable title anchor and width as the collision boundary.
+ */
+export function getNodeBoxSize(
+  depth: number,
+  title = "",
+  nodeWrapWidth = DEFAULT_NODE_WRAP_WIDTH,
+  node?: MindTreeNode
+): NodeBoxSize {
+  const contentSize = getNodeSize(depth, title, nodeWrapWidth, 4);
+  const trailingWidth = getNodeTrailingWidth(node);
+  return {
+    width: contentSize.width + trailingWidth,
+    height: contentSize.height,
+    contentWidth: contentSize.width,
+    trailingWidth
+  };
+}
+
 export function getNodeSizeClass(depth: number): string {
   if (depth <= 0) return "mtn-depth-root";
   if (depth === 1) return "mtn-depth-1";
@@ -186,9 +221,17 @@ export function layoutTree(
 
   const createPosition = (node: MindTreeNode, relativeDepth: number): PositionedNode => {
     const actualDepth = Number.isFinite(startDepth) ? startDepth + relativeDepth : relativeDepth;
-    const size = getNodeSize(actualDepth, node.title, nodeWrapWidth, getNodeHorizontalInsets(node));
+    const size = getNodeBoxSize(actualDepth, node.title, nodeWrapWidth, node);
     relativeDepthById.set(node.id, relativeDepth);
-    return { id: node.id, depth: actualDepth, x: 0, y: 0, width: size.width, height: size.height };
+    return {
+      id: node.id,
+      depth: actualDepth,
+      x: 0,
+      y: 0,
+      contentWidth: size.contentWidth,
+      width: size.width,
+      height: size.height
+    };
   };
 
   /**
@@ -254,6 +297,55 @@ export function layoutTree(
     return maximumX;
   };
 
+  /**
+   * Place left-growing level columns from the outside in. A column's own width
+   * is added only after its title anchor has been assigned, so trailing controls
+   * move shallower columns to the right instead of pulling their own title left.
+   */
+  const applyLeftColumns = (nodes: PositionedNode[]): number => {
+    const widths = collectDepthMaximums(nodes, relativeDepthById, "width");
+    const columnX = new Map<number, number>();
+    let x = 0;
+    for (let depth = maximumMapKey(widths); depth >= 0; depth -= 1) {
+      columnX.set(depth, x);
+      if (depth > 0) {
+        x += (widths.get(depth) ?? 0) + (depth === 1 ? ROOT_HORIZONTAL_GAP : HORIZONTAL_GAP);
+      }
+    }
+    let maximumX = 1;
+    for (const node of nodes) {
+      node.x = columnX.get(relativeDepthById.get(node.id) ?? 0) ?? 0;
+      maximumX = Math.max(maximumX, node.x + node.width);
+    }
+    return maximumX;
+  };
+
+  /**
+   * Compact left layout is solved from leaves toward the root. A node's own
+   * trailing width never participates in its x coordinate; it only pushes its
+   * ancestors right far enough to keep the requested parent/child gap.
+   */
+  const applyCompactLeft = (nodes: PositionedNode[], connections: LayoutConnection[], rootId: NodeId): number => {
+    const nodeById = new Map(nodes.map((node) => [node.id, node]));
+    const childrenById = collectConnectionChildren(connections);
+    const placeBranch = (id: NodeId): void => {
+      const node = nodeById.get(id);
+      if (!node) return;
+      const childIds = childrenById.get(id) ?? [];
+      let rightmostChildEdge = 0;
+      for (const childId of childIds) {
+        placeBranch(childId);
+        const child = nodeById.get(childId);
+        if (child) rightmostChildEdge = Math.max(rightmostChildEdge, child.x + child.width);
+      }
+      node.x = childIds.length === 0
+        ? 0
+        : rightmostChildEdge + (id === rootId ? ROOT_HORIZONTAL_GAP : HORIZONTAL_GAP);
+    };
+    placeBranch(rootId);
+    return nodes.reduce((maximum, node) => Math.max(maximum, node.x + node.width), 1);
+  };
+
   const finish = (nodes: PositionedNode[], connections: LayoutConnection[], explicitHeight?: number): TreeLayout => {
     if (nodes.length === 0) return { nodes, connections, width: 1, height: 1 };
     nodes.sort((left, right) => left.depth - right.depth || left.y - right.y || left.x - right.x);
@@ -283,17 +375,20 @@ export function layoutTree(
         .filter((child): child is TreeBlock => child !== undefined);
       const childrenWidth = children.reduce((sum, child) => sum + child.width, 0)
         + Math.max(0, children.length - 1) * siblingGap;
-      const blockWidth = Math.max(positioned.width, childrenWidth);
-      positioned.x = (blockWidth - positioned.width) / 2;
+      // Center the title-bearing box over the children. The complete node may
+      // extend farther to the right, but its trailing UI never shifts the title.
+      const childStartX = Math.max(0, (positioned.contentWidth - childrenWidth) / 2);
+      positioned.x = Math.max(0, (childrenWidth - positioned.contentWidth) / 2);
       const nodes = [positioned];
       const connections: LayoutConnection[] = [];
-      let childX = (blockWidth - childrenWidth) / 2;
+      let childX = childStartX;
       for (const child of children) {
         for (const childNode of child.nodes) childNode.x += childX;
         nodes.push(...child.nodes);
         connections.push({ from: id, to: child.root.id }, ...child.connections);
         childX += child.width + siblingGap;
       }
+      const blockWidth = Math.max(positioned.x + positioned.width, childStartX + childrenWidth);
       return { nodes, connections, width: blockWidth, root: positioned };
     };
     const root = buildTreeSubtree(startId, 0);
@@ -402,7 +497,9 @@ export function layoutTree(
         ? compactRadiusById.get(node.id) ?? 0
         : radiusByDepth.get(depth) ?? 0;
       const angle = angleById.get(node.id) ?? 0;
-      node.x = Math.cos(angle) * radius - node.width / 2;
+      // The polar point is the center of the title-bearing box. Markers and
+      // controls always grow toward screen-right from that stable position.
+      node.x = Math.cos(angle) * radius - node.contentWidth / 2;
       node.y = Math.sin(angle) * radius - node.height / 2;
     }
     shiftIntoPositiveCoordinates(nodes);
@@ -485,8 +582,7 @@ export function layoutTree(
         const depth = relativeDepthById.get(node.id) ?? 1;
         const side = sideById.get(node.id) ?? "right";
         if (side === "left") {
-          const columnWidth = leftWidths.get(depth) ?? node.width;
-          node.x = (leftX.get(depth) ?? rootPosition.x) + columnWidth - node.width;
+          node.x = leftX.get(depth) ?? rootPosition.x;
         } else {
           node.x = rightX.get(depth) ?? rootPosition.x;
         }
@@ -494,32 +590,49 @@ export function layoutTree(
     } else {
       const nodeById = new Map(nodes.map((node) => [node.id, node]));
       const childrenById = collectConnectionChildren(connections);
-      const placeChildren = (id: NodeId): void => {
+      const placeRightChildren = (id: NodeId): void => {
         const parent = nodeById.get(id);
         if (!parent) return;
         for (const childId of childrenById.get(id) ?? []) {
           const child = nodeById.get(childId);
-          if (!child) continue;
+          if (!child || sideById.get(childId) !== "right") continue;
           const gap = id === startId ? ROOT_HORIZONTAL_GAP : HORIZONTAL_GAP;
-          child.x = sideById.get(childId) === "left"
-            ? parent.x - gap - child.width
-            : parent.x + parent.width + gap;
-          placeChildren(childId);
+          child.x = parent.x + parent.width + gap;
+          placeRightChildren(childId);
         }
       };
-      rootPosition.x = 0;
-      placeChildren(startId);
-      shiftIntoPositiveCoordinates(nodes);
+      const placeLeftChildren = (id: NodeId): void => {
+        const node = nodeById.get(id);
+        if (!node) return;
+        const childIds = (childrenById.get(id) ?? []).filter((childId) => sideById.get(childId) === "left");
+        let rightmostChildEdge = 0;
+        for (const childId of childIds) {
+          placeLeftChildren(childId);
+          const child = nodeById.get(childId);
+          if (child) rightmostChildEdge = Math.max(rightmostChildEdge, child.x + child.width);
+        }
+        if (id !== startId) node.x = childIds.length === 0 ? 0 : rightmostChildEdge + HORIZONTAL_GAP;
+      };
+      for (const branch of left) placeLeftChildren(branch.root.id);
+      const leftExtent = left.reduce(
+        (maximum, branch) => Math.max(maximum, branch.root.x + branch.root.width),
+        0
+      );
+      rootPosition.x = left.length > 0 ? leftExtent + ROOT_HORIZONTAL_GAP : 0;
+      for (const branch of right) {
+        branch.root.x = rootPosition.x + rootPosition.width + ROOT_HORIZONTAL_GAP;
+        placeRightChildren(branch.root.id);
+      }
     }
     return finish(nodes, connections, totalHeight);
   }
 
   const rootBlock = buildSideSubtree(startId, 0);
   if (!rootBlock) return { nodes: [], connections: [], width: 1, height: 1 };
-  const width = applyRightColumns(rootBlock.nodes, rootBlock.connections);
   if (layoutMode === "left") {
-    for (const node of rootBlock.nodes) node.x = width - node.x - node.width;
-  }
+    if (nodeAlignment === "compact") applyCompactLeft(rootBlock.nodes, rootBlock.connections, startId);
+    else applyLeftColumns(rootBlock.nodes);
+  } else applyRightColumns(rootBlock.nodes, rootBlock.connections);
   return finish(rootBlock.nodes, rootBlock.connections, rootBlock.height);
 }
 

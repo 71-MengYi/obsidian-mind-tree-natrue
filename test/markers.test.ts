@@ -14,7 +14,7 @@ import {
 import { parseMindTreeFile, serializeMindTreeFile } from "../src/format/document";
 import { renderOutline } from "../src/format/outline";
 import { renderBranchSvg } from "../src/services/export";
-import { getNodeHorizontalInsets, getNodeSize, wrapNodeTitle } from "../src/ui/layout";
+import { getNodeBoxSize, getNodeHorizontalInsets, getNodeSize, wrapNodeTitle } from "../src/ui/layout";
 
 test("recognizes Excalidraw only from official Frontmatter values", () => {
   assert.equal(classifyFileSubtype({ "excalidraw-plugin": "raw" }), "excalidraw");
@@ -173,6 +173,14 @@ test("linked Excalidraw files derive a drawing badge and readable outline suffix
   assert.match(svg, /fill="#7d4fbe" stroke="none"/);
   assert.match(svg, /fill="#ffffff">绘图<\/text>/);
   assert.match(svg, />绘图<\/text>/);
+
+  const branchSvg = renderBranchSvg(document, node.id);
+  const nodeX = Number(/<g class="mtn-depth-1"[^>]*><rect x="([^"]+)"/.exec(branchSvg)?.[1]);
+  const textX = Number(/<tspan x="([^"]+)"/.exec(branchSvg)?.[1]);
+  const badgeX = Number(/class="mtn-excalidraw-marker"><rect x="([^"]+)"/.exec(branchSvg)?.[1]);
+  const box = getNodeBoxSize(1, node.title, 240, node);
+  assert.equal(textX, nodeX + 2);
+  assert.equal(badgeX, nodeX + box.contentWidth);
 
   delete node.resource.fileSubtype;
   node.resource.pathHint = "drawings/Suffix-only.excalidraw.md";

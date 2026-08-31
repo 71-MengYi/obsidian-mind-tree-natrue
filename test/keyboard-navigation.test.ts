@@ -43,9 +43,9 @@ test("balanced branches reverse hierarchy keys on the left side", () => {
   const leftBranch = addNode(document, document.rootId, "Left");
   const child = addNode(document, leftBranch.id, "Child");
   const positions = [
-    { id: document.rootId, depth: 0, x: 200, y: 100, width: 100, height: 30 },
-    { id: leftBranch.id, depth: 1, x: 20, y: 100, width: 100, height: 30 },
-    { id: child.id, depth: 2, x: -140, y: 100, width: 100, height: 30 }
+    { id: document.rootId, depth: 0, x: 200, y: 100, contentWidth: 100, width: 100, height: 30 },
+    { id: leftBranch.id, depth: 1, x: 20, y: 100, contentWidth: 100, width: 100, height: 30 },
+    { id: child.id, depth: 2, x: -140, y: 100, contentWidth: 100, width: 100, height: 30 }
   ];
 
   assert.equal(

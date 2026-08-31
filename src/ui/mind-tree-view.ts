@@ -1,10 +1,7 @@
 import {
-  Menu,
   normalizePath,
   Notice,
-  Platform,
   Scope,
-  setIcon,
   TextFileView,
   TFile,
   WorkspaceLeaf
@@ -30,13 +27,6 @@ import {
   setCollapsedAfterDepth,
   toggleCollapsed
 } from "../domain/tree";
-import {
-  getNodeHighlightColor,
-  getNodeMarkerDisplayWidth,
-  getVisibleNodeMarkers,
-  hasExcalidrawResourceMarker,
-  hasMindTreeResourceMarker
-} from "../domain/markers";
 import { MindTreeFormatError, parseMindTreeFile, serializeMindTreeFile } from "../format/document";
 import { buildLinkedResourcePath, linkedFileTitle } from "../format/resource-id";
 import { renderBranchMarkdown } from "../format/outline";
@@ -63,9 +53,7 @@ import {
 } from "../services/text-import";
 import type {
   BranchClipboardPayload,
-  DropPosition,
   FileResourceRef,
-  MindTreeCollectionMode,
   MindTreeConnectionStyle,
   MindTreeDocument,
   MindTreeDocumentSettings,
@@ -79,44 +67,38 @@ import type {
 import { MIND_TREE_VIEW_TYPE } from "../view-routing";
 import type MindTreeNaturePlugin from "../main";
 import {
-  centerDragGhostAtPointer,
   resolveDropPlacement,
   type DropNodeRect,
   type DropPlacement
 } from "./drop-placement";
-import { DragDropController, extractVaultPathCandidates } from "./file-drop";
+import { extractVaultPathCandidates } from "./file-drop";
 import { resolveFoldDirections, type FoldDirection } from "./fold-direction";
-import { CHAIN_BROKEN_ICON, SHARE_SQUARE_ICON } from "./icons";
 import {
   resolveArrowNavigationTarget,
-  shouldHandleStructuralCreationKey,
   type NavigationArrow
 } from "./keyboard-navigation";
 import { openMarkerPopover, type MarkerPopoverHandle } from "./marker-popover";
 import { shouldHandleMindTreePaste } from "./paste-routing";
-import { ClipboardController } from "./clipboard-controller";
+import { createBottomStatusBarState, MindTreeViewShell } from "./components";
 import {
-  connectionPath,
-  getNodeSizeClass,
+  CanvasInteractionController, ClipboardController, DragDropController, KeyboardController, NodeDragController
+} from "./controllers";
+import {
   layoutTree,
   type TreeLayout
 } from "./layout";
 import {
-  branchColorCss,
-  COLLECTION_MODE_OPTIONS,
-  CONNECTION_OPTIONS,
   getBranchColorSlots,
-  LAYOUT_OPTIONS,
-  NODE_SHAPE_OPTIONS,
-  THEME_OPTIONS
 } from "./presentation";
-import { resolveThemeConnection } from "./theme-presets";
+import { ConnectionRenderer, NodeRenderer } from "./renderers";
+import {
+  CollapseLevelMenu, CopyMenu, ExportMenu, KeyboardHelpMenu, NodeContextMenu, TreeSettingsMenu
+} from "./menus";
 import {
   DEFAULT_VIEWPORT,
   centerViewportOnRect,
   panViewportByWheel,
   preserveViewportPointAfterLayout,
-  wheelDeltaToPixels,
   ZOOM_STEP,
   zoomViewportAt,
   viewportToCssPresentation,
@@ -137,38 +119,6 @@ import {
   type DeleteBranchAction,
   type SaveConflictAction
 } from "./modals";
-
-interface PointerGesture {
-  mode: "marquee" | "pan";
-  pointerId: number;
-  startX: number;
-  startY: number;
-  lastX: number;
-  lastY: number;
-  additive: boolean;
-  moved: boolean;
-  /** Snapshot used to make Ctrl/Cmd marquee a live union, not cumulative drift. */
-  selectionBeforeMarquee?: Set<NodeId>;
-  primaryBeforeMarquee?: NodeId;
-}
-
-interface NodeDragState {
-  nodeId: NodeId;
-  draggedRootIds: NodeId[];
-  startX: number;
-  startY: number;
-  renderedWidth: number;
-  renderedHeight: number;
-  dragging: boolean;
-  targetId?: NodeId;
-  position?: DropPosition;
-  ghostEl?: HTMLElement;
-}
-
-interface ViewSettingChoice<T extends string | number> {
-  value: T;
-  label: string;
-}
 
 /** A visible node center captured before a layout pass changes world coordinates. */
 interface LayoutViewportAnchor {
@@ -221,33 +171,24 @@ export class MindTreeView extends TextFileView {
   private foldDirectionByNodeId = new Map<NodeId, FoldDirection>();
 
   private rootEl!: HTMLElement;
-  private viewMenuEl!: HTMLElement;
-  private settingsButtonEl!: HTMLButtonElement;
-  private toolbarEl!: HTMLElement;
-  private statusEl!: HTMLElement;
-  private bottomBarEl!: HTMLElement;
-  private topicCountEl!: HTMLElement;
-  private noteCountEl!: HTMLElement;
-  private treeDepthEl!: HTMLElement;
-  private saveButtonEl!: HTMLButtonElement;
-  private scanFolderButtonEl!: HTMLButtonElement;
-  private undoButtonEl!: HTMLButtonElement;
-  private redoButtonEl!: HTMLButtonElement;
   private saveState: "saved" | "dirty" | "error" = "saved";
+  private saveButtonBusy = false;
+  private scanButtonBusy = false;
   private canvasEl!: HTMLElement;
   private panLayerEl!: HTMLElement;
   private worldEl!: HTMLElement;
   private connectionsEl!: SVGSVGElement;
+  private connectionRenderer?: ConnectionRenderer;
   private nodeLayerEl!: HTMLElement;
-  private marqueeEl!: HTMLElement;
+  private nodeRenderer?: NodeRenderer;
+  private canvasInteractionController?: CanvasInteractionController;
+  private nodeDragController?: NodeDragController;
+  private keyboardController?: KeyboardController;
   private currentLayout?: TreeLayout;
   /** Cached first-level branch palette assignment shared by nodes and edges. */
   private branchColorSlotByNodeId = new Map<NodeId, number>();
-  private pointerGesture?: PointerGesture;
   private editingLayoutFrame?: number;
   private pendingEditingLayout?: { nodeId: NodeId; title: string };
-  /** Removes owner-window listeners if the view closes during a node drag. */
-  private activePointerCleanup?: () => void;
   private fileDropTargetEl?: HTMLElement;
   private fileDropPlacement?: DropPlacement;
   private markerPopover?: MarkerPopoverHandle;
@@ -262,6 +203,8 @@ export class MindTreeView extends TextFileView {
   private displayFilePath?: string;
   /** Hide the world until a newly opened file has its root-centered viewport. */
   private initialRootCenterPending = true;
+  /** Fixed chrome and layered canvas; view logic only supplies state/actions. */
+  private shell?: MindTreeViewShell;
 
   constructor(leaf: WorkspaceLeaf, readonly plugin: MindTreeNaturePlugin) {
     super(leaf);
@@ -322,7 +265,13 @@ export class MindTreeView extends TextFileView {
     const ownerWindow = this.ownerWindow();
     if (this.saveTimer !== undefined) ownerWindow.clearTimeout(this.saveTimer);
     if (this.editingLayoutFrame !== undefined) ownerWindow.cancelAnimationFrame(this.editingLayoutFrame);
-    this.activePointerCleanup?.();
+    this.nodeDragController?.destroy();
+    this.nodeDragController = undefined;
+    this.keyboardController = undefined;
+    this.nodeRenderer?.destroy();
+    this.nodeRenderer = undefined;
+    this.connectionRenderer?.destroy();
+    this.connectionRenderer = undefined;
     // Closing a view that was only panned or zoomed must not rewrite the file.
     if (this.document && this.file && this.documentSession.dirty) {
       try {
@@ -331,6 +280,10 @@ export class MindTreeView extends TextFileView {
         if (!(error instanceof SaveConflictError)) throw error;
       }
     }
+    this.canvasInteractionController?.destroy();
+    this.canvasInteractionController = undefined;
+    this.shell?.destroy();
+    this.shell = undefined;
     await super.onClose();
   }
 
@@ -861,187 +814,193 @@ export class MindTreeView extends TextFileView {
   }
 
   private buildShell(): void {
-    this.contentEl.empty();
-    this.rootEl = this.contentEl.createDiv("mtn-view");
-    this.rootEl.addClass("is-initializing-viewport");
-    this.viewMenuEl = this.rootEl.createDiv("mtn-view-menu-bar");
-    this.settingsButtonEl = this.viewMenuEl.createEl("button", {
-      cls: "clickable-icon mtn-view-menu-button mtn-view-settings-button",
-      attr: { type: "button", "aria-label": t("view.settings") }
+    this.shell?.destroy();
+    this.shell = new MindTreeViewShell(this.contentEl, {
+      menu: { settings: t("view.settings"), keyboardHelp: t("shortcut.help") },
+      toolbar: {
+        expandAll: t("toolbar.expandAll"), collapseAll: t("toolbar.collapseAll"),
+        collapseLevel: t("toolbar.collapseLevel"), markers: t("toolbar.markers"),
+        fit: t("toolbar.fit"), zoomOut: t("toolbar.zoomOut"), zoomIn: t("toolbar.zoomIn"),
+        search: t("toolbar.search"), copy: t("toolbar.copy"),
+        importText: t("toolbar.import"), exportTree: t("toolbar.export")
+      },
+      bottom: {
+        resetCanvas: t("statusBar.resetCanvas"), save: t("statusBar.save"),
+        scanFolder: t("statusBar.scanFolder"), undo: t("toolbar.undo"), redo: t("toolbar.redo")
+      },
+      canvas: { ariaLabel: t("canvas.aria") }
+    }, {
+      menu: {
+        showSettings: (event) => this.showViewSettingsMenu(event),
+        showKeyboardHelp: (event) => this.showKeyboardHelp(event)
+      },
+      toolbar: {
+        expandAll: () => this.setSelectedBranchesCollapsed(false),
+        collapseAll: () => this.setSelectedBranchesCollapsed(true),
+        showCollapseLevel: (event) => this.showCollapseLevelMenu(event),
+        showMarkers: (button) => {
+          const nodeId = this.primarySelectedId;
+          if (!nodeId) return;
+          const rect = button.getBoundingClientRect();
+          this.showMarkerPopover(nodeId, { x: rect.left, y: rect.bottom + 6 });
+        },
+        fit: () => this.fitCanvas(),
+        zoomOut: () => this.zoomByStep(-ZOOM_STEP),
+        zoomIn: () => this.zoomByStep(ZOOM_STEP),
+        search: () => this.searchNodes(),
+        showCopyMenu: (event) => this.showCopyMenu(event),
+        importText: () => this.showTextImportModal(),
+        showExportMenu: (event) => this.showExportMenu(event)
+      },
+      bottom: {
+        resetCanvas: () => this.resetCanvasToRoot(),
+        save: () => void this.saveFromStatusBar(),
+        scanFolder: () => void this.scanFolderFromStatusBar(),
+        undo: () => this.undo(),
+        redo: () => this.redo()
+      },
+      canvas: {
+        pointerDown: (event) => this.canvasInteractionController?.pointerDown(event),
+        pointerMove: (event) => this.canvasInteractionController?.pointerMove(event),
+        pointerUp: (event) => this.canvasInteractionController?.pointerUp(event),
+        contextMenu: (event) => {
+          if (this.suppressContextMenu || !(event.target as HTMLElement).closest(".mtn-node")) event.preventDefault();
+          this.suppressContextMenu = false;
+        },
+        wheel: (event) => this.canvasInteractionController?.wheel(event),
+        dragEnter: (event) => this.onCanvasFileDragOver(event),
+        dragOver: (event) => this.onCanvasFileDragOver(event),
+        dragLeave: (event) => this.onCanvasFileDragLeave(event),
+        drop: (event) => void this.onCanvasFileDrop(event),
+        keyDown: (event) => this.keyboardController?.keyDown(event),
+        paste: (event) => this.onDocumentPaste(event),
+        documentDragStart: (event) => this.captureInternalFileDrag(event),
+        documentDragEnd: () => {
+          this.dragDropController.clear();
+          this.clearFileDropFeedback();
+        },
+        resize: () => {
+          if (this.tryApplyInitialRootCenter()) this.applyViewport();
+        }
+      }
     });
-    setIcon(this.settingsButtonEl, "menu");
-    this.settingsButtonEl.addEventListener("click", (event) => {
-      event.stopPropagation();
-      this.showViewSettingsMenu(event);
+    this.rootEl = this.shell.element;
+    this.canvasEl = this.shell.canvas.element;
+    this.panLayerEl = this.shell.canvas.panLayer;
+    this.worldEl = this.shell.canvas.world;
+    this.connectionsEl = this.shell.canvas.connections;
+    this.connectionRenderer = new ConnectionRenderer(this.connectionsEl);
+    this.nodeLayerEl = this.shell.canvas.nodeLayer;
+    this.nodeRenderer = new NodeRenderer(this.nodeLayerEl);
+    this.canvasInteractionController = new CanvasInteractionController(
+      this.canvasEl,
+      this.nodeLayerEl,
+      this.shell.canvas.marquee,
+      {
+        hasDocument: () => Boolean(this.document),
+        readSelection: () => ({ ids: this.selectedIds, primaryId: this.primarySelectedId }),
+        replaceSelection: (ids, primaryId) => {
+          this.selectedIds.clear();
+          for (const nodeId of ids) this.selectedIds.add(nodeId);
+          this.primarySelectedId = primaryId;
+          this.refreshSelectionStyles();
+        },
+        panBy: (deltaX, deltaY) => {
+          this.viewport.x += deltaX;
+          this.viewport.y += deltaY;
+          this.applyViewport();
+        },
+        panWheel: (delta, direction) => {
+          this.viewport = panViewportByWheel(this.viewport, delta, direction);
+          this.applyViewport();
+        },
+        zoomAtStep: (step, clientX, clientY) => this.zoomAtStep(step, clientX, clientY),
+        rememberZoomAnchor: (clientX, clientY) => { this.zoomAnchor = { clientX, clientY }; },
+        suppressNextContextMenu: (suppress) => { this.suppressContextMenu = suppress; }
+      }
+    );
+    this.nodeDragController = new NodeDragController(
+      this.rootEl,
+      this.nodeLayerEl,
+      this.connectionsEl,
+      {
+        resolvePlacement: (clientX, clientY, excludedIds) =>
+          this.resolveCanvasDropPlacement(clientX, clientY, excludedIds),
+        showPlacement: (placement) => {
+          const target = this.showDropPlacement(placement);
+          this.dropTargetEl = target;
+          return target;
+        },
+        clearPlacement: () => this.clearDropTarget(),
+        moveNodes: (nodeIds, targetId, position) => this.commit((draft) => {
+          moveNodes(draft, nodeIds, targetId, position);
+        }),
+        reportFailure: (error) => new Notice(t("notice.operationFailed", {
+          message: error instanceof Error ? error.message : String(error)
+        }))
+      }
+    );
+    this.keyboardController = new KeyboardController({
+      hasPrimarySelection: () => Boolean(this.primarySelectedId),
+      save: () => void this.saveImmediately(),
+      moveSibling: (direction) => this.moveSelectedAmongSiblings(direction),
+      navigate: (key) => this.navigateSelection(key),
+      selectAll: () => {
+        for (const position of this.currentLayout?.nodes ?? []) this.selectedIds.add(position.id);
+        this.primarySelectedId = this.currentLayout?.nodes.at(-1)?.id;
+        this.render();
+      },
+      undo: () => this.undo(),
+      redo: () => this.redo(),
+      copy: () => void this.copySelected("branch"),
+      cut: () => void this.cutSelected(),
+      createNote: () => { this.createNoteForSelection(); },
+      addParent: () => this.addParentNode(),
+      addChild: () => this.addChildNode(),
+      editAtEnd: () => { if (this.primarySelectedId) this.beginEdit(this.primarySelectedId, "end"); },
+      addSibling: (position) => this.addSiblingNode(position),
+      deleteSelection: () => { if (this.primarySelectedId) this.requestDeleteBranch(this.primarySelectedId); },
+      cancel: () => { this.cancelEdit(); this.clearDropTarget(); }
     });
-    const helpButton = this.viewMenuEl.createEl("button", {
-      cls: "clickable-icon mtn-view-menu-button mtn-shortcut-help-button",
-      attr: { type: "button", "aria-label": t("shortcut.help") }
-    });
-    setIcon(helpButton, "circle-help");
-    helpButton.addEventListener("click", (event) => {
-      event.stopPropagation();
-      this.showKeyboardHelp(event);
-    });
-    this.toolbarEl = this.rootEl.createDiv("mtn-toolbar");
-    this.statusEl = this.rootEl.createDiv("mtn-status");
-    this.buildBottomStatusBar();
-    this.canvasEl = this.rootEl.createDiv("mtn-canvas");
-    this.canvasEl.tabIndex = 0;
-    this.canvasEl.setAttribute("role", "application");
-    this.canvasEl.setAttribute("aria-label", t("canvas.aria"));
-    // Pan and zoom deliberately use separate DOM layers. The outer layer can
-    // stay compositor-translated while CSS zoom on the inner layer repaints
-    // text at its actual displayed size instead of stretching a cached bitmap.
-    this.panLayerEl = this.canvasEl.createDiv("mtn-pan-layer");
-    this.worldEl = this.panLayerEl.createDiv("mtn-world");
-    this.connectionsEl = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-    this.connectionsEl.classList.add("mtn-connections");
-    this.worldEl.appendChild(this.connectionsEl);
-    this.nodeLayerEl = this.worldEl.createDiv("mtn-node-layer");
-    this.marqueeEl = this.canvasEl.createDiv("mtn-marquee");
-    this.marqueeEl.hide();
-    this.buildToolbar();
-
-    this.registerDomEvent(this.canvasEl, "pointerdown", (event) => this.onCanvasPointerDown(event));
-    this.registerDomEvent(this.canvasEl, "pointermove", (event) => this.onCanvasPointerMove(event));
-    this.registerDomEvent(this.canvasEl, "pointerup", (event) => this.onCanvasPointerUp(event));
-    this.registerDomEvent(this.canvasEl, "pointercancel", (event) => this.onCanvasPointerUp(event));
-    this.registerDomEvent(this.canvasEl, "contextmenu", (event) => {
-      if (this.suppressContextMenu || !(event.target as HTMLElement).closest(".mtn-node")) event.preventDefault();
-      this.suppressContextMenu = false;
-    });
-    this.registerDomEvent(this.canvasEl, "wheel", (event) => this.onWheel(event), { passive: false });
-    this.registerDomEvent(this.canvasEl, "dragenter", (event) => this.onCanvasFileDragOver(event));
-    this.registerDomEvent(this.canvasEl, "dragover", (event) => this.onCanvasFileDragOver(event));
-    this.registerDomEvent(this.canvasEl, "dragleave", (event) => this.onCanvasFileDragLeave(event));
-    this.registerDomEvent(this.canvasEl, "drop", (event) => void this.onCanvasFileDrop(event));
-    this.registerDomEvent(this.canvasEl, "keydown", (event) => this.onKeyDown(event));
-
-    // Hidden/background leaves can report a zero canvas size during their first
-    // render. ResizeObserver centers the root as soon as the leaf becomes visible,
-    // before the world layer is revealed.
-    const resizeObserver = new ResizeObserver(() => {
-      if (this.tryApplyInitialRootCenter()) this.applyViewport();
-    });
-    resizeObserver.observe(this.canvasEl);
-    this.register(() => resizeObserver.disconnect());
-
-    // Internal file drags begin in Obsidian's file explorer, outside this view.
-    // Capture its data-path at the document level as a stable fallback when the
-    // drag payload varies between Obsidian desktop versions.
-    const ownerDocument = this.rootEl.ownerDocument;
-    // Paste is captured at the document boundary because a hidden editor from
-    // the previously active tab may retain DOM focus. The active-view and
-    // visible-editor checks in onDocumentPaste keep native text input intact.
-    this.registerDomEvent(ownerDocument, "paste", (event) => this.onDocumentPaste(event), { capture: true });
-    this.registerDomEvent(ownerDocument, "dragstart", (event) => this.captureInternalFileDrag(event));
-    this.registerDomEvent(ownerDocument, "dragend", () => {
-      this.dragDropController.clear();
-      this.clearFileDropFeedback();
-    });
-  }
-
-  private buildToolbar(): void {
-    this.toolbarEl.empty();
-    this.addToolbarButton("unfold-vertical", t("toolbar.expandAll"), () => this.setSelectedBranchesCollapsed(false));
-    this.addToolbarButton("fold-vertical", t("toolbar.collapseAll"), () => this.setSelectedBranchesCollapsed(true));
-    this.addToolbarButton("list-tree", t("toolbar.collapseLevel"), (event) => this.showCollapseLevelMenu(event));
-    this.addToolbarButton("tags", t("toolbar.markers"), (event) => {
-      const nodeId = this.primarySelectedId;
-      const button = event.currentTarget as HTMLElement | null;
-      if (!nodeId || !button) return;
-      const rect = button.getBoundingClientRect();
-      this.showMarkerPopover(nodeId, { x: rect.left, y: rect.bottom + 6 });
-    });
-    this.addToolbarSeparator();
-    this.addToolbarButton("maximize", t("toolbar.fit"), () => this.fitCanvas());
-    this.addToolbarButton("minus", t("toolbar.zoomOut"), () => this.zoomByStep(-ZOOM_STEP));
-    const zoom = this.toolbarEl.createEl("span", { cls: "mtn-zoom-label", text: "100%" });
-    zoom.dataset.role = "zoom";
-    this.addToolbarButton("plus", t("toolbar.zoomIn"), () => this.zoomByStep(ZOOM_STEP));
-    this.addToolbarButton("search", t("toolbar.search"), () => this.searchNodes());
-    this.addToolbarSeparator();
-    this.addToolbarButton("copy", t("toolbar.copy"), (event) => this.showCopyMenu(event));
-    this.addToolbarButton("upload", t("toolbar.import"), () => this.showTextImportModal());
-    this.addToolbarButton("download", t("toolbar.export"), (event) => this.showExportMenu(event));
-  }
-
-  /** Build the fixed lower-left status group and its two detached history buttons. */
-  private buildBottomStatusBar(): void {
-    this.bottomBarEl = this.rootEl.createDiv("mtn-bottom-bar");
-    const panel = this.bottomBarEl.createDiv("mtn-status-panel");
-    this.topicCountEl = panel.createSpan("mtn-status-metric");
-    this.noteCountEl = panel.createSpan("mtn-status-metric");
-    this.treeDepthEl = panel.createSpan("mtn-status-metric");
-
-    const resetButton = panel.createEl("button", {
-      cls: "clickable-icon mtn-status-icon-button",
-      attr: { type: "button", "aria-label": t("statusBar.resetCanvas") }
-    });
-    setIcon(resetButton, "focus");
-    resetButton.addEventListener("click", () => this.resetCanvasToRoot());
-
-    this.saveButtonEl = panel.createEl("button", {
-      cls: "clickable-icon mtn-status-icon-button mtn-save-button is-saved",
-      attr: { type: "button", "aria-label": t("statusBar.save") }
-    });
-    setIcon(this.saveButtonEl, "save");
-    this.saveButtonEl.addEventListener("click", () => void this.saveFromStatusBar());
-
-    this.scanFolderButtonEl = panel.createEl("button", {
-      cls: "clickable-icon mtn-status-icon-button mtn-scan-folder-button",
-      attr: { type: "button", "aria-label": t("statusBar.scanFolder") }
-    });
-    setIcon(this.scanFolderButtonEl, "folder-search-2");
-    this.scanFolderButtonEl.addEventListener("click", () => void this.scanFolderFromStatusBar());
-
-    this.undoButtonEl = this.bottomBarEl.createEl("button", {
-      cls: "clickable-icon mtn-history-button",
-      attr: { type: "button", "aria-label": t("toolbar.undo") }
-    });
-    setIcon(this.undoButtonEl, "undo-2");
-    this.undoButtonEl.addEventListener("click", () => this.undo());
-    this.redoButtonEl = this.bottomBarEl.createEl("button", {
-      cls: "clickable-icon mtn-history-button",
-      attr: { type: "button", "aria-label": t("toolbar.redo") }
-    });
-    setIcon(this.redoButtonEl, "redo-2");
-    this.redoButtonEl.addEventListener("click", () => this.redo());
     this.refreshBottomStatusBar();
   }
 
   /** Refresh counts, history availability, and the persisted/dirty save color. */
   private refreshBottomStatusBar(): void {
-    if (!this.bottomBarEl) return;
+    const bottom = this.shell?.bottom;
+    if (!bottom) return;
     const document = this.document;
-    if (document) {
-      const statistics = getTreeStatistics(document);
-      this.topicCountEl.setText(t("statusBar.topics", { count: statistics.topicCount }));
-      this.noteCountEl.setText(t("statusBar.notes", { count: statistics.noteCount }));
-      this.treeDepthEl.setText(t("statusBar.depth", { count: statistics.depth }));
-    } else {
-      this.topicCountEl.setText(t("statusBar.topics", { count: 0 }));
-      this.noteCountEl.setText(t("statusBar.notes", { count: 0 }));
-      this.treeDepthEl.setText(t("statusBar.depth", { count: 0 }));
-    }
-    this.undoButtonEl.disabled = !this.documentSession.canUndo;
-    this.redoButtonEl.disabled = !this.documentSession.canRedo;
-    this.saveButtonEl.toggleClass("is-saved", this.saveState === "saved");
-    this.saveButtonEl.toggleClass("is-dirty", this.saveState !== "saved");
-    this.saveButtonEl.setAttribute("aria-label", this.saveState === "saved" ? t("statusBar.saved") : t("statusBar.unsaved"));
-    this.scanFolderButtonEl.disabled = !document || Boolean(this.parseError) || !this.file;
+    const statistics = document ? getTreeStatistics(document) : { topicCount: 0, noteCount: 0, depth: 0 };
+    bottom.update(createBottomStatusBarState({
+      topicCount: statistics.topicCount,
+      noteCount: statistics.noteCount,
+      depth: statistics.depth,
+      saveState: this.saveState,
+      saveBusy: this.saveButtonBusy,
+      scanBusy: this.scanButtonBusy,
+      scanEnabled: Boolean(document && !this.parseError && this.file),
+      canUndo: this.documentSession.canUndo,
+      canRedo: this.documentSession.canRedo,
+      text: {
+        topics: (count) => t("statusBar.topics", { count }),
+        notes: (count) => t("statusBar.notes", { count }),
+        depth: (count) => t("statusBar.depth", { count }),
+        saved: t("statusBar.saved"),
+        unsaved: t("statusBar.unsaved")
+      }
+    }));
   }
 
   private async saveFromStatusBar(): Promise<void> {
     if (!this.document || this.parseError) return;
-    this.saveButtonEl.disabled = true;
+    this.saveButtonBusy = true;
+    this.refreshBottomStatusBar();
     try {
       await this.flushPendingSave();
     } catch (error) {
       this.reportSaveFailure(error);
     } finally {
-      this.saveButtonEl.disabled = false;
+      this.saveButtonBusy = false;
       this.refreshBottomStatusBar();
     }
   }
@@ -1062,11 +1021,13 @@ export class MindTreeView extends TextFileView {
   private async scanFolderFromStatusBar(): Promise<void> {
     const file = this.file;
     if (!file || !this.document || this.parseError) return;
-    this.scanFolderButtonEl.disabled = true;
+    this.scanButtonBusy = true;
+    this.refreshBottomStatusBar();
     try {
       await this.scanSameFolder(file, { force: true, notifyWhenEmpty: true });
     } finally {
-      this.scanFolderButtonEl.disabled = false;
+      this.scanButtonBusy = false;
+      this.refreshBottomStatusBar();
     }
   }
 
@@ -1105,136 +1066,21 @@ export class MindTreeView extends TextFileView {
   /** Only the explicitly per-tree choices are exposed in this menu. */
   private showViewSettingsMenu(event: MouseEvent): void {
     const settings = this.document?.settings;
-    if (!settings) return;
-    const menu = new Menu();
-
-    this.addSettingsMenuLabel(menu, t("viewSettings.currentTree"));
-    this.addChoiceSetting(
-      menu,
-      t("settings.layout.name"),
-      "layout-template",
-      LAYOUT_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
-      settings.layoutMode,
-      (value) => this.setLayoutMode(value)
-    );
-    this.addChoiceSetting(
-      menu,
-      t("viewSettings.theme"),
-      "palette",
-      THEME_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
-      settings.theme,
-      (value) => this.setTheme(value)
-    );
-    this.addChoiceSetting(
-      menu,
-      t("viewSettings.connectionStyle"),
-      "git-branch",
-      CONNECTION_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
-      settings.connectionStyle,
-      (value) => this.setConnectionStyle(value)
-    );
-    this.addChoiceSetting(
-      menu,
-      t("viewSettings.nodeShape"),
-      "shapes",
-      NODE_SHAPE_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
-      settings.nodeShape,
-      (value) => this.setNodeShape(value)
-    );
-    this.addChoiceSetting<MindTreeCollectionMode>(
-      menu,
-      t("viewSettings.collectionMode"),
-      "folder-input",
-      COLLECTION_MODE_OPTIONS.map((option) => ({ value: option.value, label: t(option.label) })),
-      settings.collectionMode,
-      (value) => this.updateDocumentSettings((draft) => { draft.collectionMode = value; }, true)
-    );
-    menu.addItem((item) => item
-      .setTitle(t("settings.recursive.name"))
-      .setIcon("folder-tree")
-      .setChecked(settings.recursiveScan)
-      .onClick(() => this.updateDocumentSettings((draft) => { draft.recursiveScan = !draft.recursiveScan; }, true)));
-
-    menu.showAtMouseEvent(event);
+    const anchor = this.shell?.menu.settingsButton;
+    if (!settings || !anchor) return;
+    new TreeSettingsMenu(settings, anchor, {
+      setLayout: (value) => this.setLayoutMode(value),
+      setTheme: (value) => this.setTheme(value),
+      setConnectionStyle: (value) => this.setConnectionStyle(value),
+      setNodeShape: (value) => this.setNodeShape(value),
+      setCollectionMode: (value) => this.updateDocumentSettings((draft) => { draft.collectionMode = value; }, true),
+      toggleRecursiveScan: () => this.updateDocumentSettings((draft) => { draft.recursiveScan = !draft.recursiveScan; }, true)
+    }).show(event);
   }
 
   /** The help menu mirrors every keyboard branch handled by onKeyDown/onPaste. */
   private showKeyboardHelp(event: MouseEvent): void {
-    const menu = new Menu();
-    this.addSettingsMenuLabel(menu, t("shortcut.help"));
-    const commandKey = Platform.isMacOS ? "Cmd" : "Ctrl";
-    const shortcuts: Array<[string, string]> = [
-      ["Enter", t("shortcut.addSiblingBelow")],
-      ["Shift + Enter", t("shortcut.addSiblingAbove")],
-      ["Tab", t("shortcut.addChild")],
-      ["Shift + Tab", t("shortcut.addParent")],
-      [`${commandKey} + ↑`, t("shortcut.moveSiblingUp")],
-      [`${commandKey} + ↓`, t("shortcut.moveSiblingDown")],
-      [`${commandKey} + E`, t("shortcut.createNote")],
-      [`${commandKey} + S`, t("shortcut.save")],
-      ["↑ / ↓", t("shortcut.navigateSiblings")],
-      ["← / →", t("shortcut.navigateHierarchy")],
-      [t("shortcut.spaceKey"), t("shortcut.editNode")],
-      ["Delete / Backspace", t("shortcut.deleteBranch")],
-      [`${commandKey} + A`, t("shortcut.selectAll")],
-      [`${commandKey} + C`, t("shortcut.copyBranch")],
-      [`${commandKey} + X`, t("shortcut.cutBranch")],
-      [`${commandKey} + V`, t("shortcut.pasteBranch")],
-      [`${commandKey} + Z`, t("shortcut.undo")],
-      [`${commandKey} + Shift + Z`, t("shortcut.redo")],
-      ["Escape", t("shortcut.cancel")]
-    ];
-    for (const [keys, action] of shortcuts) {
-      const title = document.createDocumentFragment();
-      const row = document.createElement("span");
-      row.className = "mtn-shortcut-row";
-      const key = document.createElement("kbd");
-      key.setText(keys);
-      const description = document.createElement("span");
-      description.setText(action);
-      row.append(key, description);
-      title.append(row);
-      menu.addItem((item) => item.setTitle(title).setIsLabel(true));
-    }
-    menu.showAtMouseEvent(event);
-  }
-
-  private addSettingsMenuLabel(menu: Menu, title: string): void {
-    menu.addItem((item) => item.setTitle(title).setIsLabel(true));
-  }
-
-  /** Add a first-level setting and display all possible values in a checked menu. */
-  private addChoiceSetting<T extends string | number>(
-    menu: Menu,
-    title: string,
-    icon: string,
-    choices: ReadonlyArray<ViewSettingChoice<T>>,
-    current: T,
-    onChange: (value: T) => void
-  ): void {
-    const currentLabel = choices.find((choice) => choice.value === current)?.label;
-    menu.addItem((item) => item
-      .setTitle(currentLabel ? `${title}: ${currentLabel}` : title)
-      .setIcon(icon)
-      .onClick(() => this.showChoiceSettingMenu(title, choices, current, onChange)));
-  }
-
-  private showChoiceSettingMenu<T extends string | number>(
-    title: string,
-    choices: ReadonlyArray<ViewSettingChoice<T>>,
-    current: T,
-    onChange: (value: T) => void
-  ): void {
-    const menu = new Menu();
-    this.addSettingsMenuLabel(menu, title);
-    for (const choice of choices) {
-      menu.addItem((item) => item
-        .setTitle(choice.label)
-        .setChecked(choice.value === current)
-        .onClick(() => onChange(choice.value)));
-    }
-    const rect = this.settingsButtonEl.getBoundingClientRect();
-    menu.showAtPosition({ x: rect.right + 6, y: rect.top });
+    new KeyboardHelpMenu(this.rootEl.ownerDocument).show(event);
   }
 
   /** Commit YAML-backed settings through the same undo/save path as tree edits. */
@@ -1250,12 +1096,6 @@ export class MindTreeView extends TextFileView {
     this.scannedFilePath = undefined;
     const file = this.file;
     if (file) this.ownerWindow().setTimeout(() => void this.scanSameFolder(file));
-  }
-
-  private addToolbarButton(icon: string, label: string, action: (event: MouseEvent) => void): void {
-    const button = this.toolbarEl.createEl("button", { cls: "clickable-icon mtn-toolbar-button", attr: { "aria-label": label, type: "button" } });
-    setIcon(button, icon);
-    button.addEventListener("click", action);
   }
 
   /**
@@ -1287,31 +1127,21 @@ export class MindTreeView extends TextFileView {
 
   /** Show the global depth menu; its result is stored only in node collapsed flags. */
   private showCollapseLevelMenu(event: MouseEvent): void {
-    const menu = new Menu();
-    for (let level = 1; level <= 9; level += 1) {
-      menu.addItem((item) => item
-        .setTitle(t("toolbar.collapseToLevel", { level }))
-        .onClick(() => {
-          const document = this.document;
-          if (!document) return;
-          const anchorNodeId = this.primarySelectedId && document.nodes[this.primarySelectedId]
-            ? this.primarySelectedId
-            : document.rootId;
-          this.commit((draft) => setCollapsedAfterDepth(draft, level), anchorNodeId);
-        }));
-    }
-    menu.showAtMouseEvent(event);
+    new CollapseLevelMenu((level) => {
+      const document = this.document;
+      if (!document) return;
+      const anchorNodeId = this.primarySelectedId && document.nodes[this.primarySelectedId]
+        ? this.primarySelectedId : document.rootId;
+      this.commit((draft) => setCollapsedAfterDepth(draft, level), anchorNodeId);
+    }).show(event);
   }
-
-  private addToolbarSeparator(): void { this.toolbarEl.createDiv("mtn-toolbar-separator"); }
 
   private render(layoutAnchor?: LayoutViewportAnchor): void {
     if (!this.rootEl) return;
     if (this.parseError) {
       this.nodeLayerEl.empty();
       this.connectionsEl.empty();
-      this.statusEl.setText(this.parseError);
-      this.statusEl.className = "mtn-status is-error";
+      this.shell?.status.update({ message: this.parseError, kind: "error" });
       this.rootEl.toggleClass("is-readonly", true);
       this.saveState = "error";
       this.refreshBottomStatusBar();
@@ -1346,55 +1176,45 @@ export class MindTreeView extends TextFileView {
     this.branchColorSlotByNodeId = getBranchColorSlots(document);
     const positionMap = new Map(this.currentLayout.nodes.map((node) => [node.id, node]));
     this.renderConnections(positionMap);
-    this.nodeLayerEl.empty();
-    this.nodeLayerEl.style.width = `${this.currentLayout.width}px`;
-    this.nodeLayerEl.style.height = `${this.currentLayout.height}px`;
-    for (const position of this.currentLayout.nodes) this.renderNode(position);
+    this.nodeRenderer?.render({
+      document,
+      positions: this.currentLayout.nodes,
+      width: this.currentLayout.width,
+      height: this.currentLayout.height,
+      selectedIds: this.selectedIds,
+      editingNodeId: this.editingNodeId,
+      editingSelectionMode: this.editingSelectionMode,
+      branchColorSlots: this.branchColorSlotByNodeId,
+      foldDirections: this.foldDirectionByNodeId
+    }, {
+      scheduleEditingRelayout: (nodeId, title) => this.scheduleEditingRelayout(nodeId, title),
+      finishEdit: (nodeId, title) => this.finishEdit(nodeId, title),
+      cancelEdit: () => this.cancelEdit(),
+      saveImmediately: () => void this.saveImmediately(),
+      focusCanvas: () => this.canvasEl.focus({ preventScroll: true }),
+      toggleCollapsed: (nodeId) => this.commit((draft) => toggleCollapsed(draft, nodeId), nodeId),
+      nodePointerDown: (event, nodeId) => this.onNodePointerDown(event, nodeId),
+      beginEdit: (nodeId) => this.beginEdit(nodeId),
+      showContextMenu: (event, nodeId) => {
+        if (!this.suppressContextMenu) this.showNodeMenu(event, nodeId);
+        this.suppressContextMenu = false;
+      },
+      openResource: (nodeId) => void this.openResource(nodeId)
+    });
     this.applyViewport();
-    const zoomEl = this.toolbarEl.querySelector<HTMLElement>("[data-role='zoom']");
-    if (zoomEl) zoomEl.setText(`${Math.round(this.viewport.zoom * 100)}%`);
+    this.shell?.toolbar.update({ zoom: this.viewport.zoom });
     this.refreshBottomStatusBar();
   }
 
   private renderConnections(positionMap: Map<NodeId, PositionedNode>): void {
     const documentSettings = this.document?.settings;
-    if (!this.currentLayout || !documentSettings) return;
-    this.connectionsEl.empty();
-    this.connectionsEl.setAttribute("width", String(this.currentLayout.width));
-    this.connectionsEl.setAttribute("height", String(this.currentLayout.height));
-    this.connectionsEl.setAttribute("viewBox", `0 0 ${this.currentLayout.width} ${this.currentLayout.height}`);
-    for (const connection of this.currentLayout.connections) {
-      const from = positionMap.get(connection.from);
-      const to = positionMap.get(connection.to);
-      if (!from || !to) continue;
-      const visual = resolveThemeConnection(
-        documentSettings.theme,
-        documentSettings.connectionStyle,
-        to.depth
-      );
-      const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-      path.setAttribute("d", connectionPath(
-        from,
-        to,
-        documentSettings.layoutMode,
-        visual.style
-      ));
-      path.classList.add("mtn-connection");
-      path.dataset.fromNodeId = connection.from;
-      path.dataset.toNodeId = connection.to;
-      // Set the final path variable on the path itself. Defining a variable on
-      // the parent view made its fallback resolve before this child-level branch
-      // color existed, which collapsed all neutral-theme lines to one color.
-      path.style.setProperty("--mtn-connection-color", branchColorCss(this.branchColorSlotByNodeId.get(connection.to)));
-      path.style.setProperty("--mtn-connection-width", `${visual.width}px`);
-      path.style.setProperty("--mtn-connection-opacity", String(visual.opacity));
-      path.style.setProperty("--mtn-connection-filter", visual.shadow);
-      path.style.setProperty("--mtn-connection-linecap", visual.lineCap);
-      path.style.setProperty("--mtn-connection-linejoin", visual.lineJoin);
-      if (visual.dash) path.style.setProperty("--mtn-connection-dash", visual.dash);
-      path.classList.toggle("is-dashed", Boolean(visual.dash));
-      this.connectionsEl.appendChild(path);
-    }
+    if (!this.currentLayout || !documentSettings || !this.connectionRenderer) return;
+    this.connectionRenderer.render({
+      layout: this.currentLayout,
+      settings: documentSettings,
+      positions: positionMap,
+      branchColorSlots: this.branchColorSlotByNodeId
+    });
   }
 
   /**
@@ -1430,170 +1250,10 @@ export class MindTreeView extends TextFileView {
     const layoutAnchor = this.captureLayoutViewportAnchor(anchorNodeId);
     this.currentLayout = layout;
     this.restoreLayoutViewportAnchor(layoutAnchor);
-    this.nodeLayerEl.style.width = `${layout.width}px`;
-    this.nodeLayerEl.style.height = `${layout.height}px`;
+    this.nodeRenderer?.applyGeometry(layout);
     const positionMap = new Map(layout.nodes.map((node) => [node.id, node]));
-    for (const position of layout.nodes) {
-      const element = this.nodeLayerEl.querySelector<HTMLElement>(
-        `.mtn-node[data-node-id="${CSS.escape(position.id)}"]`
-      );
-      if (!element) continue;
-      element.style.left = `${position.x}px`;
-      element.style.top = `${position.y}px`;
-      element.style.width = `${position.width}px`;
-      element.style.height = `${position.height}px`;
-    }
     this.renderConnections(positionMap);
     this.applyViewport();
-  }
-
-  private renderNode(position: PositionedNode): void {
-    const document = this.document;
-    const node = document?.nodes[position.id];
-    if (!document || !node) return;
-    const element = this.nodeLayerEl.createDiv(`mtn-node ${getNodeSizeClass(position.depth)}`);
-    element.dataset.nodeId = node.id;
-    element.style.left = `${position.x}px`;
-    element.style.top = `${position.y}px`;
-    element.style.width = `${position.width}px`;
-    element.style.height = `${position.height}px`;
-    element.style.setProperty("--mtn-branch-color", branchColorCss(this.branchColorSlotByNodeId.get(node.id)));
-    element.toggleClass("is-selected", this.selectedIds.has(node.id));
-    element.toggleClass("is-editing", this.editingNodeId === node.id);
-    element.toggleClass("is-leaf", node.childIds.length === 0);
-    // Only file resources render right-side controls. URL resources therefore keep
-    // the same compact single-content geometry as plain text nodes.
-    const hasFileControls = node.resource?.type === "file";
-    element.toggleClass("has-resource", hasFileControls);
-    element.toggleClass("is-title-sync-off", node.resource?.type === "file" && node.titleSync !== "bidirectional");
-    const markerDisplayWidth = getNodeMarkerDisplayWidth(node);
-    element.toggleClass("has-markers", markerDisplayWidth > 0);
-    // Do not leave zero-width marker/control grid tracks on a content-only node.
-    // A dedicated class lets CSS use one centered flex item, so Obsidian theme
-    // rules cannot turn an invisible trailing track into apparent blank space.
-    element.toggleClass("is-content-only", !hasFileControls && markerDisplayWidth === 0);
-    element.style.setProperty("--mtn-node-marker-width", `${markerDisplayWidth}px`);
-    const highlight = getNodeHighlightColor(node);
-    element.toggleClass("has-highlight", Boolean(highlight));
-    if (highlight) {
-      element.style.setProperty("--mtn-node-bg", highlight);
-      element.style.setProperty("--mtn-node-text", readableTextColor(highlight));
-    } else if (node.style?.background && CSS.supports("color", node.style.background)) {
-      element.style.setProperty("--mtn-node-bg", node.style.background);
-    }
-
-    if (this.editingNodeId === node.id) {
-      // A textarea can follow the node's normal wrapping behavior. A one-line
-      // input would either stay unnecessarily wide or hide most of a long title.
-      const input = element.createEl("textarea", {
-        cls: "mtn-title-input",
-        attr: { rows: "1", spellcheck: "false" }
-      });
-      input.value = node.title;
-
-      // Recalculate the complete tree instead of resizing only this element.
-      // Width changes can move later columns, while height changes can move
-      // sibling subtrees; updating one box alone would make nodes overlap.
-      const resizeEditor = (): void => this.scheduleEditingRelayout(node.id, input.value);
-      input.addEventListener("pointerdown", (event) => event.stopPropagation());
-      input.addEventListener("input", resizeEditor);
-      input.addEventListener("keydown", (event) => {
-        // While composing Chinese/Japanese text, Enter belongs to the IME and
-        // must not create another node.
-        if (event.isComposing) return;
-        if (event.key === "Enter" || event.key === "Tab") {
-          event.preventDefault();
-          event.stopPropagation();
-          this.finishEdit(node.id, input.value);
-          // finishEdit synchronously rerenders and removes the textarea. Move
-          // focus to the newly rendered canvas immediately so the next distinct
-          // Enter/Tab reaches its structural shortcut instead of being lost on
-          // the detached editor/body. Preventing Tab's default action also keeps
-          // focus inside the canvas rather than advancing through Obsidian UI.
-          this.canvasEl.focus({ preventScroll: true });
-          // Do not wait for the asynchronous save or a linked-file rename;
-          // neither operation owns keyboard focus. This keydown is now fully
-          // consumed, so only a later independent press can create a node.
-          void this.saveImmediately();
-          return;
-        }
-        if (event.key === "Escape") { event.preventDefault(); this.cancelEdit(); }
-      });
-      // Capture node.id in every completion path. A blur from an input removed
-      // while another node starts editing must never write into the new node.
-      input.addEventListener("blur", () => this.finishEdit(node.id, input.value));
-      this.ownerWindow().setTimeout(() => {
-        input.focus();
-        if (this.editingSelectionMode === "end") {
-          const end = input.value.length;
-          input.setSelectionRange(end, end);
-        } else {
-          input.select();
-        }
-      });
-    } else {
-      const title = element.createDiv("mtn-node-title");
-      title.setText(node.title || t("node.untitled"));
-    }
-
-    this.renderNodeMarkers(element, node);
-    this.renderFileControls(element, node);
-
-    if (node.childIds.length > 0) {
-      const foldDirection = this.foldDirectionByNodeId.get(node.id) ?? "right";
-      const fold = element.createEl("button", {
-        cls: `mtn-fold-button is-fold-${foldDirection} ${node.collapsed ? "is-expand" : "is-collapse"}`,
-        attr: { type: "button", "aria-label": node.collapsed ? t("node.expandBranch") : t("node.collapseBranch") }
-      });
-      // Expanded branches show a plain minus action. Collapsed branches replace
-      // the old chevron-plus-count combination with one fixed-size count circle.
-      if (node.collapsed) fold.createSpan({ cls: "mtn-child-count", text: String(node.childIds.length) });
-      else setIcon(fold, "minus");
-      fold.addEventListener("pointerdown", (event) => event.stopPropagation());
-      fold.addEventListener("click", (event) => {
-        event.stopPropagation();
-        this.commit((draft) => toggleCollapsed(draft, node.id), node.id);
-      });
-    }
-
-    element.addEventListener("pointerdown", (event) => this.onNodePointerDown(event, node.id));
-    element.addEventListener("dblclick", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      this.beginEdit(node.id);
-    });
-    element.addEventListener("contextmenu", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      if (!this.suppressContextMenu) this.showNodeMenu(event, node.id);
-      this.suppressContextMenu = false;
-    });
-  }
-
-  private renderFileControls(element: HTMLElement, node: MindTreeNode): void {
-    if (node.resource?.type !== "file") return;
-    // Controls use a dedicated right-hand grid slot. Layout adds this slot to the
-    // measured title width, so the complete text-and-control group stays compact.
-    const controls = element.createDiv("mtn-node-controls");
-    if (node.titleSync !== "bidirectional") {
-      const syncStatus = controls.createSpan({
-        cls: "mtn-title-sync-off",
-        attr: { role: "img", "aria-label": t("node.syncDisabled") }
-      });
-      setIcon(syncStatus, "unlink");
-    }
-    const openButton = controls.createEl("button", {
-      cls: "mtn-resource-open fa-share-square-o",
-      attr: { type: "button", "aria-label": t("node.openLinkedFile") }
-    });
-    setIcon(openButton, SHARE_SQUARE_ICON);
-    openButton.addEventListener("pointerdown", (event) => event.stopPropagation());
-    openButton.addEventListener("dblclick", (event) => event.stopPropagation());
-    openButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      event.stopPropagation();
-      void this.openResource(node.id);
-    });
   }
 
   private onNodePointerDown(event: PointerEvent, nodeId: NodeId): void {
@@ -1624,142 +1284,9 @@ export class MindTreeView extends TextFileView {
     // Hide and exclude every selected top-level branch. Selected descendants of
     // another selected node remain attached and therefore appear only once.
     const excludedIds = new Set(draggedRootIds.flatMap((id) => collectBranchIds(document, id)));
-    const state: NodeDragState = {
-      nodeId,
-      draggedRootIds,
-      startX: event.clientX,
-      startY: event.clientY,
-      renderedWidth: sourceRect.width,
-      renderedHeight: sourceRect.height,
-      dragging: false
-    };
-
-    const onMove = (moveEvent: PointerEvent): void => {
-      const distance = Math.hypot(moveEvent.clientX - state.startX, moveEvent.clientY - state.startY);
-      if (!state.dragging && distance < 5) return;
-      if (!state.dragging) {
-        state.dragging = true;
-        this.rootEl.addClass("is-dragging-node");
-        state.ghostEl = this.createNodeDragGhost(sourceElement, sourceRect);
-        this.setDraggedBranchVisibility(excludedIds, false);
-      }
-      this.positionNodeDragGhost(state, moveEvent.clientX, moveEvent.clientY);
-      this.clearDropTarget();
-      state.targetId = undefined;
-      state.position = undefined;
-      const placement = this.resolveCanvasDropPlacement(moveEvent.clientX, moveEvent.clientY, excludedIds);
-      if (!placement) return;
-      const target = this.showDropPlacement(placement);
-      if (!target) return;
-      this.dropTargetEl = target;
-      state.targetId = placement.targetId;
-      state.position = placement.position;
-    };
-    const ownerWindow = this.ownerWindow();
-    let finished = false;
-    const finishDrag = (applyMove: boolean): void => {
-      if (finished) return;
-      finished = true;
-      ownerWindow.removeEventListener("pointermove", onMove);
-      ownerWindow.removeEventListener("pointerup", onUp);
-      ownerWindow.removeEventListener("pointercancel", onUp);
-      this.activePointerCleanup = undefined;
-      this.rootEl.removeClass("is-dragging-node");
-      this.clearDropTarget();
-      state.ghostEl?.remove();
-      this.setDraggedBranchVisibility(excludedIds, true);
-      if (applyMove && state.dragging && state.targetId && state.position) {
-        try {
-          this.commit((draft) => {
-            moveNodes(draft, state.draggedRootIds, state.targetId!, state.position!);
-          });
-        } catch (error) {
-          new Notice(t("notice.operationFailed", { message: error instanceof Error ? error.message : String(error) }));
-        }
-      }
-    };
-    const onUp = (): void => finishDrag(true);
-    this.activePointerCleanup?.();
-    this.activePointerCleanup = () => finishDrag(false);
-    ownerWindow.addEventListener("pointermove", onMove);
-    ownerWindow.addEventListener("pointerup", onUp, { once: true });
-    ownerWindow.addEventListener("pointercancel", onUp, { once: true });
-  }
-
-  /** Clone only the pressed node; descendants never enter the floating preview. */
-  private createNodeDragGhost(source: HTMLElement, sourceRect: DOMRect): HTMLElement {
-    const ghost = source.cloneNode(true) as HTMLElement;
-    ghost.removeAttribute("data-node-id");
-    ghost.classList.remove("is-selected", "is-editing", "is-drop-before", "is-drop-inside", "is-drop-after");
-    ghost.classList.add("mtn-node-drag-ghost");
-    ghost.querySelector(".mtn-fold-button")?.remove();
-    // Keep the node's unscaled layout dimensions and reproduce the exact
-    // current canvas/hover scale on the fixed-position clone. Otherwise text
-    // would stay full-sized when dragging from a zoomed-out canvas.
-    const layoutWidth = Number.parseFloat(source.style.width) || source.offsetWidth;
-    const layoutHeight = Number.parseFloat(source.style.height) || source.offsetHeight;
-    ghost.style.width = `${layoutWidth}px`;
-    ghost.style.height = `${layoutHeight}px`;
-    ghost.style.setProperty("--mtn-drag-scale", String(sourceRect.width / Math.max(1, layoutWidth)));
-
-    // A fixed element can still inherit a transformed coordinate system from
-    // an ancestor. Mount the preview directly under <body> so clientX/clientY
-    // and its CSS position always refer to the same viewport coordinate space.
-    // Copy the view-scoped theme variables that the clone no longer inherits.
-    const computedStyle = source.ownerDocument.defaultView?.getComputedStyle(source);
-    for (const property of [
-      "--mtn-theme-root-accent",
-      "--mtn-theme-root-text",
-      "--mtn-node-surface",
-      "--mtn-node-accent",
-      "--mtn-node-bg",
-      "--mtn-node-text",
-      "--mtn-branch-color",
-      "--mtn-node-marker-width",
-      "--mtn-node-control-width"
-    ]) {
-      const value = computedStyle?.getPropertyValue(property).trim();
-      if (value) ghost.style.setProperty(property, value);
-    }
-    if (computedStyle) {
-      // Shape rules are scoped to the view element, so preserve their resolved
-      // values explicitly after moving the clone outside that element.
-      ghost.style.background = computedStyle.background;
-      ghost.style.color = computedStyle.color;
-      ghost.style.borderColor = computedStyle.borderColor;
-      ghost.style.borderStyle = computedStyle.borderStyle;
-      ghost.style.borderWidth = computedStyle.borderWidth;
-      ghost.style.borderRadius = computedStyle.borderRadius;
-    }
-    source.ownerDocument.body.appendChild(ghost);
-    return ghost;
-  }
-
-  private positionNodeDragGhost(state: NodeDragState, clientX: number, clientY: number): void {
-    if (!state.ghostEl) return;
-    const position = centerDragGhostAtPointer(
-      clientX,
-      clientY,
-      state.renderedWidth,
-      state.renderedHeight
-    );
-    state.ghostEl.style.left = `${position.left}px`;
-    state.ghostEl.style.top = `${position.top}px`;
-  }
-
-  /** Hide the original source branch in place while preserving its geometry. */
-  private setDraggedBranchVisibility(nodeIds: ReadonlySet<NodeId>, visible: boolean): void {
-    for (const element of this.nodeLayerEl.querySelectorAll<HTMLElement>(".mtn-node")) {
-      const id = element.dataset.nodeId;
-      if (id && nodeIds.has(id)) element.toggleClass("is-drag-hidden", !visible);
-    }
-    for (const path of this.connectionsEl.querySelectorAll<SVGPathElement>(".mtn-connection")) {
-      const hidden = Boolean(
-        (path.dataset.fromNodeId && nodeIds.has(path.dataset.fromNodeId))
-        || (path.dataset.toNodeId && nodeIds.has(path.dataset.toNodeId))
-      );
-      if (hidden) path.classList.toggle("is-drag-hidden", !visible);
-    }
+    this.nodeDragController?.start(event, {
+      nodeId, draggedRootIds, excludedIds, sourceElement, sourceRect
+    });
   }
 
   /** Convert rendered nodes to viewport rectangles for shared node/file hit testing. */
@@ -1793,138 +1320,6 @@ export class MindTreeView extends TextFileView {
     );
     target?.addClass(`is-drop-${placement.position}`);
     return target ?? undefined;
-  }
-
-  private onCanvasPointerDown(event: PointerEvent): void {
-    if ((event.target as HTMLElement).closest(".mtn-node") || !this.document) return;
-    if (event.button !== 0 && event.button !== 2) return;
-    event.preventDefault();
-    this.canvasEl.focus();
-    const touchPan = event.pointerType === "touch";
-    const mode = event.button === 2 || touchPan ? "pan" : "marquee";
-    this.pointerGesture = {
-      mode,
-      pointerId: event.pointerId,
-      startX: event.clientX,
-      startY: event.clientY,
-      lastX: event.clientX,
-      lastY: event.clientY,
-      additive: event.ctrlKey || event.metaKey,
-      moved: false,
-      selectionBeforeMarquee: mode === "marquee" ? new Set(this.selectedIds) : undefined,
-      primaryBeforeMarquee: mode === "marquee" ? this.primarySelectedId : undefined
-    };
-    this.canvasEl.setPointerCapture(event.pointerId);
-    if (mode === "marquee") this.updateMarquee(event.clientX, event.clientY);
-    else this.canvasEl.addClass("is-panning");
-  }
-
-  private onCanvasPointerMove(event: PointerEvent): void {
-    // Keep this updated even when there is no active drag gesture. Toolbar zoom
-    // can then use the user's last meaningful canvas position as its anchor.
-    this.zoomAnchor = { clientX: event.clientX, clientY: event.clientY };
-    const gesture = this.pointerGesture;
-    if (!gesture || gesture.pointerId !== event.pointerId || !this.document) return;
-    if (Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) > 3) gesture.moved = true;
-    if (gesture.mode === "marquee") {
-      this.updateMarquee(event.clientX, event.clientY);
-    } else {
-      this.viewport.x += event.clientX - gesture.lastX;
-      this.viewport.y += event.clientY - gesture.lastY;
-      gesture.lastX = event.clientX;
-      gesture.lastY = event.clientY;
-      this.applyViewport();
-    }
-  }
-
-  private onCanvasPointerUp(event: PointerEvent): void {
-    const gesture = this.pointerGesture;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
-    if (gesture.mode === "marquee") {
-      // Pointer capture can deliver an up position after the final move event.
-      // Apply that last rectangle before ending the live selection gesture.
-      this.updateMarquee(event.clientX, event.clientY);
-      this.finishMarquee();
-    }
-    else {
-      this.canvasEl.removeClass("is-panning");
-      this.suppressContextMenu = gesture.moved;
-    }
-    if (this.canvasEl.hasPointerCapture(event.pointerId)) this.canvasEl.releasePointerCapture(event.pointerId);
-    this.pointerGesture = undefined;
-  }
-
-  private updateMarquee(clientX: number, clientY: number): void {
-    const gesture = this.pointerGesture;
-    if (!gesture) return;
-    const canvas = this.canvasEl.getBoundingClientRect();
-    const left = Math.min(gesture.startX, clientX) - canvas.left;
-    const top = Math.min(gesture.startY, clientY) - canvas.top;
-    const width = Math.abs(clientX - gesture.startX);
-    const height = Math.abs(clientY - gesture.startY);
-    this.marqueeEl.show();
-    Object.assign(this.marqueeEl.style, { left: `${left}px`, top: `${top}px`, width: `${width}px`, height: `${height}px` });
-    this.refreshMarqueeSelection();
-  }
-
-  /** Rebuild selection from the current rectangle on every pointer movement. */
-  private refreshMarqueeSelection(): void {
-    const gesture = this.pointerGesture;
-    if (!gesture || gesture.mode !== "marquee") return;
-    const marquee = this.marqueeEl.getBoundingClientRect();
-    const nextSelection = gesture.additive
-      ? new Set(gesture.selectionBeforeMarquee)
-      : new Set<NodeId>();
-    let lastIntersectedId: NodeId | undefined;
-    for (const element of this.nodeLayerEl.querySelectorAll<HTMLElement>(".mtn-node")) {
-      const nodeId = element.dataset.nodeId;
-      if (!nodeId || !rectsIntersect(marquee, element.getBoundingClientRect())) continue;
-      nextSelection.add(nodeId);
-      lastIntersectedId = nodeId;
-    }
-
-    this.selectedIds.clear();
-    for (const nodeId of nextSelection) this.selectedIds.add(nodeId);
-    this.primarySelectedId = lastIntersectedId
-      ?? (gesture.primaryBeforeMarquee && nextSelection.has(gesture.primaryBeforeMarquee)
-        ? gesture.primaryBeforeMarquee
-        : nextSelection.values().next().value as NodeId | undefined);
-    this.refreshSelectionStyles();
-  }
-
-  private finishMarquee(): void {
-    const gesture = this.pointerGesture;
-    if (!gesture) return;
-    this.marqueeEl.hide();
-  }
-
-  private onWheel(event: WheelEvent): void {
-    if (!this.document) return;
-    event.preventDefault();
-    const command = event.ctrlKey || event.metaKey;
-    if (command) {
-      // Ctrl/Cmd is the only wheel modifier that zooms. Prefer the vertical
-      // delta, but accept a horizontal delta produced by Shift+wheel drivers.
-      const zoomDelta = event.deltaY !== 0 ? event.deltaY : event.deltaX;
-      if (zoomDelta === 0) return;
-      this.zoomAnchor = { clientX: event.clientX, clientY: event.clientY };
-      this.zoomAtStep(zoomDelta < 0 ? ZOOM_STEP : -ZOOM_STEP, event.clientX, event.clientY);
-      return;
-    }
-
-    const horizontal = event.shiftKey;
-    const rawDelta = horizontal
-      ? (Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY)
-      : event.deltaY;
-    if (rawDelta === 0) return;
-    const canvasRect = this.canvasEl.getBoundingClientRect();
-    const delta = wheelDeltaToPixels(
-      rawDelta,
-      event.deltaMode,
-      horizontal ? canvasRect.width : canvasRect.height
-    );
-    this.viewport = panViewportByWheel(this.viewport, delta, horizontal ? "horizontal" : "vertical");
-    this.applyViewport();
   }
 
   /** Remember files dragged from Obsidian navigation/search elements. */
@@ -2073,85 +1468,6 @@ export class MindTreeView extends TextFileView {
     this.fileDropTargetEl?.removeClass("is-file-drop-target", "is-drop-before", "is-drop-inside", "is-drop-after");
     this.fileDropTargetEl = undefined;
     this.fileDropPlacement = undefined;
-  }
-
-  private onKeyDown(event: KeyboardEvent): void {
-    if (event.defaultPrevented) return;
-    const command = event.ctrlKey || event.metaKey;
-    if (command && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
-      event.preventDefault();
-      void this.saveImmediately();
-      return;
-    }
-    if (isTextEditingTarget(event.target)) return;
-    if (command && !event.altKey && !event.shiftKey && (event.key === "ArrowUp" || event.key === "ArrowDown") && this.primarySelectedId) {
-      event.preventDefault();
-      this.moveSelectedAmongSiblings(event.key === "ArrowUp" ? "up" : "down");
-      return;
-    }
-    if (!command
-      && !event.altKey
-      && !event.shiftKey
-      && isNavigationArrow(event.key)
-      && this.primarySelectedId) {
-      event.preventDefault();
-      this.navigateSelection(event.key);
-      return;
-    }
-    if (command && event.key.toLowerCase() === "a") {
-      event.preventDefault();
-      for (const position of this.currentLayout?.nodes ?? []) this.selectedIds.add(position.id);
-      this.primarySelectedId = this.currentLayout?.nodes.at(-1)?.id;
-      this.render();
-      return;
-    }
-    if (command && event.key.toLowerCase() === "z") {
-      event.preventDefault();
-      event.shiftKey ? this.redo() : this.undo();
-      return;
-    }
-    if (command && event.key.toLowerCase() === "c") {
-      event.preventDefault();
-      void this.copySelected("branch");
-      return;
-    }
-    if (command && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "x") {
-      event.preventDefault();
-      void this.cutSelected();
-      return;
-    }
-    if (command && event.key.toLowerCase() === "e" && this.primarySelectedId) {
-      event.preventDefault();
-      this.createNoteForSelection();
-      return;
-    }
-    if (event.key === "Tab" && this.primarySelectedId) {
-      event.preventDefault();
-      // A held Tab must not create a deep chain (or repeatedly insert parents)
-      // after an editor hands focus back to the canvas. Distinct presses remain
-      // unrestricted because they arrive with repeat=false.
-      if (!shouldHandleStructuralCreationKey(event.key, event.repeat)) return;
-      if (event.shiftKey) this.addParentNode();
-      else this.addChildNode();
-      return;
-    }
-    if (!command && !event.altKey && event.key === " " && this.primarySelectedId) {
-      event.preventDefault();
-      this.beginEdit(this.primarySelectedId, "end");
-    } else if (event.key === "Enter" && this.primarySelectedId) {
-      event.preventDefault();
-      // Holding Enter produces repeat keydown events after the editor has
-      // handed focus back to the canvas. Consume those events without creating
-      // branches; quick independent presses still all have repeat=false.
-      if (!shouldHandleStructuralCreationKey(event.key, event.repeat)) return;
-      this.addSiblingNode(event.shiftKey ? "before" : "after");
-    } else if ((event.key === "Delete" || event.key === "Backspace") && this.primarySelectedId) {
-      event.preventDefault();
-      this.requestDeleteBranch(this.primarySelectedId);
-    } else if (event.key === "Escape") {
-      this.cancelEdit();
-      this.clearDropTarget();
-    }
   }
 
   /** Reorder only the primary selection; other selected nodes remain selected. */
@@ -2368,108 +1684,52 @@ export class MindTreeView extends TextFileView {
     const node = document?.nodes[nodeId];
     if (!document || !node) return;
     if (!this.selectedIds.has(nodeId)) this.selectOnly(nodeId);
-    const menu = new Menu();
     const linkedFile = node.resource?.type === "file";
-    if (linkedFile) {
-      const syncing = node.titleSync === "bidirectional";
-      menu.addItem((item) => item
-        .setTitle(syncing ? t("menu.disableTitleSync") : t("menu.enableTitleSync"))
-        .setIcon(syncing ? "unlink" : "refresh-cw")
-        .onClick(() => syncing
-          ? this.commit((draft) => { getNode(draft, nodeId).titleSync = "off"; })
-          : void this.enableTitleSync(nodeId)));
-    } else if (!node.resource) {
-      menu.addItem((item) => item.setTitle(t("menu.addNote")).setIcon("file-plus-2").onClick(() => void this.createNoteForNode(nodeId)));
-      menu.addItem((item) => item.setTitle(t("menu.addNoteFromTemplate")).setIcon("copy-plus").onClick(() => this.showTemplateNotePicker(nodeId)));
-      menu.addItem((item) => item.setTitle(t("menu.linkNote")).setIcon("file-search").onClick(() => this.linkExistingNote(nodeId)));
-    }
-    menu.addItem((item) => item.setTitle(t("menu.linkWeb")).setIcon("link").onClick(() => this.linkUrl(nodeId)));
-    if (node.resource) {
-      menu.addItem((item) => item.setTitle(t("menu.openResource")).setIcon("external-link").onClick(() => void this.openResource(nodeId)));
-      menu.addItem((item) => item.setTitle(t("menu.unlinkResource")).setIcon(CHAIN_BROKEN_ICON).onClick(() => this.commit((draft) => {
-        const draftNode = getNode(draft, nodeId);
-        delete draftNode.resource;
-        delete draftNode.titleSync;
-      })));
-    }
-    menu.addItem((item) => item
-      .setTitle(t("menu.markers"))
-      .setIcon("tags")
-      .onClick(() => this.showMarkerPopover(nodeId, { x: event.clientX, y: event.clientY })));
-    menu.addSeparator();
-    menu.addItem((item) => item.setTitle(t("menu.addChild")).setIcon("corner-down-right").onClick(() => {
-      this.selectOnly(nodeId);
-      this.addChildNode();
-    }));
-    if (nodeId !== document.rootId) {
-      menu.addItem((item) => item.setTitle(t("menu.addSibling")).setIcon("list-plus").onClick(() => {
-        let createdId = "";
-        this.commit((draft) => { createdId = addSibling(draft, nodeId, t("node.untitled")).id; });
-        this.finishInteractiveNodeCreation(createdId);
-      }));
-    }
-    if (node.childIds.length > 0) {
-      menu.addItem((item) => item.setTitle(node.collapsed ? t("menu.expand") : t("menu.collapse")).setIcon(node.collapsed ? "unfold-vertical" : "fold-vertical").onClick(() => this.commit((draft) => toggleCollapsed(draft, nodeId), nodeId)));
-      menu.addItem((item) => item.setTitle(t("menu.expandAll")).setIcon("chevrons-down").onClick(() => this.commit((draft) => setAllCollapsed(draft, nodeId, false), nodeId)));
-      menu.addItem((item) => item.setTitle(t("menu.collapseAll")).setIcon("chevrons-up").onClick(() => this.commit((draft) => setAllCollapsed(draft, nodeId, true), nodeId)));
-    }
-    if (nodeId !== document.rootId) {
-      menu.addItem((item) => item.setTitle(t("menu.deleteBranch", { count: this.getSelectedBranchNodeIds(nodeId).length })).setIcon("trash-2").setWarning(true).onClick(() => this.requestDeleteBranch(nodeId)));
-      menu.addItem((item) => item.setTitle(t("menu.deleteNodeOnly")).setIcon("git-pull-request-arrow").onClick(() => this.requestDeleteNodeOnly(nodeId)));
-    }
-    menu.addSeparator();
     const branchHasNotes = collectBranchIds(document, nodeId).some((id) => {
       const resource = document.nodes[id]?.resource;
       return resource?.type === "file" && resource.fileKind === "note";
     });
-    menu.addItem((item) => item
-      .setTitle(t("menu.moveNotes"))
-      .setIcon("folder-input")
-      .setDisabled(!branchHasNotes)
-      .onClick(() => this.showMoveNotesModal(nodeId)));
-    menu.addSeparator();
-    menu.addItem((item) => item.setTitle(t("menu.copyBranch")).setIcon("copy").onClick(() => void this.copySelected("branch")));
-    menu.addItem((item) => item.setTitle(t("menu.copyMarkdown")).setIcon("list-tree").onClick(() => void this.copySelected("markdown")));
-    menu.addItem((item) => item.setTitle(t("menu.exportBranchPng")).setIcon("image-down").onClick(() => void this.exportSelectedPng()));
-    menu.showAtMouseEvent(event);
-  }
-
-  /** Manual icons and the automatic mind-tree badge follow the title visually. */
-  private renderNodeMarkers(element: HTMLElement, node: MindTreeNode): void {
-    const markers = getVisibleNodeMarkers(node);
-    const hasMindTreeMarker = hasMindTreeResourceMarker(node);
-    const hasExcalidrawMarker = hasExcalidrawResourceMarker(node);
-    if (markers.length === 0 && !hasMindTreeMarker && !hasExcalidrawMarker) return;
-    const container = element.createDiv("mtn-node-markers");
-    for (const marker of markers) {
-      const markerEl = container.createSpan({
-        cls: `mtn-node-marker is-${marker.type} is-${marker.value}`,
-        attr: { role: "img", "aria-label": nodeMarkerLabel(marker.type, marker.value) }
-      });
-      if (marker.type === "progress") {
-        setIcon(markerEl, marker.value === "todo"
-          ? "circle"
-          : marker.value === "inprogress"
-            ? "loader-circle"
-            : marker.value === "done" ? "circle-check" : "circle-x");
-      } else {
-        setIcon(markerEl, "flag");
-      }
-    }
-    if (hasMindTreeMarker) {
-      container.createSpan({
-        cls: "mtn-node-marker is-mind-tree",
-        text: t("node.mindTreeMarker"),
-        attr: { role: "img", "aria-label": t("node.mindTreeMarker") }
-      });
-    }
-    if (hasExcalidrawMarker) {
-      container.createSpan({
-        cls: "mtn-node-marker is-excalidraw",
-        text: t("node.drawingMarker"),
-        attr: { role: "img", "aria-label": t("node.drawingMarker") }
-      });
-    }
+    const syncing = node.titleSync === "bidirectional";
+    new NodeContextMenu({
+      hasFileResource: linkedFile,
+      hasResource: Boolean(node.resource),
+      titleSyncEnabled: syncing,
+      isRoot: nodeId === document.rootId,
+      hasChildren: node.childIds.length > 0,
+      collapsed: Boolean(node.collapsed),
+      deleteCount: this.getSelectedBranchNodeIds(nodeId).length,
+      branchHasNotes
+    }, {
+      toggleTitleSync: () => syncing
+        ? this.commit((draft) => { getNode(draft, nodeId).titleSync = "off"; })
+        : void this.enableTitleSync(nodeId),
+      addNote: () => void this.createNoteForNode(nodeId),
+      addNoteFromTemplate: () => this.showTemplateNotePicker(nodeId),
+      linkNote: () => this.linkExistingNote(nodeId),
+      linkWeb: () => this.linkUrl(nodeId),
+      openResource: () => void this.openResource(nodeId),
+      unlinkResource: () => this.commit((draft) => {
+        const draftNode = getNode(draft, nodeId);
+        delete draftNode.resource;
+        delete draftNode.titleSync;
+      }),
+      showMarkers: () => this.showMarkerPopover(nodeId, { x: event.clientX, y: event.clientY }),
+      addChild: () => { this.selectOnly(nodeId); this.addChildNode(); },
+      addSibling: () => {
+        let createdId = "";
+        this.commit((draft) => { createdId = addSibling(draft, nodeId, t("node.untitled")).id; });
+        this.finishInteractiveNodeCreation(createdId);
+      },
+      toggleCollapsed: () => this.commit((draft) => toggleCollapsed(draft, nodeId), nodeId),
+      expandAll: () => this.commit((draft) => setAllCollapsed(draft, nodeId, false), nodeId),
+      collapseAll: () => this.commit((draft) => setAllCollapsed(draft, nodeId, true), nodeId),
+      deleteBranch: () => this.requestDeleteBranch(nodeId),
+      deleteNodeOnly: () => this.requestDeleteNodeOnly(nodeId),
+      moveNotes: () => this.showMoveNotesModal(nodeId),
+      copyBranch: () => void this.copySelected("branch"),
+      copyMarkdown: () => void this.copySelected("markdown"),
+      exportBranchPng: () => void this.exportSelectedPng()
+    }).show(event);
   }
 
   /** Open the shared icon palette for the selected or context-clicked node. */
@@ -2492,17 +1752,17 @@ export class MindTreeView extends TextFileView {
   }
 
   private showCopyMenu(event: MouseEvent): void {
-    const menu = new Menu();
-    menu.addItem((item) => item.setTitle(t("menu.copyBranch")).setIcon("copy").onClick(() => void this.copySelected("branch")));
-    menu.addItem((item) => item.setTitle(t("menu.copyMarkdown")).setIcon("list-tree").onClick(() => void this.copySelected("markdown")));
-    menu.showAtMouseEvent(event);
+    new CopyMenu(
+      () => void this.copySelected("branch"),
+      () => void this.copySelected("markdown")
+    ).show(event);
   }
 
   private showExportMenu(event: MouseEvent): void {
-    const menu = new Menu();
-    menu.addItem((item) => item.setTitle(t("menu.exportPng")).setIcon("image-down").onClick(() => void this.exportSelectedPng()));
-    menu.addItem((item) => item.setTitle(t("menu.exportMarkdown")).setIcon("file-down").onClick(() => this.exportSelectedMarkdown()));
-    menu.showAtMouseEvent(event);
+    new ExportMenu(
+      () => void this.exportSelectedPng(),
+      () => this.exportSelectedMarkdown()
+    ).show(event);
   }
 
   private async copySelected(mode: "branch" | "markdown"): Promise<void> {
@@ -3282,8 +2542,7 @@ export class MindTreeView extends TextFileView {
       this.worldEl.style.removeProperty("zoom");
       this.worldEl.style.transform = `translate(${this.viewport.x}px, ${this.viewport.y}px) scale(${this.viewport.zoom})`;
     }
-    const zoomEl = this.toolbarEl.querySelector<HTMLElement>("[data-role='zoom']");
-    if (zoomEl) zoomEl.setText(`${Math.round(this.viewport.zoom * 100)}%`);
+    this.shell?.toolbar.update({ zoom: this.viewport.zoom });
   }
 
   /** Toolbar zoom follows the last canvas pointer; center is the initial fallback. */
@@ -3355,36 +2614,15 @@ export class MindTreeView extends TextFileView {
 
   private setStatus(message: string, kind: "idle" | "dirty" | "saved" | "warning" | "error"): void {
     if (kind === "saved" || kind === "dirty" || kind === "error") this.saveState = kind;
-    if (this.statusEl) {
-      // Routine saved/dirty state belongs on the save button. The free-floating
-      // message is reserved for warnings and errors that need explanatory text.
-      const showMessage = kind === "warning" || kind === "error";
-      this.statusEl.setText(showMessage ? message : "");
-      this.statusEl.className = `mtn-status${showMessage ? ` is-${kind}` : ""}`;
-    }
+    // Routine saved/dirty state belongs on the save button. The free-floating
+    // message is reserved for warnings and errors that need explanatory text.
+    const showMessage = kind === "warning" || kind === "error";
+    this.shell?.status.update({
+      message: showMessage ? message : "",
+      kind: kind === "warning" ? "warning" : kind === "error" ? "error" : "normal"
+    });
     this.refreshBottomStatusBar();
   }
-}
-
-function nodeMarkerLabel(type: "progress" | "priority", value: string): string {
-  if (type === "progress") {
-    if (value === "todo") return t("marker.progress.todo");
-    if (value === "inprogress") return t("marker.progress.inprogress");
-    if (value === "done") return t("marker.progress.done");
-    return t("marker.progress.cancelled");
-  }
-  if (value === "red") return t("marker.priority.red");
-  if (value === "yellow") return t("marker.priority.yellow");
-  return t("marker.priority.blue");
-}
-
-/** Choose legible node text without modifying the user's exact highlight color. */
-function readableTextColor(hex: string): string {
-  const value = Number.parseInt(hex.slice(1), 16);
-  const red = (value >> 16) & 0xff;
-  const green = (value >> 8) & 0xff;
-  const blue = value & 0xff;
-  return red * 0.299 + green * 0.587 + blue * 0.114 > 150 ? "#1f2937" : "#ffffff";
 }
 
 function clamp(value: number, minimum: number, maximum: number): number {
@@ -3399,10 +2637,6 @@ function recoveryTimestamp(now = new Date()): string {
     + `-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}-${three(now.getMilliseconds())}`;
 }
 
-function rectsIntersect(a: DOMRect, b: DOMRect): boolean {
-  return a.left <= b.right && a.right >= b.left && a.top <= b.bottom && a.bottom >= b.top;
-}
-
 function deduplicateFiles(files: TFile[]): TFile[] {
   return [...new Map(files.map((file) => [file.path, file])).values()];
 }
@@ -3411,8 +2645,4 @@ function deduplicateFiles(files: TFile[]): TFile[] {
 function isTextEditingTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLElement
     && Boolean(target.closest("input,textarea,[contenteditable='true']"));
-}
-
-function isNavigationArrow(key: string): key is NavigationArrow {
-  return key === "ArrowUp" || key === "ArrowDown" || key === "ArrowLeft" || key === "ArrowRight";
 }

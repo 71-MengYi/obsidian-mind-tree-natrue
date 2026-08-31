@@ -4,6 +4,21 @@ import { readFileSync } from "node:fs";
 
 const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8");
 
+test("canvas accessible labels are visually hidden and ignore pointer input", () => {
+  const rule = css.match(/\.mtn-visually-hidden\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.match(rule, /position:\s*absolute !important;/);
+  assert.match(rule, /clip-path:\s*inset\(50%\) !important;/);
+  assert.match(rule, /pointer-events:\s*none !important;/);
+});
+
+test("node grid keeps a fixed title track before trailing UI", () => {
+  const nodeRule = css.match(/\.mtn-node\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.match(nodeRule, /--mtn-node-title-width:\s*1px;/);
+  assert.match(nodeRule,
+    /grid-template-columns:\s*var\(--mtn-node-title-width\) var\(--mtn-node-marker-width\) var\(--mtn-node-control-width\);/);
+  assert.doesNotMatch(css, /\.mtn-node\.is-content-only/);
+});
+
 test("drawing badges use the requested compact purple treatment", () => {
   const rule = css.match(/\.mtn-node-marker\.is-excalidraw\s*\{([\s\S]*?)\}/)?.[1] ?? "";
   assert.match(rule, /border:\s*0;/);

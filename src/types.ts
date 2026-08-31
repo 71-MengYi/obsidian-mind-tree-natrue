@@ -135,6 +135,14 @@ export interface PositionedNode {
   depth: number;
   x: number;
   y: number;
+  /**
+   * Width of the title-bearing part of the node, including the node's 2 px
+   * left/right padding but excluding markers and file controls. Keeping this
+   * separate from `width` lets trailing UI extend to the screen-right without
+   * moving the title anchor.
+   */
+  contentWidth: number;
+  /** Complete visible width, including markers and file controls. */
   width: number;
   height: number;
 }

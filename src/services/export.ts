@@ -21,7 +21,6 @@ import {
   connectionPath,
   DEFAULT_NODE_WRAP_WIDTH,
   getNodeFontSize,
-  getNodeHorizontalInsets,
   getNodeLineHeight,
   getNodeSizeClass,
   layoutTree,
@@ -105,7 +104,9 @@ export function renderBranchSvg(
             : position.depth === 2 ? mixHexColors(accent, palette.surface, 0.16) : palette.surface;
     const fontSize = getNodeFontSize(position.depth);
     const lineHeight = getNodeLineHeight(position.depth);
-    const textWidth = Math.max(1, shifted.width - getNodeHorizontalInsets(node));
+    // Use the same title-only track as the DOM renderer. Trailing markers and
+    // file controls change the outer rectangle, never wrapping or shifting text.
+    const textWidth = Math.max(1, shifted.contentWidth - 4);
     const lines = wrapNodeTitle(node.title || "未命名节点", position.depth, textWidth);
     const firstBaseline = shifted.y + (shifted.height - lines.length * lineHeight) / 2 + fontSize;
     // Every wrapped line starts at the title area's left edge, matching the
@@ -120,7 +121,7 @@ export function renderBranchSvg(
       ? (node.titleSync === "bidirectional" ? 22 : 44)
       : 0;
     const markerAreaWidth = getNodeMarkerDisplayWidth(node);
-    const markerStartX = shifted.x + shifted.width - 2 - resourceControlWidth - markerAreaWidth + 2;
+    const markerStartX = shifted.x + shifted.contentWidth;
     const markerY = shifted.y + shifted.height / 2 + 5;
     const markerSvg = visibleMarkers.map((marker, index) => {
       const symbol = marker.type === "priority"
