@@ -12,11 +12,16 @@ import {
   zoomViewportAt
 } from "../src/ui/viewport";
 
-test("viewport CSS keeps scale out of the composited pan transform", () => {
-  const presentation = viewportToCssPresentation({ x: 80, y: 40, zoom: 1.3 });
-  assert.equal(presentation.panTransform, "translate3d(80px, 40px, 0)");
+test("viewport CSS snaps positioned pan to device pixels and keeps zoom separate", () => {
+  const presentation = viewportToCssPresentation({ x: 80.24, y: 40.26, zoom: 1.3 }, 2);
+  assert.equal(presentation.panLeft, "80px");
+  assert.equal(presentation.panTop, "40.5px");
   assert.equal(presentation.contentZoom, "1.3");
-  assert.doesNotMatch(presentation.panTransform, /scale/);
+  assert.deepEqual(viewportToCssPresentation({ x: -0.1, y: 1.6, zoom: 1 }, Number.NaN), {
+    panLeft: "0px",
+    panTop: "2px",
+    contentZoom: "1"
+  });
 });
 
 test("zoom uses exact ten-point steps and keeps the anchor world point fixed", () => {

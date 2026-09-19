@@ -4,6 +4,7 @@ import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile } from "./
 import { t } from "./i18n";
 import { ResourceIndexService, type IndexedResource } from "./services/resource-index";
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
+import { MindTreeSessionRegistry } from "./services/mind-tree-session-registry";
 import { normalizePluginData, type PluginData } from "./plugin-data";
 import { DEFAULT_SETTINGS, MindTreeSettingTab, type MindTreeSettings } from "./settings";
 import {
@@ -20,10 +21,15 @@ import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./v
 export default class MindTreeNaturePlugin extends Plugin {
   settings: MindTreeSettings = { ...DEFAULT_SETTINGS };
   resources!: ResourceIndexService;
+  /** Every open leaf of the same file shares one document/history/write queue. */
+  readonly mindTreeSessions = new MindTreeSessionRegistry();
   private switchingFilePath?: string;
   private pendingActivationTimer?: number;
   private resourceIndexData: Record<string, IndexedResource> = {};
   private dataSaveTimer?: number;
+  private dataSaveRetryTimer?: number;
+  private dataSaveRetryAttempt = 0;
+  private unloading = false;
   /** Settings and resource-index writes share one chain so stale saves finish first. */
   private dataSaveQueue: Promise<void> = Promise.resolve();
 
@@ -132,7 +138,14 @@ export default class MindTreeNaturePlugin extends Plugin {
         if (file instanceof TFile) this.resources.indexFile(file);
       }));
       this.registerEvent(this.app.vault.on("modify", (file) => {
-        if (file instanceof TFile) this.resources.indexFile(file);
+        if (!(file instanceof TFile)) return;
+        const indexed = this.resources.indexFile(file);
+        if (indexed?.fileKind !== "image") return;
+        // Image contents can be replaced without changing their stable ID or
+        // path. Refresh dimensions/previews in every tree that references it.
+        for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+          if (leaf.view instanceof MindTreeView) leaf.view.handleResourceMetadataChange(indexed.resourceId);
+        }
       }));
       // Vault modify can fire before MetadataCache has parsed new Frontmatter.
       // Re-index and refresh linked views on the cache event, where the
@@ -147,6 +160,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.registerEvent(this.app.vault.on("delete", (file) => this.resources.removePath(file.path)));
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
         if (!(file instanceof TFile)) return;
+        this.mindTreeSessions.rename(oldPath, file.path);
         this.resources.handleRename(file, oldPath);
         for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
           if (leaf.view instanceof MindTreeView) leaf.view.handleResourceRename(file, oldPath);
@@ -157,9 +171,16 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   onunload(): void {
+    this.unloading = true;
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
     if (this.dataSaveTimer !== undefined) window.clearTimeout(this.dataSaveTimer);
-    void this.savePluginData();
+    if (this.dataSaveRetryTimer !== undefined) window.clearTimeout(this.dataSaveRetryTimer);
+    // Plugin.onunload is synchronous in Obsidian's public API. Start one final
+    // best-effort flush, but never make document correctness depend on this
+    // reconstructible cache write completing after unload.
+    void this.savePluginData().catch((error: unknown) => {
+      console.error("Mind Tree Nature: final plugin-data save failed", error);
+    });
     for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) leaf.detach();
   }
 
@@ -170,7 +191,13 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   async saveSettings(): Promise<void> {
-    await this.savePluginData();
+    try {
+      await this.savePluginData();
+      this.dataSaveRetryAttempt = 0;
+    } catch (error) {
+      this.schedulePluginDataRetry(error);
+      throw error;
+    }
   }
 
   /**
@@ -188,32 +215,63 @@ export default class MindTreeNaturePlugin extends Plugin {
       .map((leaf) => leaf.view)
       .filter((view): view is MindTreeView => view instanceof MindTreeView && normalizePath(view.file?.path ?? "") === path);
     for (const view of openViews) await view.flushForDocumentIdentityWrite(path);
+    const persistedPath = normalizePath(file.path);
+    const sharedSession = this.mindTreeSessions.get(persistedPath);
 
     let persistedDocumentId = proposedDocumentId;
-    await this.app.vault.process(file, (source) => {
-      const parsed = parseMindTreeFile(source, {
+    let identityWriteSource: string | undefined;
+    const writeIdentity = async (): Promise<void> => {
+      await this.app.vault.process(file, (source) => {
+        const parsed = parseMindTreeFile(source, {
+          defaultLayoutMode: this.settings.defaultLayoutMode,
+          defaultTheme: this.settings.theme,
+          defaultNodeShape: this.settings.nodeShape,
+          defaultCollectionMode: this.settings.defaultCollectionMode,
+          defaultConnectionStyle: this.settings.connectionStyle
+        });
+        const currentDocumentId = parsed.document.documentId;
+        // Vault.process applies this compare-and-set to the latest file contents.
+        // A concurrent first-link operation therefore adopts the winning ID
+        // instead of overwriting it with a second UUID.
+        const decision = decideDocumentIdentityWrite(currentDocumentId, proposedDocumentId, expectedDocumentId);
+        persistedDocumentId = decision.documentId;
+        if (!decision.write) return source;
+        parsed.document.documentId = decision.documentId;
+        identityWriteSource = serializeMindTreeFile(parsed.document, source);
+        sharedSession?.beginWrite(identityWriteSource);
+        return identityWriteSource;
+      });
+    };
+    try {
+      if (sharedSession) await sharedSession.runFileOperation(writeIdentity);
+      else await writeIdentity();
+
+      const verifiedSource = await this.app.vault.read(this.app.vault.getFileByPath(file.path) ?? file);
+      const verified = parseMindTreeFile(verifiedSource, {
         defaultLayoutMode: this.settings.defaultLayoutMode,
         defaultTheme: this.settings.theme,
         defaultNodeShape: this.settings.nodeShape,
         defaultCollectionMode: this.settings.defaultCollectionMode,
         defaultConnectionStyle: this.settings.connectionStyle
       });
-      const currentDocumentId = parsed.document.documentId;
-      // Vault.process applies this compare-and-set to the latest file contents.
-      // A concurrent first-link operation therefore adopts the winning ID
-      // instead of overwriting it with a second UUID.
-      const decision = decideDocumentIdentityWrite(currentDocumentId, proposedDocumentId, expectedDocumentId);
-      persistedDocumentId = decision.documentId;
-      if (!decision.write) return source;
-      parsed.document.documentId = decision.documentId;
-      return serializeMindTreeFile(parsed.document, source);
-    });
+      if (verified.document.documentId !== persistedDocumentId) {
+        throw new Error("The mind-tree identity changed before it could be verified.");
+      }
 
-    for (const view of openViews) view.adoptDocumentIdentity(path, persistedDocumentId);
-    return {
-      file: this.app.vault.getFileByPath(path) ?? file,
-      documentId: persistedDocumentId
-    };
+      for (const view of openViews) view.adoptDocumentIdentity(persistedPath, persistedDocumentId);
+      if (sharedSession && identityWriteSource !== undefined) {
+        // This verified plugin-owned write becomes the new comparison baseline;
+        // a delayed TextFileView modify event must not be mistaken for Sync.
+        sharedSession.history.replaceBaseline(verifiedSource);
+        sharedSession.replaceSource(verifiedSource, "identity-writer");
+      }
+      return {
+        file: this.app.vault.getFileByPath(persistedPath) ?? file,
+        documentId: persistedDocumentId
+      };
+    } finally {
+      if (identityWriteSource !== undefined) sharedSession?.endWrite(identityWriteSource);
+    }
   }
 
   /** Re-render all views when a global appearance preference changes. */
@@ -348,11 +406,29 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   private schedulePluginDataSave(): void {
+    if (this.unloading) return;
     if (this.dataSaveTimer !== undefined) window.clearTimeout(this.dataSaveTimer);
     this.dataSaveTimer = window.setTimeout(() => {
       this.dataSaveTimer = undefined;
-      void this.savePluginData();
+      void this.savePluginData().then(() => {
+        this.dataSaveRetryAttempt = 0;
+      }).catch((error: unknown) => this.schedulePluginDataRetry(error));
     }, 500);
+  }
+
+  /** Retry cache/settings persistence without leaking an unhandled rejection. */
+  private schedulePluginDataRetry(error: unknown): void {
+    console.error("Mind Tree Nature: plugin-data save failed", error);
+    if (this.unloading) return;
+    if (this.dataSaveRetryTimer !== undefined) return;
+    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(this.dataSaveRetryAttempt, 5));
+    this.dataSaveRetryAttempt += 1;
+    this.dataSaveRetryTimer = window.setTimeout(() => {
+      this.dataSaveRetryTimer = undefined;
+      void this.savePluginData().then(() => {
+        this.dataSaveRetryAttempt = 0;
+      }).catch((retryError: unknown) => this.schedulePluginDataRetry(retryError));
+    }, delay);
   }
 
   private async savePluginData(): Promise<void> {

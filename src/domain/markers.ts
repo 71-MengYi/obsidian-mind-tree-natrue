@@ -31,11 +31,6 @@ export function classifyFileSubtype(frontmatter: unknown): "excalidraw" | undefi
   return value === "raw" || value === "parsed" ? "excalidraw" : undefined;
 }
 
-// Manual icon markers occupy an 18 px square. The automatic mind-tree badge
-// uses the same height but needs enough width for its three-character label.
-export const MIND_TREE_MARKER_WIDTH = 46;
-export const EXCALIDRAW_MARKER_WIDTH = 46;
-
 const CATEGORY_ORDER: readonly NodeMarkerCategory[] = ["progress", "priority", "highlight"];
 
 export function getNodeMarker<T extends NodeMarkerCategory>(
@@ -81,21 +76,6 @@ export function hasMindTreeResourceMarker(node: MindTreeNode): boolean {
 export function hasExcalidrawResourceMarker(node: MindTreeNode): boolean {
   return node.resource?.type === "file"
     && node.resource.fileSubtype === "excalidraw";
-}
-
-/** Keep this geometry aligned with .mtn-node-markers in styles.css. */
-export function getNodeMarkerDisplayWidth(node: MindTreeNode): number {
-  const iconCount = getVisibleNodeMarkers(node).length;
-  const hasMindTreeMarker = hasMindTreeResourceMarker(node);
-  const hasExcalidrawMarker = hasExcalidrawResourceMarker(node);
-  const itemCount = iconCount + (hasMindTreeMarker ? 1 : 0) + (hasExcalidrawMarker ? 1 : 0);
-  if (itemCount === 0) return 0;
-  const itemWidths = iconCount * 18
-    + (hasMindTreeMarker ? MIND_TREE_MARKER_WIDTH : 0)
-    + (hasExcalidrawMarker ? EXCALIDRAW_MARKER_WIDTH : 0);
-  // Two pixels separate the title from the first marker. Subsequent markers
-  // retain the same two-pixel gap, keeping every combination content-sized.
-  return 2 + itemWidths + (itemCount - 1) * 2;
 }
 
 /** Stable, language-neutral suffixes make every category readable in the outline. */

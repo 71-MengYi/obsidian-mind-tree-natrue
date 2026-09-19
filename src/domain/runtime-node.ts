@@ -107,7 +107,21 @@ function normalizeNodeStyle(value: unknown): NodeStyle | undefined {
   const style: NodeStyle = {};
   if (typeof record["color"] === "string") style.color = record["color"];
   if (typeof record["background"] === "string") style.background = record["background"];
+  const imageWidth = finitePositiveNumber(record["imageWidth"], 600);
+  const imageHeight = finitePositiveNumber(record["imageHeight"], 4_096);
+  // A partial display box cannot preserve the source aspect ratio reliably.
+  // Ignore both values unless the persisted pair is complete and safe.
+  if (imageWidth !== undefined && imageHeight !== undefined) {
+    style.imageWidth = imageWidth;
+    style.imageHeight = imageHeight;
+  }
   return Object.keys(style).length > 0 ? style : undefined;
+}
+
+function finitePositiveNumber(value: unknown, maximum: number): number | undefined {
+  return typeof value === "number" && Number.isFinite(value) && value > 0 && value <= maximum
+    ? value
+    : undefined;
 }
 
 function copyUnknownFields(

@@ -8,7 +8,8 @@ import {
 export class ClipboardController<TContext> {
   constructor(
     private readonly readSystemText: () => Promise<string>,
-    private readonly onReadFailure: () => void
+    private readonly onReadFailure: () => void,
+    private readonly readSystemItems?: () => Promise<readonly ClipboardItem[]>
   ) {}
 
   handlePaste(
@@ -33,7 +34,7 @@ export class ClipboardController<TContext> {
     accept: (content: ClipboardPasteContent, context: TContext) => void
   ): Promise<void> {
     try {
-      const content = await readClipboardFallbackContent(this.readSystemText);
+      const content = await readClipboardFallbackContent(this.readSystemText, this.readSystemItems);
       if (isCurrent(context)) accept(content, context);
     } catch {
       if (isCurrent(context)) this.onReadFailure();

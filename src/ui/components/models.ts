@@ -6,7 +6,7 @@ export interface TopToolbarState {
 
 export interface BottomStatusBarState {
   readonly topicLabel: string;
-  readonly noteLabel: string;
+  readonly fileLabel: string;
   readonly depthLabel: string;
   readonly saveLabel: string;
   readonly saveState: SaveIndicatorState;
@@ -19,7 +19,7 @@ export interface BottomStatusBarState {
 
 export interface BottomStatusBarModelInput {
   readonly topicCount: number;
-  readonly noteCount: number;
+  readonly fileCount: number;
   readonly depth: number;
   readonly saveState: SaveIndicatorState;
   readonly saveBusy: boolean;
@@ -29,7 +29,7 @@ export interface BottomStatusBarModelInput {
   readonly canRedo: boolean;
   readonly text: {
     readonly topics: (count: number) => string;
-    readonly notes: (count: number) => string;
+    readonly files: (count: number) => string;
     readonly depth: (count: number) => string;
     readonly saved: string;
     readonly unsaved: string;
@@ -40,7 +40,7 @@ export interface BottomStatusBarModelInput {
 export function createBottomStatusBarState(input: BottomStatusBarModelInput): BottomStatusBarState {
   return {
     topicLabel: input.text.topics(input.topicCount),
-    noteLabel: input.text.notes(input.noteCount),
+    fileLabel: input.text.files(input.fileCount),
     depthLabel: input.text.depth(input.depth),
     saveLabel: input.saveState === "saved" ? input.text.saved : input.text.unsaved,
     saveState: input.saveState,

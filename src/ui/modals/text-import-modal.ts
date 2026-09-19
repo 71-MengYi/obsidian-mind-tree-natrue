@@ -1,12 +1,15 @@
 import { App, Modal, Setting } from "obsidian";
 import { t } from "../../i18n";
-import type { TextImportRule } from "../../services/text-import";
+import {
+  DEFAULT_TEXT_IMPORT_RULE,
+  type TextImportRule
+} from "../../services/text-import";
 
 export interface TextImportOptions { text: string; rule: TextImportRule; }
 
 export class TextImportModal extends Modal {
   private text: string;
-  private rule: TextImportRule | "" = "";
+  private rule: TextImportRule = DEFAULT_TEXT_IMPORT_RULE;
   private textAreaEl!: HTMLTextAreaElement;
   private errorEl!: HTMLElement;
   private importButtonEl!: HTMLButtonElement;
@@ -31,10 +34,10 @@ export class TextImportModal extends Modal {
       this.text = this.textAreaEl.value; this.clearError(); this.updateImportButton();
     });
     new Setting(this.contentEl).setName(t("modal.import.rule")).setDesc(t("modal.import.ruleDesc"))
-      .addDropdown((dropdown) => dropdown.addOption("", t("modal.import.chooseRule"))
+      .addDropdown((dropdown) => dropdown
         .addOption("list", t("modal.import.rule.list")).addOption("headings", t("modal.import.rule.headings"))
-        .setValue("").onChange((value) => {
-          this.rule = value === "list" || value === "headings" ? value : "";
+        .setValue(DEFAULT_TEXT_IMPORT_RULE).onChange((value) => {
+          if (value === "list" || value === "headings") this.rule = value;
           this.clearError(); this.updateImportButton();
         }));
     this.errorEl = this.contentEl.createDiv({ cls: "mtn-text-import-error", attr: { role: "alert", "aria-live": "polite" } });
@@ -49,7 +52,7 @@ export class TextImportModal extends Modal {
   onClose(): void { this.contentEl.empty(); }
 
   private async submit(): Promise<void> {
-    if (this.submitting || !this.text.trim() || !this.rule) return;
+    if (this.submitting || !this.text.trim()) return;
     this.submitting = true; this.updateImportButton(); this.clearError();
     try {
       const error = await this.onSubmit({ text: this.text, rule: this.rule });
@@ -61,6 +64,6 @@ export class TextImportModal extends Modal {
   }
   private clearError(): void { this.errorEl?.setText(""); }
   private updateImportButton(): void {
-    if (this.importButtonEl) this.importButtonEl.disabled = this.submitting || !this.text.trim() || !this.rule;
+    if (this.importButtonEl) this.importButtonEl.disabled = this.submitting || !this.text.trim();
   }
 }

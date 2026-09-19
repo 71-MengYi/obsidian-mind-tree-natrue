@@ -22,7 +22,7 @@ export interface BottomStatusBarActions {
 export class BottomStatusBar extends DisposableUiObject {
   readonly element: HTMLElement;
   private readonly topicCount: HTMLElement;
-  private readonly noteCount: HTMLElement;
+  private readonly fileCount: HTMLElement;
   private readonly depth: HTMLElement;
   private readonly saveButton: HTMLButtonElement;
   private readonly scanButton: HTMLButtonElement;
@@ -34,7 +34,7 @@ export class BottomStatusBar extends DisposableUiObject {
     this.element = parent.createDiv("mtn-bottom-bar");
     const panel = this.element.createDiv("mtn-status-panel");
     this.topicCount = panel.createSpan("mtn-status-metric");
-    this.noteCount = panel.createSpan("mtn-status-metric");
+    this.fileCount = panel.createSpan("mtn-status-metric");
     this.depth = panel.createSpan("mtn-status-metric");
     this.createButton(panel, "mtn-status-icon-button", "focus", labels.resetCanvas, actions.resetCanvas);
     this.saveButton = this.createButton(panel, "mtn-status-icon-button mtn-save-button is-saved", "save", labels.save, actions.save);
@@ -45,7 +45,7 @@ export class BottomStatusBar extends DisposableUiObject {
 
   update(state: BottomStatusBarState): void {
     this.topicCount.setText(state.topicLabel);
-    this.noteCount.setText(state.noteLabel);
+    this.fileCount.setText(state.fileLabel);
     this.depth.setText(state.depthLabel);
     this.undoButton.disabled = !state.canUndo;
     this.redoButton.disabled = !state.canRedo;

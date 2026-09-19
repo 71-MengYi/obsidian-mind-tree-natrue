@@ -24,22 +24,31 @@ export const MAX_ZOOM = 3;
 const WHEEL_LINE_HEIGHT = 16;
 
 export interface ViewportCssPresentation {
-  /** Screen-space pan only; keeping scale out avoids stretching cached text. */
-  panTransform: string;
+  /** Device-pixel-aligned screen-space pan avoids persistent compositing. */
+  panLeft: string;
+  panTop: string;
   /** Layout-aware content zoom makes Chromium rasterize glyphs at the new size. */
   contentZoom: string;
 }
 
 /**
- * Split navigation into a translated outer layer and a zoomed inner layer.
- * `transform: scale()` on the same long-lived composited layer tends to reuse a
- * low-resolution glyph texture after repeated zoom changes in Electron.
+ * Split navigation into a positioned outer layer and a zoomed inner layer.
+ * Long-lived translated GPU layers can retain stale glyph textures; left/top
+ * positioning avoids that cache while device-pixel snapping keeps text anchors
+ * stable on fractional-DPI displays.
  */
 export function viewportToCssPresentation(
-  viewport: Readonly<ViewportState>
+  viewport: Readonly<ViewportState>,
+  devicePixelRatio = 1
 ): ViewportCssPresentation {
+  const ratio = Number.isFinite(devicePixelRatio) && devicePixelRatio > 0 ? devicePixelRatio : 1;
+  const snap = (value: number): number => {
+    const snapped = Math.round(value * ratio) / ratio;
+    return Object.is(snapped, -0) ? 0 : snapped;
+  };
   return {
-    panTransform: `translate3d(${viewport.x}px, ${viewport.y}px, 0)`,
+    panLeft: `${snap(viewport.x)}px`,
+    panTop: `${snap(viewport.y)}px`,
     contentZoom: String(viewport.zoom)
   };
 }
@@ -118,6 +127,29 @@ export function zoomViewportAt(
     x: anchorX - ((anchorX - viewport.x) / oldZoom) * newZoom,
     y: anchorY - ((anchorY - viewport.y) / oldZoom) * newZoom,
     zoom: newZoom
+  };
+}
+
+/** Continuous pinch: the old midpoint's world point follows the new midpoint. */
+export function pinchViewport(
+  viewport: Readonly<ViewportState>,
+  before: readonly [ViewportPoint, ViewportPoint],
+  after: readonly [ViewportPoint, ViewportPoint]
+): ViewportState {
+  const midpoint = (points: readonly [ViewportPoint, ViewportPoint]): ViewportPoint => ({
+    x: (points[0].x + points[1].x) / 2, y: (points[0].y + points[1].y) / 2
+  });
+  const distance = (points: readonly [ViewportPoint, ViewportPoint]): number =>
+    Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
+  const oldDistance = distance(before);
+  const newDistance = distance(after);
+  const oldCenter = midpoint(before);
+  const newCenter = midpoint(after);
+  const zoom = clamp(viewport.zoom * (oldDistance > 0 && newDistance > 0 ? newDistance / oldDistance : 1), MIN_ZOOM, MAX_ZOOM);
+  return {
+    zoom,
+    x: newCenter.x - (oldCenter.x - viewport.x) * zoom / viewport.zoom,
+    y: newCenter.y - (oldCenter.y - viewport.y) * zoom / viewport.zoom
   };
 }
 

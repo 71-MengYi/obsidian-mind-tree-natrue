@@ -42,11 +42,12 @@ export class CanvasInteractionController {
   ) {}
 
   pointerDown(event: PointerEvent): void {
+    if (event.pointerType === "touch") return; // The touch controller owns the whole sequence.
     if ((event.target as HTMLElement).closest(".mtn-node") || !this.actions.hasDocument()) return;
     if (event.button !== 0 && event.button !== 2) return;
     event.preventDefault();
-    this.canvas.focus();
-    const mode = event.button === 2 || event.pointerType === "touch" ? "pan" : "marquee";
+    this.canvas.focus({ preventScroll: true });
+    const mode = event.button === 2 ? "pan" : "marquee";
     const selection = this.actions.readSelection();
     this.gesture = {
       mode, pointerId: event.pointerId,
@@ -83,8 +84,8 @@ export class CanvasInteractionController {
       this.canvas.removeClass("is-panning");
       this.actions.suppressNextContextMenu(gesture.moved);
     }
-    if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
     this.gesture = undefined;
+    if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
   }
 
   wheel(event: WheelEvent): void {
@@ -107,10 +108,23 @@ export class CanvasInteractionController {
     this.actions.panWheel(delta, horizontal ? "horizontal" : "vertical");
   }
 
-  destroy(): void {
+  pointerCancel(event: PointerEvent): void {
+    if (this.gesture?.pointerId === event.pointerId) this.cancel();
+  }
+
+  cancel(): void {
+    const gesture = this.gesture;
+    this.gesture = undefined;
+    if (gesture?.mode === "marquee" && gesture.selectionBeforeMarquee) {
+      this.actions.replaceSelection(gesture.selectionBeforeMarquee, gesture.primaryBeforeMarquee);
+    }
     this.marquee.hide();
     this.canvas.removeClass("is-panning");
-    this.gesture = undefined;
+    if (gesture && this.canvas.hasPointerCapture(gesture.pointerId)) this.canvas.releasePointerCapture(gesture.pointerId);
+  }
+
+  destroy(): void {
+    this.cancel();
   }
 
   private updateMarquee(clientX: number, clientY: number): void {

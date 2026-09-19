@@ -18,6 +18,30 @@ test("damaged settings fall back field-by-field without blocking plugin load", (
   assert.equal(normalized.settings.titleSync, DEFAULT_SETTINGS.titleSync);
   assert.equal(normalized.settings.templateFolder, DEFAULT_SETTINGS.templateFolder);
   assert.deepEqual(normalized.settings.ignoredPathPrefixes, ["valid/folder"]);
+  assert.deepEqual(normalized.settings.ignoredFileBadgeExtensions, []);
+  assert.deepEqual(Object.keys(normalized.settings.fileExtensionBadgeAliases), []);
+});
+
+test("file badge settings normalize case, deduplicate entries, and discard unsafe values", () => {
+  const normalized = normalizePluginData({
+    settings: {
+      ignoredFileBadgeExtensions: [".PDF", "pdf", "tar.gz", "bad/value", 42],
+      fileExtensionBadgeAliases: JSON.parse(`{
+        ".PDF":" Portable ",
+        "tar.gz":"Archive",
+        "bad/value":"Bad",
+        "__proto__":"Unsafe",
+        "png":" ",
+        "zip":"${"x".repeat(33)}"
+      }`) as unknown
+    }
+  });
+  assert.deepEqual(normalized.settings.ignoredFileBadgeExtensions, ["pdf", "tar.gz"]);
+  assert.deepEqual({ ...normalized.settings.fileExtensionBadgeAliases }, {
+    pdf: "Portable",
+    "tar.gz": "Archive"
+  });
+  assert.equal(Object.getPrototypeOf(normalized.settings.fileExtensionBadgeAliases), null);
 });
 
 test("one malformed ownership entry discards the persisted index for a safe rebuild", () => {

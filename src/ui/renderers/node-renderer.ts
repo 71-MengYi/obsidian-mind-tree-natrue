@@ -1,16 +1,21 @@
 import { setIcon } from "obsidian";
 import {
-  getVisibleNodeMarkers,
-  hasExcalidrawResourceMarker,
-  hasMindTreeResourceMarker
+  getVisibleNodeMarkers
 } from "../../domain/markers";
 import { t } from "../../i18n";
 import type { MindTreeDocument, MindTreeNode, NodeId, PositionedNode } from "../../types";
 import type { FoldDirection } from "../fold-direction";
 import { SHARE_SQUARE_ICON } from "../icons";
-import { getNodeSizeClass, type TreeLayout } from "../layout";
+import {
+  getNodeSizeClass,
+  getNodeTitleEditorSize,
+  NODE_HORIZONTAL_INSETS
+} from "../layout";
 import { branchColorCss } from "../presentation";
-import { createNodeVisualState } from "./node-render-model";
+import type { NodeTextMeasurer } from "../text-measurer";
+import type { ResourceBadge, ResourceBadgePresentation } from "../resource-badges";
+import type { ImageNodePresentation, ImageNodeVisual } from "../image-nodes";
+import { createNodeVisualState, type NodeVisualState } from "./node-render-model";
 
 export interface NodeRenderState {
   readonly document: Readonly<MindTreeDocument>;
@@ -19,14 +24,19 @@ export interface NodeRenderState {
   readonly height: number;
   readonly selectedIds: ReadonlySet<NodeId>;
   readonly editingNodeId?: NodeId;
+  readonly editingDraftValue?: string;
   readonly editingSelectionMode: "all" | "end";
   readonly branchColorSlots: ReadonlyMap<NodeId, number>;
   readonly foldDirections: ReadonlyMap<NodeId, FoldDirection>;
+  readonly nodeWrapWidth: number;
+  readonly textMeasurer: NodeTextMeasurer;
+  readonly resourceBadgePresentation: ResourceBadgePresentation;
+  readonly imageNodePresentation: ImageNodePresentation;
 }
 
 export interface NodeRenderActions {
-  readonly scheduleEditingRelayout: (nodeId: NodeId, title: string) => void;
   readonly finishEdit: (nodeId: NodeId, title: string) => void;
+  readonly updateEditDraft: (nodeId: NodeId, title: string) => void;
   readonly cancelEdit: () => void;
   readonly saveImmediately: () => void;
   readonly focusCanvas: () => void;
@@ -35,37 +45,34 @@ export interface NodeRenderActions {
   readonly beginEdit: (nodeId: NodeId) => void;
   readonly showContextMenu: (event: MouseEvent, nodeId: NodeId) => void;
   readonly openResource: (nodeId: NodeId) => void;
+  readonly beginImageResize: (event: PointerEvent, nodeId: NodeId, image: ImageNodeVisual) => void;
+  readonly editorReady?: (editor: HTMLTextAreaElement) => void;
 }
 
 /** Creates title, editor, badges, resource controls and fold controls for nodes. */
 export class NodeRenderer {
-  private focusTimer?: number;
+  private focusEditor?: () => void;
 
   constructor(readonly element: HTMLElement) {}
 
   render(state: NodeRenderState, actions: NodeRenderActions): void {
-    this.clearFocusTimer();
+    this.focusEditor = undefined;
     this.element.empty();
     this.element.style.width = `${state.width}px`;
     this.element.style.height = `${state.height}px`;
     for (const position of state.positions) this.renderNode(position, state, actions);
+    this.focusRenderedEditor();
   }
 
-  applyGeometry(layout: TreeLayout): void {
-    this.element.style.width = `${layout.width}px`;
-    this.element.style.height = `${layout.height}px`;
-    for (const position of layout.nodes) {
-      const node = this.element.querySelector<HTMLElement>(`.mtn-node[data-node-id="${CSS.escape(position.id)}"]`);
-      if (!node) continue;
-      node.style.left = `${position.x}px`;
-      node.style.top = `${position.y}px`;
-      node.style.width = `${position.width}px`;
-      node.style.height = `${position.height}px`;
-    }
+  private focusRenderedEditor(): void {
+    const focus = this.focusEditor;
+    this.focusEditor = undefined;
+    // Stay inside the user activation so iOS can open the software keyboard.
+    focus?.();
   }
 
   destroy(): void {
-    this.clearFocusTimer();
+    this.focusEditor = undefined;
     this.element.empty();
   }
 
@@ -79,17 +86,31 @@ export class NodeRenderer {
     element.style.width = `${position.width}px`;
     element.style.height = `${position.height}px`;
     element.style.setProperty("--mtn-branch-color", branchColorCss(state.branchColorSlots.get(node.id)));
-    const visual = createNodeVisualState(node, state.selectedIds.has(node.id), state.editingNodeId === node.id);
+    const image = state.imageNodePresentation.resolve(node);
+    const visual = createNodeVisualState(
+      node,
+      state.selectedIds.has(node.id),
+      state.editingNodeId === node.id,
+      state.resourceBadgePresentation
+    );
     element.toggleClass("is-selected", visual.selected);
     element.toggleClass("is-editing", visual.editing);
     element.toggleClass("is-leaf", visual.leaf);
-    element.toggleClass("has-resource", visual.hasFileControls);
+    element.toggleClass("has-resource", visual.hasResourceControls);
     element.toggleClass("is-title-sync-off", visual.titleSyncDisabled);
     element.toggleClass("has-markers", visual.markerDisplayWidth > 0);
+    element.toggleClass("has-image", Boolean(image));
     // The first grid track is the title-only box. It stays fixed while marker
     // and file-control tracks extend the complete node toward screen-right.
-    element.style.setProperty("--mtn-node-title-width", `${Math.max(1, position.contentWidth - 4)}px`);
+    element.style.setProperty(
+      "--mtn-node-title-width",
+      `${Math.max(1, position.contentWidth - NODE_HORIZONTAL_INSETS)}px`
+    );
     element.style.setProperty("--mtn-node-marker-width", `${visual.markerDisplayWidth}px`);
+    if (image) {
+      element.style.setProperty("--mtn-node-image-width", `${image.width}px`);
+      element.style.setProperty("--mtn-node-image-height", `${image.height}px`);
+    }
     element.toggleClass("has-highlight", Boolean(visual.highlight));
     if (visual.highlight) {
       element.style.setProperty("--mtn-node-bg", visual.highlight);
@@ -98,10 +119,11 @@ export class NodeRenderer {
       element.style.setProperty("--mtn-node-bg", node.style.background);
     }
 
-    if (state.editingNodeId === node.id) this.renderEditor(element, node, state, actions);
-    else element.createDiv("mtn-node-title").setText(node.title || t("node.untitled"));
-    this.renderMarkers(element, node);
-    this.renderFileControls(element, node, actions);
+    if (image) this.renderImage(element, node, image, actions);
+    if (state.editingNodeId === node.id) this.renderEditor(element, node, position, state, actions, image);
+    else this.renderTitle(element, node, position, state);
+    this.renderMarkers(element, node, visual.resourceBadges);
+    this.renderResourceControls(element, node, visual, actions);
     this.renderFoldControl(element, node, state.foldDirections.get(node.id) ?? "right", actions);
 
     element.addEventListener("pointerdown", (event) => actions.nodePointerDown(event, node.id));
@@ -113,18 +135,59 @@ export class NodeRenderer {
     });
   }
 
+  /**
+   * Render the exact line partition produced by the shared text measurer.
+   * Allowing CSS to wrap the complete title again created a second, subtly
+   * different layout calculation: a subpixel typography difference could make
+   * the DOM display two lines inside a box that the tree measured as one.
+   */
+  private renderTitle(
+    element: HTMLElement,
+    node: MindTreeNode,
+    position: PositionedNode,
+    state: NodeRenderState
+  ): void {
+    const title = node.title || t("node.untitled");
+    const measurement = state.textMeasurer.measure(title, position.depth, state.nodeWrapWidth);
+    const titleElement = element.createDiv("mtn-node-title");
+    for (const line of measurement.lines) {
+      titleElement.createSpan({ cls: "mtn-node-title-line", text: line });
+    }
+  }
+
   private renderEditor(
     element: HTMLElement,
     node: MindTreeNode,
+    position: PositionedNode,
     state: NodeRenderState,
-    actions: NodeRenderActions
+    actions: NodeRenderActions,
+    image?: ImageNodeVisual
   ): void {
     const input = element.createEl("textarea", {
       cls: "mtn-title-input", attr: { rows: "1", spellcheck: "false" }
     });
-    input.value = node.title;
+    input.value = state.editingDraftValue ?? node.title;
     input.addEventListener("pointerdown", (event) => event.stopPropagation());
-    input.addEventListener("input", () => actions.scheduleEditingRelayout(node.id, input.value));
+    // Keep the committed node rectangle and every connection frozen while the
+    // neutral editor alone grows toward screen-right and down.
+    const initialSize = getNodeTitleEditorSize(position.depth, node.title, state.nodeWrapWidth, state.textMeasurer);
+    // Like an ordinary editor, the textarea includes the node's outer padding.
+    // Start it at the image/gap boundary so its inner text aligns with the
+    // second grid row instead of double-counting the node's top inset.
+    const captionTop = image ? image.height + 2 : 0;
+    const captionHeight = image ? Math.max(0, position.height - captionTop) : position.height;
+    const editorTop = captionTop + Math.max(0, (captionHeight - initialSize.height) / 2);
+    const resizeEditor = (): void => {
+      const size = getNodeTitleEditorSize(position.depth, input.value, state.nodeWrapWidth, state.textMeasurer);
+      input.style.width = `${size.width}px`;
+      input.style.height = `${size.height}px`;
+      input.style.top = `${editorTop}px`;
+    };
+    resizeEditor();
+    input.addEventListener("input", () => {
+      resizeEditor();
+      actions.updateEditDraft(node.id, input.value);
+    });
     input.addEventListener("keydown", (event) => {
       if (event.isComposing) return;
       if (event.key === "Enter" || event.key === "Tab") {
@@ -137,21 +200,46 @@ export class NodeRenderer {
       if (event.key === "Escape") { event.preventDefault(); actions.cancelEdit(); }
     });
     input.addEventListener("blur", () => actions.finishEdit(node.id, input.value));
-    const ownerWindow = element.ownerDocument.defaultView ?? window;
-    this.focusTimer = ownerWindow.setTimeout(() => {
-      this.focusTimer = undefined;
-      input.focus();
+    this.focusEditor = () => {
+      actions.editorReady?.(input);
+      input.focus({ preventScroll: true });
       if (state.editingSelectionMode === "end") {
         const end = input.value.length;
         input.setSelectionRange(end, end);
       } else input.select();
-    });
+    };
   }
 
-  private clearFocusTimer(): void {
-    if (this.focusTimer === undefined) return;
-    (this.element.ownerDocument.defaultView ?? window).clearTimeout(this.focusTimer);
-    this.focusTimer = undefined;
+  /** Render a vault-backed image without exposing its runtime URL to node data. */
+  private renderImage(
+    element: HTMLElement,
+    node: MindTreeNode,
+    image: ImageNodeVisual,
+    actions: NodeRenderActions
+  ): void {
+    const frame = element.createDiv("mtn-node-image-frame");
+    const preview = frame.createEl("img", {
+      cls: "mtn-node-image",
+      attr: { src: image.source, alt: "", draggable: "false" }
+    });
+    preview.loading = "lazy";
+    preview.decoding = "async";
+    preview.addEventListener("dragstart", (event) => event.preventDefault());
+
+    const handle = frame.createEl("button", {
+      cls: "mtn-image-resize-handle",
+      attr: { type: "button", "aria-label": t("node.resizeImage") }
+    });
+    setIcon(handle, "move-diagonal-2");
+    handle.addEventListener("pointerdown", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      actions.beginImageResize(event, node.id, image);
+    });
+    handle.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+    });
   }
 
   private renderFoldControl(
@@ -173,10 +261,15 @@ export class NodeRenderer {
     });
   }
 
-  private renderFileControls(element: HTMLElement, node: MindTreeNode, actions: NodeRenderActions): void {
-    if (node.resource?.type !== "file") return;
+  private renderResourceControls(
+    element: HTMLElement,
+    node: MindTreeNode,
+    visual: NodeVisualState,
+    actions: NodeRenderActions
+  ): void {
+    if (!visual.hasResourceControls) return;
     const controls = element.createDiv("mtn-node-controls");
-    if (node.titleSync !== "bidirectional") {
+    if (visual.titleSyncDisabled) {
       const syncStatus = controls.createSpan({
         cls: "mtn-title-sync-off", attr: { role: "img", "aria-label": t("node.syncDisabled") }
       });
@@ -184,7 +277,7 @@ export class NodeRenderer {
     }
     const openButton = controls.createEl("button", {
       cls: "mtn-resource-open fa-share-square-o",
-      attr: { type: "button", "aria-label": t("node.openLinkedFile") }
+      attr: { type: "button", "aria-label": t("node.openLinkedResource") }
     });
     setIcon(openButton, SHARE_SQUARE_ICON);
     openButton.addEventListener("pointerdown", (event) => event.stopPropagation());
@@ -194,11 +287,13 @@ export class NodeRenderer {
     });
   }
 
-  private renderMarkers(element: HTMLElement, node: MindTreeNode): void {
+  private renderMarkers(
+    element: HTMLElement,
+    node: MindTreeNode,
+    resourceBadges: readonly ResourceBadge[]
+  ): void {
     const markers = getVisibleNodeMarkers(node);
-    const hasMindTreeMarker = hasMindTreeResourceMarker(node);
-    const hasExcalidrawMarker = hasExcalidrawResourceMarker(node);
-    if (markers.length === 0 && !hasMindTreeMarker && !hasExcalidrawMarker) return;
+    if (markers.length === 0 && resourceBadges.length === 0) return;
     const container = element.createDiv("mtn-node-markers");
     for (const marker of markers) {
       const markerElement = container.createSpan({
@@ -209,13 +304,10 @@ export class NodeRenderer {
         ? "circle" : marker.value === "inprogress" ? "loader-circle"
           : marker.value === "done" ? "circle-check" : "circle-x");
     }
-    if (hasMindTreeMarker) container.createSpan({
-      cls: "mtn-node-marker is-mind-tree", text: t("node.mindTreeMarker"),
-      attr: { role: "img", "aria-label": t("node.mindTreeMarker") }
-    });
-    if (hasExcalidrawMarker) container.createSpan({
-      cls: "mtn-node-marker is-excalidraw", text: t("node.drawingMarker"),
-      attr: { role: "img", "aria-label": t("node.drawingMarker") }
+    for (const badge of resourceBadges) container.createSpan({
+      cls: `mtn-node-marker is-resource-badge is-${badge.kind}`,
+      text: badge.label,
+      attr: { role: "img", "aria-label": badge.label }
     });
   }
 }

@@ -3,7 +3,6 @@ import assert from "node:assert/strict";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
 import {
   classifyFileSubtype,
-  getNodeMarkerDisplayWidth,
   hasExcalidrawResourceMarker,
   hasMindTreeResourceMarker,
   normalizeNodeMarkers,
@@ -14,7 +13,15 @@ import {
 import { parseMindTreeFile, serializeMindTreeFile } from "../src/format/document";
 import { renderOutline } from "../src/format/outline";
 import { renderBranchSvg } from "../src/services/export";
-import { getNodeBoxSize, getNodeHorizontalInsets, getNodeSize, wrapNodeTitle } from "../src/ui/layout";
+import {
+  getNodeBoxSize,
+  getNodeHorizontalInsets,
+  getNodeSize,
+  NODE_HORIZONTAL_INSETS,
+  NODE_HORIZONTAL_PADDING,
+  wrapNodeTitle
+} from "../src/ui/layout";
+import { getNodeMarkerGeometry } from "../src/ui/resource-badges";
 
 test("recognizes Excalidraw only from official Frontmatter values", () => {
   assert.equal(classifyFileSubtype({ "excalidraw-plugin": "raw" }), "excalidraw");
@@ -38,13 +45,13 @@ test("marker categories coexist and each category is replaced or removed indepen
     { type: "priority", value: "red" },
     { type: "highlight", value: "#75ACA6" }
   ]);
-  assert.equal(getNodeMarkerDisplayWidth(node), 40);
+  assert.equal(getNodeMarkerGeometry(node).width, 40);
   removeNodeMarker(node, "priority");
   assert.deepEqual(node.markers, [
     { type: "progress", value: "done" },
     { type: "highlight", value: "#75ACA6" }
   ]);
-  assert.equal(getNodeMarkerDisplayWidth(node), 20);
+  assert.equal(getNodeMarkerGeometry(node).width, 20);
 });
 
 test("markers round-trip in compressed JSON and appear after the outline label", () => {
@@ -106,20 +113,20 @@ test("visible markers widen the node without shrinking or rewrapping its title",
 test("plain and linked nodes reserve only compact padding and real control widths", () => {
   const document = createEmptyDocument("Insets");
   const node = addNode(document, document.rootId, "12");
-  assert.equal(getNodeHorizontalInsets(node), 4);
+  assert.equal(getNodeHorizontalInsets(node), 10);
   const plainWidth = getNodeSize(1, node.title, 160, getNodeHorizontalInsets(node)).width;
   assert.ok(plainWidth < 96);
 
   node.resource = { type: "file", resourceId: "note-id", pathHint: "Note.md", fileKind: "note" };
   node.titleSync = "bidirectional";
-  assert.equal(getNodeHorizontalInsets(node), 26);
+  assert.equal(getNodeHorizontalInsets(node), 32);
   assert.equal(getNodeSize(1, node.title, 160, getNodeHorizontalInsets(node)).width - plainWidth, 22);
   node.titleSync = "off";
-  assert.equal(getNodeHorizontalInsets(node), 48);
+  assert.equal(getNodeHorizontalInsets(node), 54);
   assert.equal(getNodeSize(1, node.title, 160, getNodeHorizontalInsets(node)).width - plainWidth, 44);
 
   setNodeMarker(node, { type: "progress", value: "todo" });
-  assert.equal(getNodeHorizontalInsets(node), 68);
+  assert.equal(getNodeHorizontalInsets(node), 74);
   assert.equal(getNodeSize(1, node.title, 160, getNodeHorizontalInsets(node)).width - plainWidth, 64);
 });
 
@@ -141,9 +148,9 @@ test("linked mind-tree files derive a text badge with marker-style layout behavi
   const linkedSize = getNodeSize(1, title, 160, linkedInsets);
 
   assert.equal(hasMindTreeResourceMarker(node), true);
-  assert.equal(getNodeMarkerDisplayWidth(node), 48);
-  assert.equal(linkedInsets - baseInsets, 70);
-  assert.equal(linkedSize.width - baseSize.width, 70);
+  assert.equal(getNodeMarkerGeometry(node).width, 38);
+  assert.equal(linkedInsets - baseInsets, 60);
+  assert.equal(linkedSize.width - baseSize.width, 60);
   assert.equal(renderNodeMarkerSuffix(node), "〔mind-tree〕");
   assert.ok(renderOutline(document).includes("[[trees/Planning.mtn|Linked planning tree]] 〔mind-tree〕"));
   assert.match(renderBranchSvg(document, document.rootId), /class="mtn-mind-tree-marker"/);
@@ -163,7 +170,7 @@ test("linked Excalidraw files derive a drawing badge and readable outline suffix
   node.titleSync = "bidirectional";
 
   assert.equal(hasExcalidrawResourceMarker(node), true);
-  assert.equal(getNodeMarkerDisplayWidth(node), 48);
+  assert.equal(getNodeMarkerGeometry(node).width, 26);
   assert.equal(renderNodeMarkerSuffix(node), "〔excalidraw〕");
   assert.ok(renderOutline(document).includes(
     "[[drawings/Architecture|Architecture sketch]] 〔excalidraw〕"
@@ -179,8 +186,11 @@ test("linked Excalidraw files derive a drawing badge and readable outline suffix
   const textX = Number(/<tspan x="([^"]+)"/.exec(branchSvg)?.[1]);
   const badgeX = Number(/class="mtn-excalidraw-marker"><rect x="([^"]+)"/.exec(branchSvg)?.[1]);
   const box = getNodeBoxSize(1, node.title, 240, node);
-  assert.equal(textX, nodeX + 2);
-  assert.equal(badgeX, nodeX + box.contentWidth);
+  assert.equal(textX, nodeX + NODE_HORIZONTAL_PADDING);
+  assert.equal(
+    badgeX,
+    nodeX + NODE_HORIZONTAL_PADDING + (box.contentWidth - NODE_HORIZONTAL_INSETS) + 2
+  );
 
   delete node.resource.fileSubtype;
   node.resource.pathHint = "drawings/Suffix-only.excalidraw.md";

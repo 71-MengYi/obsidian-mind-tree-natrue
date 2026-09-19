@@ -1,4 +1,3 @@
-import { OUTLINE_END, OUTLINE_START } from "../format/outline";
 import { cloneDocument } from "../domain/tree";
 import type { MindTreeDocument } from "../types";
 
@@ -20,6 +19,13 @@ export class DocumentSession {
   private savedRevision = 0;
   private saveRequested = false;
   private saveDrain?: Promise<void>;
+  /**
+   * The newest caller supplies the next save pass. This matters when one
+   * DocumentSession is shared by several views: a view may detach while a
+   * write is in flight, so a queued follow-up must not keep calling the stale
+   * view's closure.
+   */
+  private saveTask?: () => Promise<boolean>;
   private undoStack: MindTreeDocument[] = [];
   private redoStack: MindTreeDocument[] = [];
 
@@ -91,28 +97,39 @@ export class DocumentSession {
   }
 
   /**
+   * Apply accepted external state to every history snapshot. This prevents an
+   * undo from resurrecting an obsolete external identity, setting or machine
+   * tree while retaining the user's still-valid local undo transitions.
+   */
+  rebaseHistory(transform: (snapshot: MindTreeDocument) => MindTreeDocument): void {
+    this.undoStack = this.undoStack.map(transform);
+    this.redoStack = this.redoStack.map(transform);
+  }
+
+  /**
    * Coalesce simultaneous calls. A task returns true when a mutation occurred
    * during its write and the latest revision needs one more pass.
    */
   requestSave(task: () => Promise<boolean>): Promise<void> {
     this.saveRequested = true;
+    this.saveTask = task;
     if (!this.saveDrain) {
-      this.saveDrain = this.drain(task).finally(() => { this.saveDrain = undefined; });
+      this.saveDrain = this.drain().finally(() => {
+        this.saveDrain = undefined;
+        if (!this.saveRequested) this.saveTask = undefined;
+      });
     }
     return this.saveDrain;
   }
 
-  private async drain(task: () => Promise<boolean>): Promise<void> {
+  private async drain(): Promise<void> {
     while (this.saveRequested) {
       this.saveRequested = false;
+      const task = this.saveTask;
+      if (!task) return;
       if (await task()) this.saveRequested = true;
     }
   }
-}
-
-/** Generated outline edits are disposable and never constitute a data conflict. */
-export function changesOnlyGeneratedOutline(baseline: string, external: string): boolean {
-  return baseline !== external && withoutGeneratedOutline(baseline) === withoutGeneratedOutline(external);
 }
 
 /** Clone local work for recovery without duplicating its linkable document ID. */
@@ -120,11 +137,4 @@ export function createRecoveryDocument(document: MindTreeDocument): MindTreeDocu
   const recovery = cloneDocument(document);
   delete recovery.documentId;
   return recovery;
-}
-
-function withoutGeneratedOutline(source: string): string {
-  const start = source.indexOf(OUTLINE_START);
-  const end = source.indexOf(OUTLINE_END, Math.max(0, start));
-  if (start < 0 || end < start) return source;
-  return `${source.slice(0, start)}${OUTLINE_START}\n${OUTLINE_END}${source.slice(end + OUTLINE_END.length)}`;
 }

@@ -239,6 +239,9 @@
   outline: none;
   border: 0;
   touch-action: none;
+  /* Browser scroll chaining and Obsidian's JS gestures are separate: the
+     scoped touch controller provides event isolation in addition to this. */
+  overscroll-behavior: none;
   cursor: crosshair;
   user-select: none;
 }
@@ -254,12 +257,8 @@
   transform-origin: 0 0;
 }
 
-/* Only the outer layer stays composited and it performs translation alone.
-   Scaling the inner layer through CSS zoom forces glyphs and SVG paths to be
-   painted at their displayed resolution instead of magnifying a cached layer. */
-.mtn-pan-layer {
-  will-change: transform;
-}
+/* Pan uses device-pixel-aligned left/top positioning. Avoiding a permanent GPU
+   transform layer prevents Chromium from retaining stale low-resolution glyphs. */
 
 .mtn-connections,
 .mtn-node-layer {
@@ -303,7 +302,7 @@
   grid-template-columns: var(--mtn-node-title-width) var(--mtn-node-marker-width) var(--mtn-node-control-width);
   align-items: center;
   justify-items: center;
-  padding: 2px;
+  padding: 3px 5px;
   --mtn-node-bg: var(--mtn-node-surface);
   /* Every node shape is now a border-free silhouette. Selection, drag/drop
      outlines and resource badges deliberately remain separate visual layers. */
@@ -313,7 +312,81 @@
   color: var(--mtn-node-text);
   box-shadow: 0 2px 8px rgb(0 0 0 / 10%);
   cursor: grab;
-  transition: transform 150ms ease, box-shadow 150ms ease, filter 150ms ease;
+}
+
+/* Image resources become two-row cards. The image and compact caption share
+   the same left edge; unused width stays on the right instead of stretching
+   the title-to-badge gap. */
+.mtn-node.has-image {
+  --mtn-node-image-width: 180px;
+  --mtn-node-image-height: 135px;
+  grid-template-rows: var(--mtn-node-image-height) minmax(0, 1fr);
+  row-gap: 2px;
+  align-items: center;
+  justify-content: start;
+}
+
+.mtn-node-image-frame {
+  position: relative;
+  grid-column: 1 / -1;
+  grid-row: 1;
+  align-self: start;
+  justify-self: start;
+  width: var(--mtn-node-image-width);
+  height: var(--mtn-node-image-height);
+  overflow: hidden;
+  border: 0;
+  border-radius: 2px;
+  background: var(--background-modifier-hover);
+}
+
+.mtn-node-image {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Resizing is a quiet secondary action. It becomes available only when the
+   image card is already selected or intentionally hovered. */
+.mtn-image-resize-handle,
+.mtn-image-resize-handle:hover,
+.mtn-image-resize-handle:active {
+  position: absolute;
+  right: 2px;
+  bottom: 2px;
+  box-sizing: border-box;
+  width: 18px;
+  min-width: 18px;
+  height: 18px;
+  min-height: 18px;
+  margin: 0;
+  padding: 3px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 4px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+  box-shadow: none;
+  opacity: 0;
+  pointer-events: none;
+  transform: none;
+  cursor: nwse-resize;
+}
+
+.mtn-image-resize-handle svg { width: 12px; height: 12px; }
+
+.mtn-node.has-image:is(:hover, .is-selected) .mtn-image-resize-handle,
+.mtn-image-resize-handle:focus-visible {
+  opacity: 0.86;
+  pointer-events: auto;
+}
+
+.mtn-image-resize-handle:is(:hover, :focus-visible) {
+  background: var(--background-modifier-active-hover);
+  color: var(--text-normal);
 }
 
 .mtn-node.has-resource {
@@ -324,13 +397,6 @@
 .mtn-node.has-resource.is-title-sync-off {
   /* Two 20px actions, their 2px internal gap, and 2px before the group. */
   --mtn-node-control-width: 44px;
-}
-
-.mtn-node:hover:not(.is-editing) {
-  z-index: 5;
-  transform: scale(1.04);
-  box-shadow: 0 8px 22px rgb(0 0 0 / 18%);
-  filter: brightness(1.05);
 }
 
 .mtn-node.is-selected {
@@ -403,22 +469,49 @@
   filter: none;
 }
 
+/* Canvas gestures supply the node menu; text editing retains iOS native UI. */
+.mtn-node:not(.is-editing), .mtn-node-image {
+  -webkit-touch-callout: none;
+}
+
+/* Editing is intentionally local: the committed node box and tree geometry do
+   not change until confirmation, while secondary tail controls stay out of the
+   floating editor's way. */
+.mtn-node.is-editing > :is(.mtn-node-markers, .mtn-node-controls, .mtn-fold-button),
+.mtn-node.is-editing .mtn-image-resize-handle {
+  visibility: hidden;
+  pointer-events: none;
+}
+
 .mtn-node-title {
   width: 100%;
   max-width: 100%;
   min-width: 0;
   justify-self: start;
   text-align: left;
-  white-space: normal;
-  overflow-wrap: anywhere;
-  word-break: break-all;
   line-height: inherit;
+}
+
+/* Layout, the live view and SVG export share one measured line partition.
+   Each generated line is atomic so CSS cannot introduce an unmeasured extra
+   wrap at a subpixel font boundary. */
+.mtn-node-title-line {
+  display: block;
+  min-width: 0;
+  white-space: pre;
 }
 
 .mtn-node > .mtn-node-title,
 .mtn-node > .mtn-title-input {
   grid-column: 1;
   grid-row: 1;
+}
+
+.mtn-node.has-image > .mtn-node-title,
+.mtn-node.has-image > .mtn-title-input,
+.mtn-node.has-image > .mtn-node-markers,
+.mtn-node.has-image > .mtn-node-controls {
+  grid-row: 2;
 }
 
 .mtn-node-markers {
@@ -454,39 +547,51 @@
 .mtn-node-marker.is-priority.is-blue { color: #2563eb; }
 .mtn-node-marker.is-priority svg { fill: currentColor; }
 
-/* Automatic resource-type marker: it shares the 18 px marker height while its
-   wider capsule keeps the full three-character label readable. */
-.mtn-node-marker.is-mind-tree {
+/* Text resource badges use their actual label width. Four equal 2px insets keep
+   short extensions and the existing localized type names equally compact. */
+.mtn-node-marker.is-resource-badge {
   box-sizing: border-box;
-  flex-basis: 46px;
-  width: 46px;
-  height: 18px;
-  padding: 0 4px;
+  flex: 0 0 auto;
+  width: auto;
+  height: auto;
+  padding: 2px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.mtn-node-marker.is-mind-tree {
   border: 1px solid #a8d5b8;
   border-radius: 5px;
   background: #dff4e7;
   color: #2f6b49;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  white-space: nowrap;
 }
 
 /* Excalidraw is derived from the linked file's cached Frontmatter subtype. */
 .mtn-node-marker.is-excalidraw {
-  box-sizing: border-box;
-  flex-basis: 46px;
-  width: 46px;
-  height: 18px;
-  padding: 0 4px;
   border: 0;
   border-radius: 5px;
   background: #7d4fbe;
   color: #fff;
-  font-size: 10px;
-  font-weight: 600;
-  line-height: 16px;
-  white-space: nowrap;
+}
+
+/* Derived extension labels are intentionally quiet metadata. */
+.mtn-node-marker.is-extension {
+  border: 0;
+  border-radius: 5px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
+/* Badge probes retain the exact visible badge CSS without entering layout. */
+.mtn-resource-badge-measure-probe {
+  position: fixed !important;
+  visibility: hidden !important;
+  pointer-events: none !important;
+  left: -100000px !important;
+  top: -100000px !important;
+  z-index: -1 !important;
 }
 
 .mtn-marker-popover {
@@ -632,27 +737,33 @@
 .mtn-node-controls > .mtn-resource-open svg { stroke-width: 8px; }
 
 .mtn-title-input {
+  -webkit-touch-callout: default;
+  -webkit-user-select: text;
+  user-select: text;
   appearance: none;
+  position: absolute;
+  left: 0;
+  z-index: 2;
+  box-sizing: border-box;
+  display: block;
   min-width: 0;
   min-height: 0;
-  width: 100%;
-  height: 100%;
   margin: 0;
-  /* The node already supplies horizontal padding. Extra textarea padding made
-     exact-fit CJK titles wrap during editing even though display mode fit. */
-  padding: 0;
+  padding: 3px 5px;
   border: 0;
   border-radius: 0;
   outline: 0;
   overflow: hidden;
   resize: none;
-  background: transparent;
-  color: var(--mtn-node-text);
+  /* A neutral solid surface remains readable when it grows beyond a colorful
+     node without adding another border or attention-grabbing treatment. */
+  background: var(--background-primary);
+  color: var(--text-normal);
   box-shadow: none;
   font: inherit;
   line-height: inherit;
   text-align: left;
-  white-space: pre-wrap;
+  white-space: break-spaces;
   overflow-wrap: anywhere;
   word-break: break-all;
   user-select: text;
@@ -664,6 +775,21 @@
   border-radius: 0;
   outline: 0;
   box-shadow: none;
+}
+
+/* Runtime font probes inherit every active Obsidian/theme typography rule but
+   never occupy layout space or intercept pointer input. */
+.mtn-text-measure-probe {
+  visibility: hidden !important;
+  pointer-events: none !important;
+  left: -100000px !important;
+  top: -100000px !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  padding: 0 !important;
+  overflow: hidden !important;
 }
 
 .mtn-node > .mtn-fold-button {
@@ -849,6 +975,11 @@
   visibility: hidden;
   pointer-events: none;
   transition: none;
+}
+
+.mtn-node.mtn-node-drag-ghost .mtn-image-resize-handle,
+.mtn-view.is-dragging-node .mtn-image-resize-handle {
+  display: none;
 }
 
 .mtn-node.mtn-node-drag-ghost {
@@ -1144,8 +1275,7 @@
 }
 
 /* Elevation variants remain independent from the selected node outline. */
-.mtn-view[data-mtn-theme="flat"] .mtn-node,
-.mtn-view[data-mtn-theme="flat"] .mtn-node:hover:not(.is-editing) {
+.mtn-view[data-mtn-theme="flat"] .mtn-node {
   box-shadow: none;
 }
 
@@ -1157,14 +1287,6 @@
   box-shadow: 0 4px 12px rgb(0 0 0 / 14%);
 }
 
-.mtn-view[data-mtn-theme="minimal"] .mtn-node:hover:not(.is-editing) {
-  box-shadow: 0 4px 10px rgb(0 0 0 / 14%);
-}
-
-.mtn-view[data-mtn-theme="minimal"] .mtn-node.mtn-depth-root:hover:not(.is-editing) {
-  box-shadow: 0 7px 18px rgb(0 0 0 / 18%);
-}
-
 .mtn-view[data-mtn-theme="floating"] .mtn-node {
   box-shadow: 0 6px 18px rgb(0 0 0 / 20%);
 }
@@ -1173,17 +1295,8 @@
   box-shadow: 0 10px 28px rgb(0 0 0 / 24%);
 }
 
-.mtn-view[data-mtn-theme="floating"] .mtn-node:hover:not(.is-editing) {
-  box-shadow: 0 10px 28px rgb(0 0 0 / 25%);
-}
-
-.mtn-view[data-mtn-theme="floating"] .mtn-node.mtn-depth-root:hover:not(.is-editing) {
-  box-shadow: 0 14px 36px rgb(0 0 0 / 30%);
-}
-
 /* A transparent leaf remains truly surface-free in every elevation theme. */
-.mtn-view[data-mtn-node-shape="borderless"] .mtn-node.is-leaf:not(.is-selected):not(.has-highlight),
-.mtn-view[data-mtn-node-shape="borderless"] .mtn-node.is-leaf:not(.is-selected):not(.has-highlight):hover {
+.mtn-view[data-mtn-node-shape="borderless"] .mtn-node.is-leaf:not(.is-selected):not(.has-highlight) {
   box-shadow: none;
 }
 
@@ -1201,6 +1314,18 @@
 .mtn-view.is-readonly .mtn-save-button,
 .mtn-view.is-readonly .mtn-history-button { opacity: 0.55; pointer-events: none; }
 .mtn-modal-input { width: 100%; }
+
+.mtn-recovery-reminder-paths {
+  max-height: min(40vh, 320px);
+  overflow: auto;
+  padding-inline-start: 24px;
+}
+
+.mtn-recovery-reminder-paths > li {
+  overflow-wrap: anywhere;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+}
 
 /* Text import intentionally favors source readability over a compact prompt:
    users must be able to inspect indentation before selecting a parser. */
@@ -1319,6 +1444,8 @@
   max-height: 230px;
   padding: 9px 11px;
   overflow: auto;
+  /* Read-only preview: only the summary card handles hover and scrolling. */
+  pointer-events: none;
   border: 1px solid var(--background-modifier-border);
   border-radius: 8px;
   background: var(--background-primary);
@@ -1371,7 +1498,7 @@
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--text-error) 32%, transparent);
 }
 
-.mtn-move-notes-modal {
+.mtn-move-files-modal {
   width: min(560px, calc(100vw - 32px));
 }
 
@@ -1428,7 +1555,7 @@
   text-decoration: underline;
 }
 
-.mtn-move-notes-actions {
+.mtn-move-files-actions {
   display: flex;
   justify-content: flex-end;
   gap: 8px;
@@ -1532,6 +1659,49 @@
 
 .mtn-settings-panel > h3 { margin-top: 0; }
 
+.mtn-setting-inline-error {
+  display: none;
+  flex-basis: 100%;
+  margin-top: 6px;
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-setting-inline-error.is-visible { display: block; }
+
+.mtn-file-badge-rule-list {
+  display: grid;
+  gap: 4px;
+  margin: -8px 0 14px;
+  padding-left: min(18rem, 38%);
+}
+
+.mtn-file-badge-rule-row {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  background: var(--background-secondary);
+  color: var(--text-muted);
+}
+
+.mtn-file-badge-rule-row > button {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  color: var(--text-muted);
+}
+
+.mtn-file-badge-rule-value {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow-wrap: anywhere;
+}
+
 .mtn-new-note-default-content {
   width: min(420px, 100%);
   min-height: 140px;
@@ -1550,6 +1720,7 @@
   .mtn-toolbar-separator { margin-inline: 2px; }
   .mtn-status { bottom: 58px; }
   .mtn-bottom-bar { left: 8px; bottom: 8px; max-width: calc(100% - 16px); overflow-x: auto; }
+  .mtn-file-badge-rule-list { padding-left: 0; }
 }
 
 @media (prefers-reduced-motion: reduce) {

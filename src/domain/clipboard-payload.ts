@@ -108,7 +108,8 @@ function normalizeLinkTargets(value: unknown, reachable: ReadonlySet<NodeId>): R
     if (!target) throw new ClipboardPayloadError(`Clipboard link target ${id} must be an object.`);
     if (target["type"] === "file") {
       const linkPath = requiredString(target, "linkPath");
-      result[id] = { type: "file", linkPath };
+      const fallbackTitle = stringValue(target["fallbackTitle"]);
+      result[id] = { type: "file", linkPath, ...(fallbackTitle ? { fallbackTitle } : {}) };
     } else if (target["type"] === "url") {
       const url = requiredString(target, "url");
       const parsed = safeHttpUrl(url);

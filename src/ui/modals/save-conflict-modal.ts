@@ -20,6 +20,12 @@ export class SaveConflictModal extends Modal {
     later.addEventListener("click", () => this.finish("later"));
     this.modalEl.ownerDocument.defaultView?.setTimeout(() => later.focus());
   }
+  /** Close because the underlying conflict was merged, without choosing Later. */
+  dismiss(): void {
+    if (this.settled) return;
+    this.settled = true;
+    this.close();
+  }
   onClose(): void { this.contentEl.empty(); if (!this.settled) this.finish("later", false); }
   private finish(action: SaveConflictAction, close = true): void {
     if (this.settled) return;

@@ -1,6 +1,7 @@
 import type {
   BranchClipboardPayload,
   DropPosition,
+  FileResourceRef,
   MindTreeCollectionMode,
   MindTreeConnectionStyle,
   MindTreeDocument,
@@ -85,14 +86,12 @@ export function getDepth(document: MindTreeDocument, nodeId: NodeId): number {
 /** Counts displayed by the view status bar, kept pure for reliable testing. */
 export function getTreeStatistics(document: MindTreeDocument): {
   topicCount: number;
-  noteCount: number;
+  fileCount: number;
   depth: number;
 } {
   const nodes = Object.values(document.nodes);
-  const noteIds = new Set(nodes
-    .map((node) => node.resource?.type === "file" && node.resource.fileKind === "note"
-      ? node.resource.resourceId
-      : undefined)
+  const fileIds = new Set(nodes
+    .map((node) => node.resource?.type === "file" ? node.resource.resourceId : undefined)
     .filter((id): id is string => id !== undefined));
   // Traverse parent-to-child once. Repeated getDepth calls would rescan every
   // parent list and become noticeably expensive on large or deeply nested trees.
@@ -100,7 +99,41 @@ export function getTreeStatistics(document: MindTreeDocument): {
   for (const nodeDepth of getDocumentTreeIndex(document).depthById.values()) {
     depth = Math.max(depth, nodeDepth);
   }
-  return { topicCount: nodes.length, noteCount: noteIds.size, depth };
+  return { topicCount: nodes.length, fileCount: fileIds.size, depth };
+}
+
+/**
+ * Collect unique vault-file references in the caller-provided node order.
+ * URL resources are intentionally excluded because they have no vault path to
+ * move. Copies detach the asynchronous file operation from later UI changes.
+ */
+export function collectFileReferences(
+  document: MindTreeDocument,
+  nodeIds: Iterable<NodeId>
+): FileResourceRef[] {
+  const references = new Map<string, FileResourceRef>();
+  for (const nodeId of nodeIds) {
+    const resource = document.nodes[nodeId]?.resource;
+    if (resource?.type !== "file" || references.has(resource.resourceId)) continue;
+    references.set(resource.resourceId, { ...resource });
+  }
+  return [...references.values()];
+}
+
+/** Update every node that references a moved file, including duplicates outside the moved branch. */
+export function updateFileReferencePaths(
+  document: MindTreeDocument,
+  movedPaths: ReadonlyMap<string, string>
+): boolean {
+  let changed = false;
+  for (const node of Object.values(document.nodes)) {
+    if (node.resource?.type !== "file") continue;
+    const path = movedPaths.get(node.resource.resourceId);
+    if (!path || node.resource.pathHint === path) continue;
+    node.resource.pathHint = path;
+    changed = true;
+  }
+  return changed;
 }
 
 export function collectBranchIds(document: MindTreeDocument, nodeId: NodeId): NodeId[] {

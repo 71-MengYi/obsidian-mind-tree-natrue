@@ -2,10 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import {
   DocumentSession,
-  changesOnlyGeneratedOutline,
   createRecoveryDocument
 } from "../src/services/document-session";
-import { OUTLINE_END, OUTLINE_START } from "../src/format/outline";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
 
 test("save requests are serialized and a mutation during I/O schedules one more pass", async () => {
@@ -25,7 +23,10 @@ test("save requests are serialized and a mutation during I/O schedules one more 
 
   session.markChanged();
   const duplicateRequest = session.requestSave(async () => {
-    throw new Error("coalesced requests use the active view save task");
+    const revision = session.currentRevision;
+    revisions.push(revision);
+    session.markSaved(revision, `disk-${revision}`);
+    return session.dirty;
   });
   releaseFirst();
   await Promise.all([save, duplicateRequest]);
@@ -35,15 +36,27 @@ test("save requests are serialized and a mutation during I/O schedules one more 
   assert.equal(session.dirty, false);
 });
 
-test("generated outline-only changes are not treated as user data conflicts", () => {
-  const prefix = "---\nschemaVersion: 2\n---\n\nUser prose\n\n";
-  const suffix = "\n\nUser footer";
-  const baseline = `${prefix}${OUTLINE_START}\n- Old\n${OUTLINE_END}${suffix}`;
-  const externalOutline = `${prefix}${OUTLINE_START}\n- New\n${OUTLINE_END}${suffix}`;
-  const externalMarkdown = `${prefix}Changed prose\n\n${OUTLINE_START}\n- New\n${OUTLINE_END}${suffix}`;
+test("a shared session uses the newest view callback for a queued save pass", async () => {
+  const session = new DocumentSession();
+  session.load("baseline");
+  session.markChanged();
+  const calls: string[] = [];
+  let releaseFirst!: () => void;
+  const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
 
-  assert.equal(changesOnlyGeneratedOutline(baseline, externalOutline), true);
-  assert.equal(changesOnlyGeneratedOutline(baseline, externalMarkdown), false);
+  const first = session.requestSave(async () => {
+    calls.push("first");
+    await firstGate;
+    return false;
+  });
+  const second = session.requestSave(async () => {
+    calls.push("second");
+    return false;
+  });
+  releaseFirst();
+  await Promise.all([first, second]);
+
+  assert.deepEqual(calls, ["first", "second"]);
 });
 
 test("document session owns immutable 100-step history and recovery removes identity", () => {

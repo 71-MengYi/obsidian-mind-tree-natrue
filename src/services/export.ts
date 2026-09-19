@@ -2,20 +2,17 @@ import type {
   MindTreeConnectionStyle,
   MindTreeDocument,
   MindTreeLayoutMode,
+  MindTreeNode,
   MindTreeNodeAlignment,
   MindTreeNodeShape,
   MindTreeTheme,
   NodeId,
   PositionedNode
 } from "../types";
+import { collectBranchIds } from "../domain/tree";
 import {
-  EXCALIDRAW_MARKER_WIDTH,
   getNodeHighlightColor,
-  getNodeMarkerDisplayWidth,
-  getVisibleNodeMarkers,
-  hasExcalidrawResourceMarker,
-  hasMindTreeResourceMarker,
-  MIND_TREE_MARKER_WIDTH
+  getVisibleNodeMarkers
 } from "../domain/markers";
 import {
   connectionPath,
@@ -24,10 +21,33 @@ import {
   getNodeLineHeight,
   getNodeSizeClass,
   layoutTree,
+  NODE_HORIZONTAL_INSETS,
+  NODE_HORIZONTAL_PADDING,
+  NODE_VERTICAL_INSETS,
+  NODE_VERTICAL_PADDING,
   wrapNodeTitle
 } from "../ui/layout";
 import { getBranchColorSlots } from "../ui/presentation";
+import { fallbackNodeTextMeasurer, type NodeTextMeasurer } from "../ui/text-measurer";
+import {
+  fallbackResourceBadgePresentation,
+  getNodeMarkerGeometry,
+  MANUAL_MARKER_SIZE,
+  NODE_MARKER_GAP,
+  type ResourceBadge,
+  type ResourceBadgePresentation,
+  type ResourceBadgeSize
+} from "../ui/resource-badges";
 import { getThemePreset, resolveThemeConnection } from "../ui/theme-presets";
+import {
+  fitImageToDefault,
+  IMAGE_CAPTION_GAP,
+  MAX_IMAGE_PREVIEW_BYTES,
+  MAX_IMAGE_PREVIEW_PIXELS,
+  persistedImageSize,
+  type ImageNodePresentation,
+  type ImageNodeVisual
+} from "../ui/image-nodes";
 
 const PADDING = 36;
 
@@ -46,6 +66,21 @@ export interface ExportThemeColors {
   descendantText: string;
 }
 
+export interface ExportImageSource {
+  readonly dataUrl: string;
+  readonly naturalWidth: number;
+  readonly naturalHeight: number;
+}
+
+export interface ExportImageAsset extends ExportImageSource {
+  readonly width: number;
+  readonly height: number;
+}
+
+export type ExportImageResolver = (node: Readonly<MindTreeNode>) => Promise<ExportImageSource | undefined>;
+
+const EMPTY_IMAGE_ASSETS: ReadonlyMap<NodeId, ExportImageAsset> = new Map();
+
 export function renderBranchSvg(
   document: MindTreeDocument,
   nodeId: NodeId,
@@ -55,11 +90,25 @@ export function renderBranchSvg(
   theme: MindTreeTheme = "vibrant",
   nodeShape: MindTreeNodeShape = "rounded",
   nodeAlignment: MindTreeNodeAlignment = "level",
-  runtimeColors?: Readonly<ExportThemeColors>
+  runtimeColors?: Readonly<ExportThemeColors>,
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer,
+  resourceBadgePresentation: ResourceBadgePresentation = fallbackResourceBadgePresentation,
+  imageAssets: ReadonlyMap<NodeId, ExportImageAsset> = EMPTY_IMAGE_ASSETS
 ): string {
+  const imagePresentation = exportImagePresentation(imageAssets);
   // Export deliberately reuses the canvas layout rules, including dynamic width
   // and wrapping, so PNG output does not drift from what the user arranged.
-  const layout = layoutTree(document, nodeId, false, nodeWrapWidth, layoutMode, nodeAlignment);
+  const layout = layoutTree(
+    document,
+    nodeId,
+    false,
+    nodeWrapWidth,
+    layoutMode,
+    nodeAlignment,
+    textMeasurer,
+    resourceBadgePresentation,
+    imagePresentation
+  );
   const positions = new Map(layout.nodes.map((node) => [node.id, node]));
   const branchColorSlots = getBranchColorSlots(document);
   const palette = getThemePreset(theme);
@@ -102,27 +151,34 @@ export function renderBranchSvg(
           : position.depth === 1
             ? accent
             : position.depth === 2 ? mixHexColors(accent, palette.surface, 0.16) : palette.surface;
-    const fontSize = getNodeFontSize(position.depth);
-    const lineHeight = getNodeLineHeight(position.depth);
+    const textStyle = textMeasurer.getStyle(position.depth);
+    const fontSize = getNodeFontSize(position.depth, textMeasurer);
+    const lineHeight = getNodeLineHeight(position.depth, textMeasurer);
+    const imageAsset = imageAssets.get(node.id);
     // Use the same title-only track as the DOM renderer. Trailing markers and
     // file controls change the outer rectangle, never wrapping or shifting text.
-    const textWidth = Math.max(1, shifted.contentWidth - 4);
-    const lines = wrapNodeTitle(node.title || "未命名节点", position.depth, textWidth);
-    const firstBaseline = shifted.y + (shifted.height - lines.length * lineHeight) / 2 + fontSize;
+    const textWidth = Math.max(1, shifted.contentWidth - NODE_HORIZONTAL_INSETS);
+    const lines = wrapNodeTitle(node.title || "未命名节点", position.depth, textWidth, textMeasurer);
+    const captionTop = imageAsset
+      ? shifted.y + NODE_VERTICAL_PADDING + imageAsset.height + IMAGE_CAPTION_GAP
+      : shifted.y;
+    const captionHeight = imageAsset
+      ? shifted.height - imageAsset.height - IMAGE_CAPTION_GAP - NODE_VERTICAL_INSETS
+      : shifted.height;
+    const firstBaseline = captionTop + (captionHeight - lines.length * lineHeight) / 2 + fontSize;
     // Every wrapped line starts at the title area's left edge, matching the
     // browser node instead of centering the complete multiline text block.
-    const textX = shifted.x + 2;
+    const textX = shifted.x + NODE_HORIZONTAL_PADDING;
     const tspans = lines.map((line, index) =>
       `<tspan x="${textX}" y="${firstBaseline + index * lineHeight}">${escapeXml(line)}</tspan>`).join("");
     const visibleMarkers = getVisibleNodeMarkers(node);
-    const hasMindTreeMarker = hasMindTreeResourceMarker(node);
-    const hasExcalidrawMarker = hasExcalidrawResourceMarker(node);
-    const resourceControlWidth = node.resource?.type === "file"
-      ? (node.titleSync === "bidirectional" ? 22 : 44)
-      : 0;
-    const markerAreaWidth = getNodeMarkerDisplayWidth(node);
-    const markerStartX = shifted.x + shifted.contentWidth;
-    const markerY = shifted.y + shifted.height / 2 + 5;
+    const markerGeometry = getNodeMarkerGeometry(node, resourceBadgePresentation);
+    const markerStartX = shifted.x
+      + NODE_HORIZONTAL_PADDING
+      + textWidth
+      + (markerGeometry.width > 0 ? NODE_MARKER_GAP : 0);
+    const markerCenterY = captionTop + captionHeight / 2;
+    const markerY = markerCenterY + 5;
     const markerSvg = visibleMarkers.map((marker, index) => {
       const symbol = marker.type === "priority"
         ? "⚑"
@@ -130,14 +186,24 @@ export function renderBranchSvg(
       const color = marker.type === "priority"
         ? marker.value === "red" ? "#dc2626" : marker.value === "yellow" ? "#d6a700" : "#2563eb"
         : marker.value === "done" ? "#15803d" : marker.value === "cancelled" ? "#dc2626" : marker.value === "inprogress" ? "#2563eb" : palette.text;
-      return `<text x="${markerStartX + index * 20}" y="${markerY}" font-family="system-ui,sans-serif" font-size="15" fill="${color}">${symbol}</text>`;
+      return `<text x="${markerStartX + index * (MANUAL_MARKER_SIZE + NODE_MARKER_GAP) + MANUAL_MARKER_SIZE / 2}" y="${markerY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="${color}">${symbol}</text>`;
     }).join("");
-    const resourceMarkerX = markerStartX + visibleMarkers.length * 20;
-    const resourceMarkerSvg = hasMindTreeMarker
-      ? `<g class="mtn-mind-tree-marker"><rect x="${resourceMarkerX}" y="${shifted.y + shifted.height / 2 - 9}" width="${MIND_TREE_MARKER_WIDTH}" height="18" rx="5" fill="#dff4e7" stroke="#a8d5b8"/><text x="${resourceMarkerX + MIND_TREE_MARKER_WIDTH / 2}" y="${shifted.y + shifted.height / 2 + 3.5}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" font-weight="600" fill="#2f6b49">思维树</text></g>`
-      : hasExcalidrawMarker
-        ? `<g class="mtn-excalidraw-marker"><rect x="${resourceMarkerX}" y="${shifted.y + shifted.height / 2 - 9}" width="${EXCALIDRAW_MARKER_WIDTH}" height="18" rx="5" fill="#7d4fbe" stroke="none"/><text x="${resourceMarkerX + EXCALIDRAW_MARKER_WIDTH / 2}" y="${shifted.y + shifted.height / 2 + 3.5}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10" font-weight="600" fill="#ffffff">绘图</text></g>`
-        : "";
+    let resourceMarkerX = markerStartX
+      + visibleMarkers.length * (MANUAL_MARKER_SIZE + NODE_MARKER_GAP);
+    const extensionFill = mixHexColors(palette.text, palette.surface, 0.1);
+    const resourceMarkerSvg = markerGeometry.resourceBadges.map((badge) => {
+      const size = resourceBadgePresentation.measure(badge);
+      const svg = renderResourceBadgeSvg(
+        badge,
+        size,
+        resourceMarkerX,
+        markerCenterY,
+        extensionFill,
+        palette.text
+      );
+      resourceMarkerX += size.width + NODE_MARKER_GAP;
+      return svg;
+    }).join("");
     const leafWithoutBorder = nodeShape === "borderless" && node.childIds.length === 0;
     const radius = nodeShape === "square" ? 0 : 2;
     const textColor = highlight
@@ -151,7 +217,10 @@ export function renderBranchSvg(
       ? "none"
       : position.depth === 0 ? tierPalette?.rootShadow : tierPalette?.shadow;
     const shadowStyle = nodeShadow && nodeShadow !== "none" ? ` style="filter:${nodeShadow}"` : "";
-    return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/><text text-anchor="start" font-family="system-ui,sans-serif" font-size="${fontSize}" font-weight="${position.depth === 0 ? 700 : position.depth === 1 ? 400 : 500}" fill="${textColor}">${tspans}</text>${markerSvg}${resourceMarkerSvg}</g>`;
+    const imageSvg = imageAsset
+      ? `<image class="mtn-node-image" x="${shifted.x + NODE_HORIZONTAL_PADDING}" y="${shifted.y + NODE_VERTICAL_PADDING}" width="${imageAsset.width}" height="${imageAsset.height}" href="${escapeXml(imageAsset.dataUrl)}" preserveAspectRatio="xMidYMid meet"/>`
+      : "";
+    return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/>${imageSvg}<text text-anchor="start" font-family="${escapeXml(textStyle.fontFamily)}" font-size="${fontSize}" font-style="${escapeXml(textStyle.fontStyle)}" font-weight="${escapeXml(textStyle.fontWeight)}" letter-spacing="${textStyle.letterSpacing}" word-spacing="${textStyle.wordSpacing}" font-kerning="${textStyle.fontKerning}" font-stretch="${textStyle.fontStretch}" font-variant-caps="${textStyle.fontVariantCaps}" text-rendering="${textStyle.textRendering}" fill="${textColor}">${tspans}</text>${markerSvg}${resourceMarkerSvg}</g>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${canvasColor}"/>${paths}${nodes}</svg>`;
 }
@@ -166,8 +235,12 @@ export async function exportBranchPng(
   theme: MindTreeTheme = "vibrant",
   nodeShape: MindTreeNodeShape = "rounded",
   nodeAlignment: MindTreeNodeAlignment = "level",
-  runtimeColors?: Readonly<ExportThemeColors>
+  runtimeColors?: Readonly<ExportThemeColors>,
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer,
+  resourceBadgePresentation: ResourceBadgePresentation = fallbackResourceBadgePresentation,
+  resolveImage?: ExportImageResolver
 ): Promise<void> {
+  const imageAssets = await resolveExportImageAssets(document, nodeId, resolveImage);
   const svg = renderBranchSvg(
     document,
     nodeId,
@@ -177,7 +250,10 @@ export async function exportBranchPng(
     theme,
     nodeShape,
     nodeAlignment,
-    runtimeColors
+    runtimeColors,
+    textMeasurer,
+    resourceBadgePresentation,
+    imageAssets
   );
   const svgBlob = new Blob([svg], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(svgBlob);
@@ -193,6 +269,91 @@ export async function exportBranchPng(
   } finally {
     URL.revokeObjectURL(url);
   }
+}
+
+/** Build a safe standalone data URL and intrinsic dimensions for SVG/PNG export. */
+export async function prepareImageExportSource(
+  bytes: ArrayBuffer,
+  path: string
+): Promise<ExportImageSource | undefined> {
+  if (bytes.byteLength > MAX_IMAGE_PREVIEW_BYTES) return undefined;
+  const mimeType = imageMimeType(path);
+  if (!mimeType) return undefined;
+  const blob = new Blob([bytes], { type: mimeType });
+  const objectUrl = URL.createObjectURL(blob);
+  try {
+    const image = await loadImage(objectUrl);
+    const naturalWidth = image.naturalWidth;
+    const naturalHeight = image.naturalHeight;
+    if (!naturalWidth || !naturalHeight || naturalWidth * naturalHeight > MAX_IMAGE_PREVIEW_PIXELS) return undefined;
+    // Standalone SVG must never contain an active nested SVG payload. Rasterize
+    // that one format; ordinary raster files can retain their compact encoding.
+    const dataUrl = mimeType === "image/svg+xml"
+      ? rasterizeImage(image, naturalWidth, naturalHeight)
+      : arrayBufferDataUrl(bytes, mimeType);
+    return { dataUrl, naturalWidth, naturalHeight };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function resolveExportImageAssets(
+  document: MindTreeDocument,
+  nodeId: NodeId,
+  resolver?: ExportImageResolver
+): Promise<ReadonlyMap<NodeId, ExportImageAsset>> {
+  const assets = new Map<NodeId, ExportImageAsset>();
+  if (!resolver) return assets;
+  for (const candidateId of collectBranchIds(document, nodeId)) {
+    const node = document.nodes[candidateId];
+    if (node?.resource?.type !== "file" || node.resource.fileKind !== "image") continue;
+    try {
+      const source = await resolver(node);
+      if (!source) continue;
+      const size = persistedImageSize(node)
+        ?? fitImageToDefault(source.naturalWidth, source.naturalHeight);
+      assets.set(candidateId, { ...source, ...size });
+    } catch {
+      // One unreadable image falls back to the ordinary attachment node while
+      // the rest of the requested branch still exports successfully.
+    }
+  }
+  return assets;
+}
+
+function exportImagePresentation(
+  assets: ReadonlyMap<NodeId, ExportImageAsset>
+): ImageNodePresentation {
+  return {
+    resolve(node): ImageNodeVisual | undefined {
+      const asset = assets.get(node.id);
+      return asset ? {
+        width: asset.width,
+        height: asset.height,
+        naturalWidth: asset.naturalWidth,
+        naturalHeight: asset.naturalHeight,
+        source: asset.dataUrl,
+        loading: false
+      } : undefined;
+    }
+  };
+}
+
+function renderResourceBadgeSvg(
+  badge: Readonly<ResourceBadge>,
+  size: Readonly<ResourceBadgeSize>,
+  x: number,
+  centerY: number,
+  extensionFill: string,
+  extensionText: string
+): string {
+  const y = centerY - size.height / 2;
+  const appearance = badge.kind === "mind-tree"
+    ? { className: "mtn-mind-tree-marker", fill: "#dff4e7", stroke: "#a8d5b8", text: "#2f6b49" }
+    : badge.kind === "excalidraw"
+      ? { className: "mtn-excalidraw-marker", fill: "#7d4fbe", stroke: "none", text: "#ffffff" }
+      : { className: "mtn-extension-marker", fill: extensionFill, stroke: "none", text: extensionText };
+  return `<g class="${appearance.className}"><rect x="${x}" y="${y}" width="${size.width}" height="${size.height}" rx="5" fill="${appearance.fill}" stroke="${appearance.stroke}"/><text x="${x + size.width / 2}" y="${centerY}" dominant-baseline="middle" text-anchor="middle" font-family="${escapeXml(size.fontFamily ?? "system-ui,sans-serif")}" font-size="${size.fontSize ?? 10}" font-weight="${escapeXml(size.fontWeight ?? "600")}" fill="${appearance.text}">${escapeXml(badge.label)}</text></g>`;
 }
 
 export function downloadMarkdown(markdown: string, title: string): void {
@@ -217,6 +378,33 @@ function documentCanvas(width: number, height: number): HTMLCanvasElement {
   canvas.width = Math.min(16_384, Math.max(1, Math.ceil(width)));
   canvas.height = Math.min(16_384, Math.max(1, Math.ceil(height)));
   return canvas;
+}
+
+function rasterizeImage(image: HTMLImageElement, width: number, height: number): string {
+  const scale = Math.min(1, 16_384 / width, 16_384 / height);
+  const canvas = documentCanvas(width * scale, height * scale);
+  const context = canvas.getContext("2d");
+  if (!context) throw new Error("Canvas 2D context is unavailable.");
+  context.drawImage(image, 0, 0, canvas.width, canvas.height);
+  return canvas.toDataURL("image/png");
+}
+
+function arrayBufferDataUrl(bytes: ArrayBuffer, mimeType: string): string {
+  const input = new Uint8Array(bytes);
+  let binary = "";
+  const chunkSize = 32_768;
+  for (let offset = 0; offset < input.length; offset += chunkSize) {
+    binary += String.fromCharCode(...input.subarray(offset, Math.min(input.length, offset + chunkSize)));
+  }
+  return `data:${mimeType};base64,${btoa(binary)}`;
+}
+
+function imageMimeType(path: string): string | undefined {
+  const extension = /\.([^.]+)$/u.exec(path)?.[1]?.toLowerCase();
+  if (extension === "jpg" || extension === "jpeg") return "image/jpeg";
+  if (extension === "svg") return "image/svg+xml";
+  if (["png", "gif", "webp", "avif", "bmp"].includes(extension ?? "")) return `image/${extension}`;
+  return undefined;
 }
 
 function downloadBlob(blob: Blob, filename: string): void {

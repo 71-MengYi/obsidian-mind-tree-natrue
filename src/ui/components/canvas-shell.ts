@@ -12,6 +12,8 @@ export interface CanvasShellActions {
   readonly pointerDown: (event: PointerEvent) => void;
   readonly pointerMove: (event: PointerEvent) => void;
   readonly pointerUp: (event: PointerEvent) => void;
+  readonly pointerCancel: (event: PointerEvent) => void;
+  readonly cancelGesture: () => void;
   readonly contextMenu: (event: MouseEvent) => void;
   readonly wheel: (event: WheelEvent) => void;
   readonly dragEnter: (event: DragEvent) => void;
@@ -67,7 +69,12 @@ export class CanvasShell extends DisposableUiObject {
     this.listen(this.element, "pointerdown", actions.pointerDown as EventListener);
     this.listen(this.element, "pointermove", actions.pointerMove as EventListener);
     this.listen(this.element, "pointerup", actions.pointerUp as EventListener);
-    this.listen(this.element, "pointercancel", actions.pointerUp as EventListener);
+    this.listen(this.element, "pointercancel", actions.pointerCancel as EventListener);
+    this.listen(this.element, "lostpointercapture", actions.pointerCancel as EventListener);
+    this.listen(this.element.ownerDocument.defaultView!, "blur", actions.cancelGesture);
+    this.listen(this.element.ownerDocument, "visibilitychange", () => {
+      if (this.element.ownerDocument.hidden) actions.cancelGesture();
+    });
     this.listen(this.element, "contextmenu", actions.contextMenu as EventListener);
     this.listen(this.element, "wheel", actions.wheel as EventListener, { passive: false });
     this.listen(this.element, "dragenter", actions.dragEnter as EventListener);

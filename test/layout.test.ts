@@ -9,21 +9,30 @@ import {
   getNodeLineHeight,
   getNodeSize,
   getNodeSizeClass,
+  getNodeTitleEditorSize,
   layoutTree,
+  NODE_HORIZONTAL_INSETS,
+  NODE_VERTICAL_INSETS,
   wrapNodeTitle
 } from "../src/ui/layout";
 import { BRANCH_COLOR_COUNT, branchColorCss, getBranchColorSlots } from "../src/ui/presentation";
+import {
+  estimateFallbackTextWidth,
+  fallbackNodeTextStyle,
+  type NodeTextMeasurer,
+  type NodeTextStyle
+} from "../src/ui/text-measurer";
 import { getThemePreset, resolveThemeConnection } from "../src/ui/theme-presets";
 
-test("node width follows content while typography and minimum height retain three tiers", () => {
+test("node width follows content while only the root retains a minimum height", () => {
   const root = getNodeSize(0, "A");
   const first = getNodeSize(1, "A");
   const second = getNodeSize(2, "A");
   const third = getNodeSize(3, "A");
   const tenth = getNodeSize(10, "A");
-  assert.deepEqual(root, { width: 21, height: 32 });
-  assert.deepEqual(first, { width: 20, height: 28 });
-  assert.deepEqual(second, { width: 18, height: 24 });
+  assert.deepEqual(root, { width: 24, height: 32 });
+  assert.deepEqual(first, { width: 22, height: 26 });
+  assert.deepEqual(second, { width: 20, height: 23 });
   assert.deepEqual(third, second);
   assert.deepEqual(tenth, third);
   assert.ok(root.width < 112);
@@ -38,6 +47,8 @@ test("trailing UI has an independent width and never changes title measurement",
   const document = createEmptyDocument("Root");
   const node = addNode(document, document.rootId, "Same title");
   const plain = getNodeBoxSize(1, node.title, 200, node);
+  assert.equal(plain.trailingWidth, 0);
+  assert.equal(plain.width, plain.contentWidth);
 
   node.markers = [{ type: "progress", value: "todo" }];
   node.resource = { type: "file", resourceId: "note", pathHint: "Same title.md", fileKind: "note" };
@@ -45,9 +56,116 @@ test("trailing UI has an independent width and never changes title measurement",
   const decorated = getNodeBoxSize(1, node.title, 200, node);
 
   assert.equal(decorated.contentWidth, plain.contentWidth);
-  assert.equal(decorated.height, plain.height);
+  assert.equal(decorated.height, 26);
   assert.equal(decorated.trailingWidth, 42);
   assert.equal(decorated.width, plain.width + decorated.trailingWidth);
+});
+
+test("non-root height follows the tallest actual title or tail element", () => {
+  const document = createEmptyDocument("Root");
+  const node = addNode(document, document.rootId, "A");
+  const plain = getNodeBoxSize(2, node.title, 200, node);
+  assert.equal(plain.height, 23); // 17 px line box + 3 px on each side.
+
+  node.markers = [{ type: "priority", value: "red" }];
+  assert.equal(getNodeBoxSize(2, node.title, 200, node).height, 24);
+  node.resource = { type: "file", resourceId: "note", pathHint: "A.md", fileKind: "note" };
+  node.titleSync = "bidirectional";
+  assert.equal(getNodeBoxSize(2, node.title, 200, node).height, 26);
+});
+
+test("URL controls add exactly one 20px button and 2px gap without shrinking the title", () => {
+  const document = createEmptyDocument("Root");
+  const node = addNode(document, document.rootId, "1".repeat(50));
+  for (const depth of [0, 1, 2, 8]) {
+    delete node.resource;
+    const plain = getNodeBoxSize(depth, node.title, 160, node);
+    node.resource = { type: "url", url: "https://example.com/" };
+    node.titleSync = "off";
+    const web = getNodeBoxSize(depth, node.title, 160, node);
+    assert.equal(web.trailingWidth, 22);
+    assert.equal(web.width, plain.width + 22);
+    assert.equal(web.contentWidth, plain.contentWidth);
+    assert.equal(web.height, plain.height);
+    assert.equal(getNodeHorizontalInsets(node), NODE_HORIZONTAL_INSETS + 22);
+
+    node.resource = { type: "file", resourceId: "note", pathHint: "Title.md", fileKind: "note" };
+    node.titleSync = "bidirectional";
+    assert.deepEqual(getNodeBoxSize(depth, node.title, 160, node), web);
+    node.titleSync = "off";
+    assert.equal(getNodeBoxSize(depth, node.title, 160, node).trailingWidth, 44);
+  }
+  node.title = "1";
+  node.resource = { type: "url", url: "https://example.com/" };
+  assert.equal(getNodeBoxSize(2, node.title, 160, node).height, 26);
+});
+
+test("injected real glyph metrics size narrow digits without a safety allowance", () => {
+  const measurer = createTestMeasurer((character) => character === "1" ? 3 : character === "8" ? 9 : 7);
+  const narrow = getNodeSize(1, "1111", 240, NODE_HORIZONTAL_INSETS, measurer);
+  const wide = getNodeSize(1, "8888", 240, NODE_HORIZONTAL_INSETS, measurer);
+
+  assert.deepEqual(narrow, { width: 22, height: 26 });
+  assert.deepEqual(wide, { width: 46, height: 26 });
+  assert.equal(narrow.width, 12 + NODE_HORIZONTAL_INSETS);
+});
+
+test("root letter spacing participates in wrapping and increases the measured height", () => {
+  const rootStyle = { ...testTextStyle(18, "700", 23), letterSpacing: 0.3 };
+  const styles = [
+    rootStyle,
+    testTextStyle(16, "400", 20),
+    testTextStyle(13, "500", 17)
+  ] as const;
+  // 36 × (4.4 + 0.3) = 169.2px. Omitting the final spacing contribution
+  // incorrectly reports 168.9px, keeps this at one line, and allocates 32px.
+  const measurer = createTestMeasurer(() => 4.4, styles);
+  const size = getNodeSize(0, "1".repeat(36), 169, NODE_HORIZONTAL_INSETS, measurer);
+
+  assert.deepEqual(size, { width: 175, height: 52 });
+  assert.equal(measurer.measure("1".repeat(36), 0, 169).lines.length, 2);
+});
+
+test("fallback measurement applies spacing to every rendered grapheme and word separator", () => {
+  const base = { ...fallbackNodeTextStyle(0), letterSpacing: 0, wordSpacing: 0 };
+  const spaced = { ...base, letterSpacing: 0.3, wordSpacing: 1.5 };
+  const value = "A B";
+
+  const spacingDelta = estimateFallbackTextWidth(value, spaced) - estimateFallbackTextWidth(value, base);
+  assert.ok(Math.abs(spacingDelta - (value.length * 0.3 + 1.5)) < 1e-9);
+});
+
+test("the floating editor grows alone and wraps at the configured title width", () => {
+  const measurer = createTestMeasurer(() => 9);
+  const short = getNodeTitleEditorSize(1, "888", 160, measurer);
+  const wrapped = getNodeTitleEditorSize(1, "8".repeat(20), 160, measurer);
+
+  assert.deepEqual(short, { width: 37, height: 26, lineCount: 1 });
+  assert.ok(wrapped.width <= 170);
+  assert.equal(wrapped.height, 46);
+  assert.equal(wrapped.lineCount, 2);
+});
+
+test("the floating editor measures leading, trailing, repeated, and multiline draft whitespace", () => {
+  const measurer = createTestMeasurer((character) => character === " " ? 4 : 9);
+  const plain = getNodeTitleEditorSize(1, "A", 160, measurer);
+  const leading = getNodeTitleEditorSize(1, " A", 160, measurer);
+  const trailing = getNodeTitleEditorSize(1, "A ", 160, measurer);
+  const repeated = getNodeTitleEditorSize(1, "A  ", 160, measurer);
+  const multiline = getNodeTitleEditorSize(1, "A\n\nB", 160, measurer);
+  const wrappedSpaces = getNodeTitleEditorSize(1, " ".repeat(41), 160, measurer);
+
+  assert.deepEqual(plain, { width: 19, height: 26, lineCount: 1 });
+  assert.equal(leading.width, 23);
+  assert.equal(trailing.width, 23);
+  assert.equal(repeated.width, 27);
+  assert.deepEqual(multiline, { width: 19, height: 66, lineCount: 3 });
+  assert.deepEqual(wrappedSpaces, { width: 170, height: 46, lineCount: 2 });
+
+  const saved = measurer.measure("  A   B  ", 1, 160);
+  const draft = measurer.measure("  A   B  ", 1, 160, "draft");
+  assert.equal(saved.normalizedTitle, "A B");
+  assert.equal(draft.normalizedTitle, "  A   B  ");
 });
 
 test("first-level branches use ordered unique slots and descendants inherit them", () => {
@@ -81,7 +199,7 @@ test("node width follows title length and long titles wrap at the configured tex
 
   assert.ok(short.width < medium.width);
   assert.ok(medium.width < long.width);
-  assert.equal(long.width, 204);
+  assert.equal(long.width, 209);
   assert.ok(long.height > short.height);
   assert.ok(wrapNodeTitle("这是一个需要自动换行的较长节点标题", 1, 80).length > 1);
 });
@@ -93,7 +211,7 @@ test("continuous digits are fully wrapped inside the calculated node height", ()
 
   assert.equal(lines.join(""), title);
   assert.ok(lines.length > 1);
-  assert.ok(size.height >= lines.length * 17 + 4);
+  assert.ok(size.height >= lines.length * 17 + NODE_VERTICAL_INSETS);
 });
 
 test("the default CJK node title stays on one line at every size level", () => {
@@ -123,7 +241,7 @@ test("editing-sized width and height changes reflow descendants and later siblin
   assert.ok(afterEdited.height > beforeEdited.height);
   assert.ok(afterDescendant.x > beforeDescendant.x);
   assert.ok(afterSibling.y > beforeSibling.y);
-  assert.ok(afterSibling.y >= afterEdited.y + afterEdited.height + 10);
+  assert.ok(afterSibling.y >= afterEdited.y + afterEdited.height + 9);
 });
 
 test("layout hides collapsed descendants but export layout expands them", () => {
@@ -249,7 +367,7 @@ test("reparenting keeps every depth free of vertical overlap", () => {
     for (let index = 1; index < row.length; index += 1) {
       const previous = row[index - 1]!;
       const current = row[index]!;
-      assert.ok(current.y >= previous.y + previous.height + 10);
+      assert.ok(current.y >= previous.y + previous.height + 9);
     }
   }
 });
@@ -288,14 +406,17 @@ test("five layout modes place branches in their advertised directions", () => {
   assert.ok(radialChildren.some((node) => node.y + node.height / 2 > rootCenterY));
 });
 
-test("source-derived layout rules use a 90px root gap and right-first weighted balancing", () => {
+test("source-derived layout rules use compact gaps and right-first weighted balancing", () => {
   const document = createEmptyDocument("Root");
   const children = ["One", "Two", "Three", "Four"].map((title) => addNode(document, document.rootId, title));
+  const grandchild = addNode(document, children[0]!.id, "Nested");
 
   const right = layoutTree(document, document.rootId, true, 200, "right", "compact");
   const rightRoot = right.nodes.find((node) => node.id === document.rootId)!;
   const rightFirst = right.nodes.find((node) => node.id === children[0]!.id)!;
-  assert.equal(rightFirst.x - rightRoot.x - rightRoot.width, 90);
+  assert.equal(rightFirst.x - rightRoot.x - rightRoot.width, 45);
+  const rightGrandchild = right.nodes.find((node) => node.id === grandchild.id)!;
+  assert.equal(rightGrandchild.x - rightFirst.x - rightFirst.width, 32);
 
   const balanced = layoutTree(document, document.rootId, true, 200, "balanced", "compact");
   const balancedRoot = balanced.nodes.find((node) => node.id === document.rootId)!;
@@ -309,6 +430,24 @@ test("source-derived layout rules use a 90px root gap and right-first weighted b
   const radialFirst = radial.nodes.find((node) => node.id === children[0]!.id)!;
   assert.ok(radialFirst.x + radialFirst.width / 2 > radialRoot.x + radialRoot.width / 2);
   assert.ok(radialFirst.y + radialFirst.height / 2 > radialRoot.y + radialRoot.height / 2);
+});
+
+test("all layouts return whole-pixel node anchors", () => {
+  const document = createEmptyDocument("Root");
+  const first = addNode(document, document.rootId, "A title with varying width");
+  const second = addNode(document, document.rootId, "B");
+  addNode(document, first.id, "Nested one");
+  addNode(document, second.id, "Nested two");
+
+  for (const mode of ["balanced", "right", "left", "tree", "radial"] as const) {
+    for (const alignment of ["level", "compact"] as const) {
+      const layout = layoutTree(document, document.rootId, true, 200, mode, alignment);
+      for (const node of layout.nodes) {
+        assert.equal(Number.isInteger(node.x), true, `${mode}/${alignment}/${node.id} x`);
+        assert.equal(Number.isInteger(node.y), true, `${mode}/${alignment}/${node.id} y`);
+      }
+    }
+  }
 });
 
 test("all ten themes provide twelve colors and every style stays at one pixel", () => {
@@ -388,4 +527,77 @@ test("connection styles generate smooth, straight, and orthogonal paths", () => 
   // Connection geometry deliberately continues to use the complete outer box.
   const decoratedFrom = { ...from, width: 140 };
   assert.match(connectionPath(decoratedFrom, to, "right", "straight"), /^M 140 /);
+
+  const close = { ...to, x: 120 };
+  assert.match(connectionPath(from, close, "right", "smooth"), /C 114 30, 106 95/);
 });
+
+function createTestMeasurer(
+  characterWidth: (character: string) => number,
+  styles: readonly [NodeTextStyle, NodeTextStyle, NodeTextStyle] = [
+    testTextStyle(18, "700", 23),
+    testTextStyle(16, "400", 20),
+    testTextStyle(13, "500", 17)
+  ]
+): NodeTextMeasurer {
+  const styleAt = (depth: number): NodeTextStyle => styles[depth <= 0 ? 0 : depth === 1 ? 1 : 2]!;
+  return {
+    getStyle: styleAt,
+    measure(title, depth, maximumWidth, mode = "title") {
+      const style = styleAt(depth);
+      const normalizedTitle = mode === "draft"
+        ? title.replace(/\r\n?/g, "\n")
+        : title.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() || "Untitled";
+      const lines: string[] = [];
+      const lineWidths: number[] = [];
+      for (const logicalLine of normalizedTitle.split("\n")) {
+        const characters = Array.from(logicalLine);
+        if (characters.length === 0) {
+          lines.push("");
+          lineWidths.push(0);
+          continue;
+        }
+        let line = "";
+        let width = 0;
+        for (const character of characters) {
+          const nextWidth = characterWidth(character) + style.letterSpacing
+            + (/\s/u.test(character) ? style.wordSpacing : 0);
+          if (line && width + nextWidth > maximumWidth) {
+            lines.push(line);
+            lineWidths.push(width);
+            line = character;
+            width = nextWidth;
+          } else {
+            line += character;
+            width += nextWidth;
+          }
+        }
+        lines.push(line);
+        lineWidths.push(width);
+      }
+      return {
+        normalizedTitle,
+        lines,
+        lineWidths,
+        width: Math.max(...lineWidths, 1),
+        style
+      };
+    }
+  };
+}
+
+function testTextStyle(fontSize: number, fontWeight: string, lineHeight: number): NodeTextStyle {
+  return {
+    fontFamily: "Test",
+    fontSize,
+    fontStyle: "normal",
+    fontWeight,
+    fontKerning: "auto",
+    fontStretch: "normal",
+    fontVariantCaps: "normal",
+    letterSpacing: 0,
+    lineHeight,
+    textRendering: "auto",
+    wordSpacing: 0
+  };
+}

@@ -12,6 +12,11 @@ import {
   LAYOUT_OPTIONS,
   THEME_OPTIONS
 } from "./ui/presentation";
+import {
+  MAX_FILE_BADGE_RULE_ENTRIES,
+  normalizeFileBadgeAlias,
+  normalizeFileBadgeExtension
+} from "./ui/resource-badges";
 
 export interface PluginData {
   settings: Partial<MindTreeSettings>;
@@ -36,6 +41,12 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
       ignoredPathPrefixes: normalizeStringArray(
         settings?.["ignoredPathPrefixes"],
         DEFAULT_SETTINGS.ignoredPathPrefixes
+      ),
+      ignoredFileBadgeExtensions: normalizeFileBadgeExtensionList(
+        settings?.["ignoredFileBadgeExtensions"]
+      ),
+      fileExtensionBadgeAliases: normalizeFileBadgeAliases(
+        settings?.["fileExtensionBadgeAliases"]
       ),
       titleSync: safeBoolean(settings?.["titleSync"], DEFAULT_SETTINGS.titleSync),
       nonMarkdownIdSeparator: settings?.["nonMarkdownIdSeparator"] === "%" ? "%" : "@",
@@ -109,6 +120,36 @@ function normalizeStringArray(value: unknown, fallback: readonly string[]): stri
     .map((item) => safeVaultPath(item, true))
     .filter((item): item is string => item !== undefined);
   return [...new Set(normalized)];
+}
+
+function normalizeFileBadgeExtensionList(value: unknown): string[] {
+  if (!Array.isArray(value)) return [...DEFAULT_SETTINGS.ignoredFileBadgeExtensions];
+  const result: string[] = [];
+  const seen = new Set<string>();
+  for (const candidate of value.slice(0, MAX_FILE_BADGE_RULE_ENTRIES)) {
+    if (typeof candidate !== "string") continue;
+    const normalized = normalizeFileBadgeExtension(candidate);
+    if (!normalized || seen.has(normalized)) continue;
+    try { assertSafeRecordKey(normalized); } catch { continue; }
+    seen.add(normalized);
+    result.push(normalized);
+  }
+  return result;
+}
+
+function normalizeFileBadgeAliases(value: unknown): Record<string, string> {
+  const result = createSafeRecord<string>();
+  const record = asRecord(value);
+  if (!record) return result;
+  for (const [rawKey, rawAlias] of Object.entries(record).slice(0, MAX_FILE_BADGE_RULE_ENTRIES)) {
+    if (typeof rawAlias !== "string") continue;
+    const key = normalizeFileBadgeExtension(rawKey);
+    const alias = normalizeFileBadgeAlias(rawAlias);
+    if (!key || !alias) continue;
+    try { assertSafeRecordKey(key); } catch { continue; }
+    result[key] = alias;
+  }
+  return result;
 }
 
 function normalizeInteger(value: unknown, minimum: number, maximum: number, fallback: number): number {

@@ -16,6 +16,7 @@ import {
 import type { FileResourceRef, MindTreeDocument, ResourceId } from "../types";
 import { buildNewNoteBody } from "./note-content";
 import { decideDocumentIdentityWrite, decideDuplicateIdentity } from "./resource-identity";
+import { filesInTemplateFolder, TemplateFileService } from "./template-files";
 
 export interface IndexedResource {
   resourceId: ResourceId;
@@ -52,8 +53,11 @@ export class ResourceIndexService {
   private readonly trustedOwnerIds = new Set<ResourceId>();
   /** Concurrent first-link requests for one path must share the same identity write. */
   private readonly pendingReferenceByPath = new Map<string, Promise<FileResourceRef>>();
+  /** Rename/move operations for one stable resource must never interleave. */
+  private readonly resourceMutationTail = new Map<ResourceId, Promise<void>>();
   /** Suppress redundant full data.json writes when only a read/query occurred. */
   private lastEmittedFingerprint = "";
+  private readonly templateFileService: TemplateFileService<TFile>;
 
   constructor(
     private readonly app: App,
@@ -70,6 +74,34 @@ export class ResourceIndexService {
       this.trustedOwnerIds.add(entry.resourceId);
     }
     this.lastEmittedFingerprint = this.persistedFingerprint();
+    this.templateFileService = new TemplateFileService<TFile>({
+      exists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
+      isCurrentFile: (file) => this.app.vault.getFileByPath(file.path) === file,
+      ensureFolder: (path) => this.ensureFolder(path),
+      copy: (source, path) => this.app.vault.copy(source, path),
+      processFrontMatter: (file, update) => this.app.fileManager.processFrontMatter(file, update),
+      createResourceId: (markdown) => markdown ? createId() : createShortResourceId(),
+      resourceIdExists: (id) => this.byId.has(id),
+      register: (reference) => {
+        this.registerIndexedEntry({
+          resourceId: reference.resourceId, path: reference.pathHint,
+          fileKind: reference.fileKind,
+          ...(reference.fileSubtype ? { fileSubtype: reference.fileSubtype } : {})
+        }, true);
+        this.emitChanged();
+      },
+      trash: (file) => this.app.fileManager.trashFile(file),
+      removePath: (path, resourceId) => {
+        this.removePath(path);
+        // The service only supplies freshly allocated copy IDs. Unlike a user
+        // deletion, rolling back an unlinked copy does not need a tombstone.
+        if (this.byId.get(resourceId)?.path === normalizePath(path)) {
+          this.byId.delete(resourceId);
+          this.trustedOwnerIds.delete(resourceId);
+          this.emitChanged();
+        }
+      }
+    });
   }
 
   rebuild(): void {
@@ -108,6 +140,7 @@ export class ResourceIndexService {
   }
 
   indexFile(file: TFile, notify = true): IndexedResource | undefined {
+    if (this.templateFileService.isPendingPath(normalizePath(file.path))) return undefined;
     const resourceId = this.readStableId(file);
     if (!resourceId) return undefined;
     const entry = this.createIndexedResource(resourceId, file);
@@ -303,74 +336,36 @@ export class ResourceIndexService {
   }
 
   /**
-   * Return every Markdown template below the configured folder. Nested folders
+   * Return every file below the configured template folder. Nested folders
    * are included so the picker represents the complete template collection.
    */
   templateFiles(directory: string): TFile[] {
     const normalizedDirectory = normalizeDirectory(directory);
-    if (!normalizedDirectory) return [];
-    const prefix = `${normalizedDirectory}/`;
-    return this.app.vault.getMarkdownFiles()
-      .filter((file) => file.path.startsWith(prefix) && !file.path.endsWith(".mtn.md"))
-      .sort((left, right) => left.path.localeCompare(right.path));
+    return filesInTemplateFolder(this.app.vault.getFiles(), normalizedDirectory);
   }
 
   /**
-   * Copy a Markdown template into the regular note destination and give the
-   * copy a fresh resource ID. The source template is never edited, and a failed
-   * ID assignment rolls back only the newly created copy.
+   * Copy one opaque template file and replace only the copy's plugin identity.
+   * The template service owns rollback until the view accepts the association.
    */
-  async createNoteFromTemplate(
+  async createFileFromTemplate(
     directory: string,
     title: string,
-    template: TFile
+    template: TFile,
+    isTargetCurrent: () => boolean
   ): Promise<{ file: TFile; reference: FileResourceRef }> {
-    const cleanedTitle = sanitizeFileName(title);
-    if (!cleanedTitle) throw new Error("The note title cannot be empty.");
-    if (template.extension.toLocaleLowerCase() !== "md" || template.path.endsWith(".mtn.md")) {
-      throw new Error("Only Markdown files can be used as note templates.");
-    }
     const normalizedDirectory = normalizeDirectory(directory);
-    if (normalizedDirectory) await this.ensureFolder(normalizedDirectory);
-    const basePath = normalizePath(`${normalizedDirectory ? `${normalizedDirectory}/` : ""}${cleanedTitle}.md`);
-    const path = this.uniquePath(basePath);
-    let copiedFile: TFile | undefined;
-    try {
-      copiedFile = await this.app.vault.copy(template, path);
-      // A template may itself have been indexed previously. Always overwrite
-      // the copied metadata with a new ID to prevent two notes sharing identity.
-      const resourceId = this.createUniqueResourceId();
-      let fileSubtype: FileResourceRef["fileSubtype"];
-      await this.app.fileManager.processFrontMatter(copiedFile, (frontmatter) => {
-        fileSubtype = classifyFileSubtype(frontmatter);
-        const current = asRecord(frontmatter["mind-tree-nature"]);
-        frontmatter["mind-tree-nature"] = { ...(current ?? {}), resourceId };
-      });
-      const entry = this.createIndexedResource(resourceId, copiedFile, fileSubtype);
-      this.registerIndexedEntry(entry, true);
-      this.emitChanged();
-      return {
-        file: copiedFile,
-        reference: {
-          type: "file",
-          resourceId,
-          pathHint: copiedFile.path,
-          fileKind: "note",
-          ...(entry.fileSubtype ? { fileSubtype: entry.fileSubtype } : {})
-        }
-      };
-    } catch (error) {
-      if (copiedFile && this.app.vault.getFileByPath(copiedFile.path)) {
-        try {
-          await this.app.vault.delete(copiedFile);
-          this.removePath(copiedFile.path);
-        } catch {
-          // Preserve the original creation error; vault events or a later index
-          // rebuild will reconcile an exceptional rollback failure.
-        }
-      }
-      throw error;
-    }
+    return this.templateFileService.create(
+      template, normalizedDirectory, title, this.getNonMarkdownIdSeparator(), isTargetCurrent
+    );
+  }
+
+  acceptTemplateFile(file: TFile): void {
+    this.templateFileService.accept(file);
+  }
+
+  async discardTemplateFile(file: TFile): Promise<void> {
+    await this.templateFileService.discard(file);
   }
 
   /**
@@ -386,7 +381,9 @@ export class ResourceIndexService {
     }
     const safeName = source.name.replace(/[\\/]/g, " ").trim();
     if (!safeName) throw new Error("The dropped file has no valid name.");
-    if (safeName.endsWith(".mtn.md")) throw new Error("Mind-tree source files cannot be linked as notes.");
+    if (safeName.endsWith(".mtn.md")) {
+      throw new Error("Mind-tree source files cannot be imported from outside the vault.");
+    }
 
     // An external copy is a new vault resource. Remove an ID-looking suffix
     // from non-Markdown input so ensureStableReference always generates a fresh
@@ -426,7 +423,7 @@ export class ResourceIndexService {
     } catch (error) {
       if (copiedFile && this.app.vault.getFileByPath(copiedFile.path)) {
         try {
-          await this.app.vault.delete(copiedFile);
+          await this.app.fileManager.trashFile(copiedFile);
           this.removePath(copiedFile.path);
         } catch {
           // Report the original import failure; the next index rebuild will
@@ -437,7 +434,50 @@ export class ResourceIndexService {
     }
   }
 
+  /**
+   * Persist an image captured from the system clipboard into Obsidian's normal
+   * attachment destination. This deliberately shares stable identity and
+   * rollback behavior with external file drops without requiring a File name.
+   */
+  async importClipboardImage(
+    source: Blob,
+    suggestedName: string,
+    sourceTreePath: string
+  ): Promise<{ file: TFile; reference: FileResourceRef }> {
+    if (source.size > EXTERNAL_FILE_REJECT_BYTES) {
+      throw new Error("The pasted image exceeds the 1 GiB safety limit.");
+    }
+    const safeName = suggestedName.replace(/[\\/]/g, " ").trim();
+    if (!safeName || classifyFile(safeName) !== "image") {
+      throw new Error("The clipboard item is not a supported image.");
+    }
+    const importedName = stripNonMarkdownResourceId(safeName);
+    const targetPath = await this.app.fileManager.getAvailablePathForAttachment(importedName, sourceTreePath);
+    let copiedFile: TFile | undefined;
+    try {
+      copiedFile = await this.app.vault.createBinary(targetPath, await source.arrayBuffer());
+      const reference = await this.ensureStableReference(copiedFile);
+      if (reference.fileKind !== "image") throw new Error("The imported clipboard file is not an image.");
+      return { file: this.resolve(reference) ?? copiedFile, reference };
+    } catch (error) {
+      if (copiedFile && this.app.vault.getFileByPath(copiedFile.path)) {
+        try {
+          await this.app.fileManager.trashFile(copiedFile);
+          this.removePath(copiedFile.path);
+        } catch {
+          // Keep the original import error; the next index rebuild repairs an
+          // exceptional rollback failure just like external file import.
+        }
+      }
+      throw error;
+    }
+  }
+
   async renameLinkedFile(reference: FileResourceRef, title: string): Promise<TFile> {
+    return this.runResourceMutation(reference.resourceId, () => this.renameLinkedFileInternal(reference, title));
+  }
+
+  private async renameLinkedFileInternal(reference: FileResourceRef, title: string): Promise<TFile> {
     const file = this.resolve(reference);
     if (!file) throw new Error("The linked file could not be found.");
     const newPath = normalizePath(buildLinkedResourcePath(
@@ -458,6 +498,13 @@ export class ResourceIndexService {
 
   /** Move a linked file without changing its name or stable resource identity. */
   async moveLinkedFile(reference: FileResourceRef, destinationDirectory: string): Promise<TFile> {
+    return this.runResourceMutation(
+      reference.resourceId,
+      () => this.moveLinkedFileInternal(reference, destinationDirectory)
+    );
+  }
+
+  private async moveLinkedFileInternal(reference: FileResourceRef, destinationDirectory: string): Promise<TFile> {
     const file = this.resolve(reference);
     if (!file) throw new Error("The linked file could not be found.");
     const directory = normalizeDirectory(destinationDirectory);
@@ -470,6 +517,33 @@ export class ResourceIndexService {
     if (!moved) throw new Error("The moved file could not be found.");
     this.handleRename(moved, oldPath);
     return moved;
+  }
+
+  /** Move a linked vault file to Trash under the same per-resource lock. */
+  async trashLinkedFile(reference: FileResourceRef): Promise<TFile> {
+    return this.runResourceMutation(reference.resourceId, async () => {
+      const file = this.resolve(reference);
+      if (!file) throw new Error("The linked file could not be found.");
+      const oldPath = file.path;
+      await this.app.fileManager.trashFile(file);
+      this.removePath(oldPath);
+      return file;
+    });
+  }
+
+  /** Serialize side effects for one logical file while keeping failures local. */
+  private async runResourceMutation<T>(resourceId: ResourceId, task: () => Promise<T>): Promise<T> {
+    const previous = this.resourceMutationTail.get(resourceId) ?? Promise.resolve();
+    const operation = previous.catch(() => undefined).then(task);
+    const tail = operation.then(() => undefined, () => undefined);
+    this.resourceMutationTail.set(resourceId, tail);
+    try {
+      return await operation;
+    } finally {
+      if (this.resourceMutationTail.get(resourceId) === tail) {
+        this.resourceMutationTail.delete(resourceId);
+      }
+    }
   }
 
   sameDirectoryCandidates(treeFile: TFile, document: MindTreeDocument, recursive: boolean, ignoredPrefixes: string[]): TFile[] {

@@ -1,6 +1,7 @@
 import type { DropPosition, NodeId } from "../../types";
 import type { DropPlacement } from "../drop-placement";
 import { centerDragGhostAtPointer } from "../drop-placement";
+import type { GesturePointer } from "./touch-gesture";
 
 export interface NodeDragStartState {
   readonly nodeId: NodeId;
@@ -21,6 +22,8 @@ export interface NodeDragActions {
 /** Floating drag preview, branch visibility and owner-window pointer lifecycle. */
 export class NodeDragController {
   private activeCleanup?: () => void;
+  private activeMove?: (point: GesturePointer) => void;
+  private activeEnd?: (point: GesturePointer) => void;
 
   constructor(
     private readonly root: HTMLElement,
@@ -29,7 +32,8 @@ export class NodeDragController {
     private readonly actions: NodeDragActions
   ) {}
 
-  start(event: PointerEvent, input: NodeDragStartState): void {
+  start(event: GesturePointer, input: NodeDragStartState, externallyManaged = false): void {
+    this.cancel();
     const state = {
       ...input,
       startX: event.clientX,
@@ -43,9 +47,10 @@ export class NodeDragController {
     };
     const ownerWindow = this.root.ownerDocument.defaultView ?? window;
     let finished = false;
-    const onMove = (moveEvent: PointerEvent): void => {
+    const onMove = (moveEvent: GesturePointer): void => {
+      if (moveEvent.pointerId !== event.pointerId || finished) return;
       const distance = Math.hypot(moveEvent.clientX - state.startX, moveEvent.clientY - state.startY);
-      if (!state.dragging && distance < 5) return;
+      if (!state.dragging && distance < (externallyManaged ? 0 : 5)) return;
       if (!state.dragging) {
         state.dragging = true;
         this.root.addClass("is-dragging-node");
@@ -71,8 +76,14 @@ export class NodeDragController {
       finished = true;
       ownerWindow.removeEventListener("pointermove", onMove);
       ownerWindow.removeEventListener("pointerup", onUp);
-      ownerWindow.removeEventListener("pointercancel", onUp);
+      ownerWindow.removeEventListener("pointercancel", onCancel);
+      ownerWindow.removeEventListener("lostpointercapture", onCancel);
+      ownerWindow.removeEventListener("blur", onBlur);
+      ownerWindow.removeEventListener("keydown", onKeyDown, true);
+      this.root.ownerDocument.removeEventListener("visibilitychange", onVisibility);
       this.activeCleanup = undefined;
+      this.activeMove = undefined;
+      this.activeEnd = undefined;
       this.root.removeClass("is-dragging-node");
       this.actions.clearPlacement();
       state.ghost?.remove();
@@ -81,16 +92,41 @@ export class NodeDragController {
       try { this.actions.moveNodes(state.draggedRootIds, state.targetId, state.position); }
       catch (error) { this.actions.reportFailure(error); }
     };
-    const onUp = (): void => finish(true);
-    this.activeCleanup?.();
+    const onUp = (point: GesturePointer): void => {
+      if (point.pointerId !== event.pointerId) return;
+      onMove(point);
+      finish(true);
+    };
+    const onCancel = (point: GesturePointer): void => {
+      if (point.pointerId === event.pointerId) finish(false);
+    };
+    const onBlur = (): void => finish(false);
+    const onVisibility = (): void => { if (this.root.ownerDocument.hidden) finish(false); };
+    const onKeyDown = (key: KeyboardEvent): void => {
+      if (key.key === "Escape") { key.preventDefault(); finish(false); }
+    };
     this.activeCleanup = () => finish(false);
-    ownerWindow.addEventListener("pointermove", onMove);
-    ownerWindow.addEventListener("pointerup", onUp, { once: true });
-    ownerWindow.addEventListener("pointercancel", onUp, { once: true });
+    this.activeMove = onMove;
+    this.activeEnd = onUp;
+    if (externallyManaged) onMove(event);
+    else {
+      ownerWindow.addEventListener("pointermove", onMove);
+      // Not once: an unrelated finger's up must not consume this subscription.
+      ownerWindow.addEventListener("pointerup", onUp);
+      ownerWindow.addEventListener("pointercancel", onCancel);
+      ownerWindow.addEventListener("lostpointercapture", onCancel);
+      ownerWindow.addEventListener("blur", onBlur);
+      ownerWindow.addEventListener("keydown", onKeyDown, true);
+      this.root.ownerDocument.addEventListener("visibilitychange", onVisibility);
+    }
   }
 
+  move(point: GesturePointer): void { this.activeMove?.(point); }
+  finish(point: GesturePointer): void { this.activeEnd?.(point); }
+  cancel(): void { this.activeCleanup?.(); }
+
   destroy(): void {
-    this.activeCleanup?.();
+    this.cancel();
     this.activeCleanup = undefined;
   }
 

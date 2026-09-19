@@ -1,5 +1,5 @@
 import { getDepth } from "../domain/tree";
-import { getNodeMarkerDisplayWidth } from "../domain/markers";
+import { getNodeResourceControls } from "./resource-controls";
 import type {
   MindTreeDocument,
   MindTreeLayoutMode,
@@ -9,6 +9,22 @@ import type {
   PositionedNode,
   ResolvedMindTreeConnectionStyle
 } from "../types";
+import {
+  estimateFallbackTextWidth,
+  fallbackNodeTextMeasurer,
+  fallbackNodeTextStyle,
+  type NodeTextMeasurer
+} from "./text-measurer";
+import {
+  fallbackResourceBadgePresentation,
+  getNodeMarkerGeometry,
+  type ResourceBadgePresentation
+} from "./resource-badges";
+import {
+  fallbackImageNodePresentation,
+  IMAGE_CAPTION_GAP,
+  type ImageNodePresentation
+} from "./image-nodes";
 
 export interface LayoutConnection {
   from: NodeId;
@@ -27,6 +43,16 @@ export const DEFAULT_NODE_WRAP_WIDTH = 240;
 export const MIN_NODE_WRAP_WIDTH = 160;
 export const MAX_NODE_WRAP_WIDTH = 480;
 
+/**
+ * One shared node box model for layout, DOM rendering and SVG/PNG export.
+ * Tail-item gaps remain independent because they separate sibling UI rather
+ * than the title from the visible node edge.
+ */
+export const NODE_HORIZONTAL_PADDING = 5;
+export const NODE_VERTICAL_PADDING = 3;
+export const NODE_HORIZONTAL_INSETS = NODE_HORIZONTAL_PADDING * 2;
+export const NODE_VERTICAL_INSETS = NODE_VERTICAL_PADDING * 2;
+
 /** Keep malformed persisted settings from producing unusably small or huge nodes. */
 export function normalizeNodeWrapWidth(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_NODE_WRAP_WIDTH;
@@ -35,13 +61,13 @@ export function normalizeNodeWrapWidth(value: number): number {
 
 // These gaps deliberately stay independent from node dimensions. This lets short
 // titles produce narrow nodes without leaving every depth in a fixed-width column.
-const HORIZONTAL_GAP = 64;
-const VERTICAL_GAP = 18;
-const ROOT_HORIZONTAL_GAP = 90;
-// Browser font metrics can be a few subpixels wider than this DOM-free estimate,
-// especially for CJK glyphs. A small allowance prevents exact-fit titles such
-// as “未命名节点” from wrapping only because of rounding or font substitution.
-const TEXT_WIDTH_ALLOWANCE = 4;
+const HORIZONTAL_GAP = 32;
+const VERTICAL_GAP = 9;
+const ROOT_HORIZONTAL_GAP = 45;
+const RADIAL_MINIMUM_STEP = 90;
+const RADIAL_SAFETY_MARGIN = 23;
+const RADIAL_ANGULAR_MARGIN = 9;
+const SMOOTH_MINIMUM_BEND = 14;
 
 interface DepthMetrics {
   minHeight: number;
@@ -55,10 +81,16 @@ interface DepthMetrics {
  * Keep these values synchronized with styles.css and SVG/PNG export so layout
  * measurements always describe the rectangle users actually see.
  */
-function getDepthMetrics(depth: number): DepthMetrics {
-  if (depth <= 0) return { minHeight: 32, fontSize: 18, lineHeight: 23, verticalPadding: 2 };
-  if (depth === 1) return { minHeight: 28, fontSize: 16, lineHeight: 20, verticalPadding: 2 };
-  return { minHeight: 24, fontSize: 13, lineHeight: 17, verticalPadding: 2 };
+function getDepthMetrics(depth: number, textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer): DepthMetrics {
+  const style = textMeasurer.getStyle(depth);
+  return {
+    // Only the root keeps a minimum height. Other tiers follow their actual
+    // line box or trailing controls so compact nodes have no empty band.
+    minHeight: depth <= 0 ? 32 : 0,
+    fontSize: style.fontSize,
+    lineHeight: style.lineHeight,
+    verticalPadding: NODE_VERTICAL_PADDING
+  };
 }
 
 /**
@@ -66,72 +98,61 @@ function getDepthMetrics(depth: number): DepthMetrics {
  * Titles are left-aligned, so controls only reserve their actual right-hand width.
  * Keep these values aligned with node padding and --mtn-node-control-width in CSS.
  */
-export function getNodeHorizontalInsets(node?: MindTreeNode): number {
-  const markerWidth = node ? getNodeMarkerDisplayWidth(node) : 0;
-  if (node?.resource?.type !== "file") return 4 + markerWidth;
-  return (node.titleSync === "bidirectional" ? 26 : 48) + markerWidth;
+export function getNodeHorizontalInsets(
+  node?: MindTreeNode,
+  resourceBadges: ResourceBadgePresentation = fallbackResourceBadgePresentation
+): number {
+  const markerWidth = node ? getNodeMarkerGeometry(node, resourceBadges).width : 0;
+  const controlWidth = getNodeResourceControls(node).width;
+  return NODE_HORIZONTAL_INSETS + markerWidth + controlWidth;
 }
 
 /** Width appended after the title-bearing node box. */
-export function getNodeTrailingWidth(node?: MindTreeNode): number {
-  return Math.max(0, getNodeHorizontalInsets(node) - 4);
+export function getNodeTrailingWidth(
+  node?: MindTreeNode,
+  resourceBadges: ResourceBadgePresentation = fallbackResourceBadgePresentation
+): number {
+  return Math.max(0, getNodeHorizontalInsets(node, resourceBadges) - NODE_HORIZONTAL_INSETS);
 }
 
-export function getNodeFontSize(depth: number): number {
-  return getDepthMetrics(depth).fontSize;
+/** Tallest visible tail item, excluding the node's own vertical padding. */
+export function getNodeTrailingHeight(
+  node?: MindTreeNode,
+  resourceBadges: ResourceBadgePresentation = fallbackResourceBadgePresentation
+): number {
+  const markerHeight = node ? getNodeMarkerGeometry(node, resourceBadges).height : 0;
+  const controlHeight = getNodeResourceControls(node).height;
+  return Math.max(markerHeight, controlHeight);
 }
 
-export function getNodeLineHeight(depth: number): number {
-  return getDepthMetrics(depth).lineHeight;
+export function getNodeFontSize(depth: number, textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer): number {
+  return getDepthMetrics(depth, textMeasurer).fontSize;
+}
+
+export function getNodeLineHeight(depth: number, textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer): number {
+  return getDepthMetrics(depth, textMeasurer).lineHeight;
 }
 
 /**
- * Approximate browser text width without depending on DOM/canvas APIs. CJK and
- * other wide glyphs count as one em; Latin glyphs use conservative font ratios.
- * A conservative estimate prevents text from spilling out of the fixed layout box.
+ * Compatibility helper for headless callers. The live view injects its Canvas
+ * measurer and therefore does not use this character-ratio fallback.
  */
 export function estimateTextWidth(value: string, fontSize: number): number {
-  let width = 0;
-  for (const character of Array.from(value)) {
-    if (/\s/u.test(character)) width += fontSize * 0.36;
-    // Digits and unbroken identifiers are the most common overflow case. Their
-    // deliberately generous ratio may add a few pixels but avoids missing a line.
-    else if (/^[0-9]$/u.test(character)) width += fontSize * 0.66;
-    else if (/^[\x00-\x7F]$/u.test(character)) width += fontSize * (/[A-ZMWmw@#%]/u.test(character) ? 0.72 : 0.62);
-    else width += fontSize;
-  }
-  return width;
+  return estimateFallbackTextWidth(value, { ...fallbackNodeTextStyle(2), fontSize, letterSpacing: 0 });
 }
 
 /**
- * Split a title using the same character-width model as getNodeSize. The browser
- * uses overflow-wrap:anywhere, so character-level wrapping is the most predictable
- * cross-platform approximation and is also reusable by SVG export.
+ * Split a title with the same injected measurer used by getNodeSize. The browser
+ * uses overflow-wrap:anywhere, so grapheme-level wrapping is predictable and can
+ * be reused by SVG export.
  */
-export function wrapNodeTitle(title: string, depth: number, maxTextWidth: number): string[] {
-  const normalized = title.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() || "Untitled";
-  const safeWidth = Math.max(1, maxTextWidth);
-  const fontSize = getDepthMetrics(depth).fontSize;
-  const lines: string[] = [];
-  let line = "";
-  let lineWidth = 0;
-
-  for (const character of Array.from(normalized)) {
-    const characterWidth = estimateTextWidth(character, fontSize);
-    if (line && lineWidth + characterWidth > safeWidth) {
-      // Preserve every normalized character across line boundaries. Trimming a
-      // boundary space made SVG tspans concatenate words even though the canvas
-      // visually wrapped them correctly.
-      lines.push(line);
-      line = character;
-      lineWidth = characterWidth;
-    } else {
-      line += character;
-      lineWidth += characterWidth;
-    }
-  }
-  if (line || lines.length === 0) lines.push(line || "Untitled");
-  return lines;
+export function wrapNodeTitle(
+  title: string,
+  depth: number,
+  maxTextWidth: number,
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer
+): string[] {
+  return [...textMeasurer.measure(title, depth, maxTextWidth).lines];
 }
 
 /**
@@ -143,21 +164,20 @@ export function getNodeSize(
   depth: number,
   title = "",
   nodeWrapWidth = DEFAULT_NODE_WRAP_WIDTH,
-  horizontalInsets = 4
+  horizontalInsets = NODE_HORIZONTAL_INSETS,
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer,
+  trailingContentHeight = 0
 ): { width: number; height: number } {
-  const metrics = getDepthMetrics(depth);
-  const insets = Math.max(4, horizontalInsets);
+  const metrics = getDepthMetrics(depth, textMeasurer);
+  const insets = Math.max(NODE_HORIZONTAL_INSETS, horizontalInsets);
   const maximumTextWidth = normalizeNodeWrapWidth(nodeWrapWidth);
-  const normalizedTitle = title.replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim() || "Untitled";
-  const measuredWidth = estimateTextWidth(normalizedTitle, metrics.fontSize);
-  // Width follows the measured title at every depth. Typography and minimum
-  // height preserve hierarchy; a fixed minimum width would turn unused title
-  // track space into a conspicuous gap before trailing markers and controls.
-  const desiredTextWidth = Math.min(maximumTextWidth, Math.max(1, measuredWidth + TEXT_WIDTH_ALLOWANCE));
-  const width = Math.ceil(desiredTextWidth + insets);
-  const textWidth = Math.max(1, width - insets);
-  const lineCount = wrapNodeTitle(normalizedTitle, depth, textWidth).length;
-  const height = Math.max(metrics.minHeight, lineCount * metrics.lineHeight + metrics.verticalPadding * 2);
+  const measurement = textMeasurer.measure(title, depth, maximumTextWidth);
+  // Ceil only at the glyph boundary. The former arbitrary width allowance was
+  // visible as unused space, especially after strings of narrow glyphs such as 1.
+  const desiredTextWidth = Math.min(maximumTextWidth, Math.max(1, measurement.width));
+  const width = Math.ceil(desiredTextWidth) + insets;
+  const contentHeight = Math.max(measurement.lines.length * metrics.lineHeight, trailingContentHeight);
+  const height = Math.ceil(Math.max(metrics.minHeight, contentHeight + metrics.verticalPadding * 2));
   return { width, height };
 }
 
@@ -165,10 +185,43 @@ export interface NodeBoxSize {
   /** Complete visible width, including markers and file controls. */
   width: number;
   height: number;
-  /** Title width plus the node's 2 px padding on both sides. */
+  /** Title width plus the node's 5 px padding on both sides. */
   contentWidth: number;
   /** Markers and file controls appended to the screen-right. */
   trailingWidth: number;
+  /** Image body above the compact caption; absent for ordinary nodes. */
+  image?: { width: number; height: number };
+  /** Inner height of the title/marker/control row. */
+  captionHeight: number;
+}
+
+export interface NodeTitleEditorSize {
+  /** Complete neutral editor surface, including its 5 px inline padding. */
+  width: number;
+  height: number;
+  lineCount: number;
+}
+
+/**
+ * Size only the floating title editor. It can grow beyond the frozen node box,
+ * but follows the same font measurement and wrap limit as committed titles.
+ */
+export function getNodeTitleEditorSize(
+  depth: number,
+  title: string,
+  nodeWrapWidth = DEFAULT_NODE_WRAP_WIDTH,
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer
+): NodeTitleEditorSize {
+  const measurement = textMeasurer.measure(title, depth, normalizeNodeWrapWidth(nodeWrapWidth), "draft");
+  const lineCount = measurement.lines.length;
+  const draftWidth = title.length === 0 ? 8 : measurement.width;
+  return {
+    // Eight pixels leave a usable caret target for an empty draft.
+    width: Math.ceil(Math.max(8, Math.min(normalizeNodeWrapWidth(nodeWrapWidth), draftWidth)))
+      + NODE_HORIZONTAL_INSETS,
+    height: Math.ceil(lineCount * measurement.style.lineHeight + NODE_VERTICAL_INSETS),
+    lineCount
+  };
 }
 
 /**
@@ -179,15 +232,40 @@ export function getNodeBoxSize(
   depth: number,
   title = "",
   nodeWrapWidth = DEFAULT_NODE_WRAP_WIDTH,
-  node?: MindTreeNode
+  node?: MindTreeNode,
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer,
+  resourceBadges: ResourceBadgePresentation = fallbackResourceBadgePresentation,
+  imageNodes: ImageNodePresentation = fallbackImageNodePresentation
 ): NodeBoxSize {
-  const contentSize = getNodeSize(depth, title, nodeWrapWidth, 4);
-  const trailingWidth = getNodeTrailingWidth(node);
+  const contentSize = getNodeSize(
+    depth,
+    title,
+    nodeWrapWidth,
+    NODE_HORIZONTAL_INSETS,
+    textMeasurer,
+    getNodeTrailingHeight(node, resourceBadges)
+  );
+  const trailingWidth = getNodeTrailingWidth(node, resourceBadges);
+  const image = node ? imageNodes.resolve(node) : undefined;
+  const captionHeight = Math.max(0, contentSize.height - NODE_VERTICAL_INSETS);
+  if (image) {
+    return {
+      // Both rows share the title's left anchor. A wide image therefore grows
+      // only toward screen-right and never separates caption text from badges.
+      width: Math.max(contentSize.width + trailingWidth, image.width + NODE_HORIZONTAL_INSETS),
+      height: contentSize.height + IMAGE_CAPTION_GAP + image.height,
+      contentWidth: contentSize.width,
+      trailingWidth,
+      image: { width: image.width, height: image.height },
+      captionHeight
+    };
+  }
   return {
     width: contentSize.width + trailingWidth,
     height: contentSize.height,
     contentWidth: contentSize.width,
-    trailingWidth
+    trailingWidth,
+    captionHeight
   };
 }
 
@@ -204,7 +282,10 @@ export function layoutTree(
   respectCollapsed = true,
   nodeWrapWidth = DEFAULT_NODE_WRAP_WIDTH,
   layoutMode: MindTreeLayoutMode = "right",
-  nodeAlignment: MindTreeNodeAlignment = "level"
+  nodeAlignment: MindTreeNodeAlignment = "level",
+  textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer,
+  resourceBadges: ResourceBadgePresentation = fallbackResourceBadgePresentation,
+  imageNodes: ImageNodePresentation = fallbackImageNodePresentation
 ): TreeLayout {
   const relativeDepthById = new Map<NodeId, number>();
   const startDepth = getDepth(document, startId);
@@ -221,7 +302,15 @@ export function layoutTree(
 
   const createPosition = (node: MindTreeNode, relativeDepth: number): PositionedNode => {
     const actualDepth = Number.isFinite(startDepth) ? startDepth + relativeDepth : relativeDepth;
-    const size = getNodeBoxSize(actualDepth, node.title, nodeWrapWidth, node);
+    const size = getNodeBoxSize(
+      actualDepth,
+      node.title,
+      nodeWrapWidth,
+      node,
+      textMeasurer,
+      resourceBadges,
+      imageNodes
+    );
     relativeDepthById.set(node.id, relativeDepth);
     return {
       id: node.id,
@@ -348,6 +437,13 @@ export function layoutTree(
 
   const finish = (nodes: PositionedNode[], connections: LayoutConnection[], explicitHeight?: number): TreeLayout => {
     if (nodes.length === 0) return { nodes, connections, width: 1, height: 1 };
+    // DOM nodes and SVG paths must share the same whole-pixel anchor. Keeping
+    // layout coordinates deterministic prevents a freshly edited node from
+    // landing on a different half-pixel raster boundary than its neighbours.
+    for (const node of nodes) {
+      node.x = Math.round(node.x);
+      node.y = Math.round(node.y);
+    }
     nodes.sort((left, right) => left.depth - right.depth || left.y - right.y || left.x - right.x);
     let width = 1;
     let height = explicitHeight ?? 1;
@@ -462,8 +558,9 @@ export function layoutTree(
     let previousDiameter = maximumDiameterByDepth.get(0) ?? 0;
     for (let depth = 1; depth <= maximumMapKey(maximumDiameterByDepth); depth += 1) {
       const diameter = maximumDiameterByDepth.get(depth) ?? previousDiameter;
-      const circumferenceRadius = totalLeafWeight * (diameter + 18) / (Math.PI * 2);
-      const separatedRadius = previousRadius + Math.max(180, (previousDiameter + diameter) / 2 + 46);
+      const circumferenceRadius = totalLeafWeight * (diameter + RADIAL_ANGULAR_MARGIN) / (Math.PI * 2);
+      const separatedRadius = previousRadius
+        + Math.max(RADIAL_MINIMUM_STEP, (previousDiameter + diameter) / 2 + RADIAL_SAFETY_MARGIN);
       const radius = Math.max(circumferenceRadius, separatedRadius);
       radiusByDepth.set(depth, radius);
       previousRadius = radius;
@@ -482,9 +579,10 @@ export function layoutTree(
           const child = nodeById.get(childId);
           if (!child) continue;
           const childDiameter = Math.hypot(child.width, child.height);
-          const branchRadius = parentRadius + Math.max(180, (parentDiameter + childDiameter) / 2 + 46);
+          const branchRadius = parentRadius
+            + Math.max(RADIAL_MINIMUM_STEP, (parentDiameter + childDiameter) / 2 + RADIAL_SAFETY_MARGIN);
           const halfSpan = Math.min(Math.PI / 2, Math.max(0.04, (angleSpanById.get(childId) ?? Math.PI * 2) / 2));
-          const angularRadius = (childDiameter + 18) / (2 * Math.sin(halfSpan));
+          const angularRadius = (childDiameter + RADIAL_ANGULAR_MARGIN) / (2 * Math.sin(halfSpan));
           compactRadiusById.set(childId, Math.max(branchRadius, angularRadius));
           placeRadii(childId);
         }
@@ -739,7 +837,7 @@ export function connectionPath(
     return `M ${start.x} ${start.y} H ${middleX} V ${end.y} H ${end.x}`;
   }
   if (mode === "tree") {
-    const bend = Math.max(28, Math.abs(end.y - start.y) * 0.48);
+    const bend = Math.max(SMOOTH_MINIMUM_BEND, Math.abs(end.y - start.y) * 0.48);
     return `M ${start.x} ${start.y} C ${start.x} ${start.y + bend}, ${end.x} ${end.y - bend}, ${end.x} ${end.y}`;
   }
   if (mode === "radial") {
@@ -748,6 +846,6 @@ export function connectionPath(
     return `M ${start.x} ${start.y} C ${start.x + dx * 0.42} ${start.y + dy * 0.42}, ${end.x - dx * 0.42} ${end.y - dy * 0.42}, ${end.x} ${end.y}`;
   }
   const direction = end.x >= start.x ? 1 : -1;
-  const bend = Math.max(28, Math.abs(end.x - start.x) * 0.48);
+  const bend = Math.max(SMOOTH_MINIMUM_BEND, Math.abs(end.x - start.x) * 0.48);
   return `M ${start.x} ${start.y} C ${start.x + bend * direction} ${start.y}, ${end.x - bend * direction} ${end.y}, ${end.x} ${end.y}`;
 }

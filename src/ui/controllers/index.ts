@@ -3,3 +3,7 @@ export * from "./clipboard-controller";
 export * from "./drag-drop-controller";
 export * from "./node-drag-controller";
 export * from "./keyboard-controller";
+export * from "./image-resize-controller";
+export * from "./touch-gesture";
+export * from "./touch-gesture-controller";
+export * from "./keyboard-avoidance-controller";

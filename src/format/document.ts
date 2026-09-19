@@ -276,6 +276,21 @@ function documentToMachineData(document: MindTreeDocument): Record<string, unkno
   return machineData;
 }
 
+/**
+ * Return a deterministic representation of the logical compressed payload.
+ *
+ * Conflict detection deliberately compares the decoded object rather than the
+ * gzip/Base64 bytes: compression level, wrapping and object-key order are
+ * serialization details and must not turn an unchanged tree into a conflict.
+ * YAML-only settings and the optional link identity are excluded by the same
+ * rules used by encodeCompressedPayload().
+ */
+export function mindTreeMachineDataFingerprint(document: Readonly<MindTreeDocument>): string {
+  const machineData = documentToMachineData(document as MindTreeDocument);
+  delete machineData["documentId"];
+  return canonicalJson(machineData);
+}
+
 function encodeCompressedPayload(document: MindTreeDocument): string {
   const machineData = documentToMachineData(document);
   delete machineData["documentId"];
@@ -284,6 +299,18 @@ function encodeCompressedPayload(document: MindTreeDocument): string {
   const compressed = gzipSync(json, { level: 9 });
   if (compressed.byteLength > MAX_COMPRESSED_MIND_TREE_BYTES) throw new MindTreeFormatError("Compressed Mind Tree data exceeds the 20 MB safety limit.");
   return encodeBase64(compressed).replace(/.{1,120}/g, "$&\n").trimEnd();
+}
+
+/** JSON.stringify-compatible output with object keys sorted at every depth. */
+function canonicalJson(value: unknown): string {
+  if (value === null || typeof value !== "object") return JSON.stringify(value) ?? "null";
+  if (Array.isArray(value)) return `[${value.map((entry) => canonicalJson(entry)).join(",")}]`;
+  const record = value as Record<string, unknown>;
+  const entries = Object.keys(record)
+    .sort()
+    .filter((key) => record[key] !== undefined)
+    .map((key) => `${JSON.stringify(key)}:${canonicalJson(record[key])}`);
+  return `{${entries.join(",")}}`;
 }
 
 function decodeCompressedPayload(value: string): unknown {

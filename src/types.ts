@@ -76,6 +76,9 @@ export type NodeMarker =
 export interface NodeStyle {
   color?: string;
   background?: string;
+  /** Persisted display box for an image resource; never modifies the source file. */
+  imageWidth?: number;
+  imageHeight?: number;
 }
 
 export interface MindTreeNode {
@@ -155,10 +158,15 @@ export interface BranchClipboardPayload {
   /** Multiple top-level roots are used by multi-selection and pasted lists. */
   rootIds?: NodeId[];
   nodes: Record<NodeId, MindTreeNode>;
-  /** File links parsed from plain Markdown and resolved against the vault before insertion. */
+  /** Runtime targets resolved before text imports/clipboard branches are inserted. */
   linkTargets?: Record<NodeId, ClipboardLinkTarget>;
 }
 
 export type ClipboardLinkTarget =
-  | { type: "file"; linkPath: string }
+  | {
+    type: "file";
+    linkPath: string;
+    /** Restore the literal source if lookup fails; never persisted in a node. */
+    fallbackTitle?: string;
+  }
   | { type: "url"; url: string };

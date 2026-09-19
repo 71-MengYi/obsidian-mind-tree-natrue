@@ -5,6 +5,7 @@ import {
   addSibling,
   cloneDocument,
   collectBranchIds,
+  collectFileReferences,
   createEmptyDocument,
   DEFAULT_NODE_TITLE,
   deleteBranch,
@@ -20,8 +21,10 @@ import {
   moveNode,
   moveNodeAmongSiblings,
   moveNodes,
+  renameNode,
   setAllCollapsed,
   setCollapsedAfterDepth,
+  updateFileReferencePaths,
   validateDocument,
   extractBranch
 } from "../src/domain/tree";
@@ -43,6 +46,12 @@ test("new structural nodes use a non-empty default title", () => {
   assert.equal(child.title, DEFAULT_NODE_TITLE);
   assert.equal(sibling.title, DEFAULT_NODE_TITLE);
   assert.equal(parent.title, DEFAULT_NODE_TITLE);
+});
+
+test("saved node titles trim outer whitespace while preserving internal spaces", () => {
+  const document = createEmptyDocument("Root");
+  renameNode(document, document.rootId, "  A  B  ");
+  assert.equal(document.nodes[document.rootId]?.title, "A  B");
 });
 
 test("adds, reorders, and reparents nodes without duplicating parents", () => {
@@ -104,11 +113,12 @@ test("moves a node up or down by exchanging it with an adjacent sibling", () => 
   assert.equal(moveNodeAmongSiblings(document, document.rootId, "down"), false);
 });
 
-test("status statistics count topics, unique notes, and maximum depth", () => {
+test("status statistics count topics, unique linked files, and maximum depth", () => {
   const document = createEmptyDocument("Statistics");
   const first = addNode(document, document.rootId, "First note");
   const duplicate = addNode(document, first.id, "Same note again");
   const attachment = addNode(document, document.rootId, "Attachment");
+  const web = addNode(document, document.rootId, "Web page");
   const sharedResource = {
     type: "file" as const,
     resourceId: "shared-note",
@@ -123,7 +133,60 @@ test("status statistics count topics, unique notes, and maximum depth", () => {
     pathHint: "files/archive.zip",
     fileKind: "attachment"
   };
-  assert.deepEqual(getTreeStatistics(document), { topicCount: 4, noteCount: 1, depth: 2 });
+  web.resource = { type: "url", url: "https://example.com" };
+  assert.deepEqual(getTreeStatistics(document), { topicCount: 5, fileCount: 2, depth: 2 });
+});
+
+test("collects every file kind once while excluding web resources", () => {
+  const document = createEmptyDocument("Files");
+  const note = addNode(document, document.rootId, "Note");
+  const duplicate = addNode(document, note.id, "Duplicate note");
+  const image = addNode(document, document.rootId, "Image");
+  const attachment = addNode(document, document.rootId, "Attachment");
+  const mindTree = addNode(document, document.rootId, "Mind tree");
+  const drawing = addNode(document, document.rootId, "Drawing");
+  const web = addNode(document, document.rootId, "Web");
+  const sharedNote = {
+    type: "file" as const,
+    resourceId: "note",
+    pathHint: "Note.md",
+    fileKind: "note" as const
+  };
+  note.resource = { ...sharedNote };
+  duplicate.resource = { ...sharedNote };
+  image.resource = { type: "file", resourceId: "image", pathHint: "Image.png", fileKind: "image" };
+  attachment.resource = { type: "file", resourceId: "archive", pathHint: "Archive.zip", fileKind: "attachment" };
+  mindTree.resource = { type: "file", resourceId: "tree", pathHint: "Other.mtn.md", fileKind: "note" };
+  drawing.resource = {
+    type: "file",
+    resourceId: "drawing",
+    pathHint: "Drawing.md",
+    fileKind: "note",
+    fileSubtype: "excalidraw"
+  };
+  web.resource = { type: "url", url: "https://example.com" };
+
+  const references = collectFileReferences(document, collectBranchIds(document, document.rootId));
+  assert.deepEqual(references.map((reference) => reference.resourceId), [
+    "note", "image", "archive", "tree", "drawing"
+  ]);
+  assert.notStrictEqual(references[0], note.resource);
+});
+
+test("updates every duplicate reference after a linked file moves", () => {
+  const document = createEmptyDocument("Moved files");
+  const first = addNode(document, document.rootId, "First");
+  const duplicate = addNode(document, document.rootId, "Duplicate");
+  const untouched = addNode(document, document.rootId, "Untouched");
+  first.resource = { type: "file", resourceId: "shared", pathHint: "Old/File.pdf", fileKind: "attachment" };
+  duplicate.resource = { ...first.resource };
+  untouched.resource = { type: "file", resourceId: "other", pathHint: "Other.png", fileKind: "image" };
+
+  assert.equal(updateFileReferencePaths(document, new Map([["shared", "New/File.pdf"]])), true);
+  assert.equal(first.resource.pathHint, "New/File.pdf");
+  assert.equal(duplicate.resource.pathHint, "New/File.pdf");
+  assert.equal(untouched.resource.pathHint, "Other.png");
+  assert.equal(updateFileReferencePaths(document, new Map([["shared", "New/File.pdf"]])), false);
 });
 
 test("rejects moving a node into its own descendant atomically", () => {

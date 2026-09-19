@@ -18,6 +18,10 @@ export interface MindTreeSettings {
   newNoteFolder: string;
   newNoteDefaultContent: string;
   ignoredPathPrefixes: string[];
+  /** Non-Markdown extensions whose derived node badge stays hidden. */
+  ignoredFileBadgeExtensions: string[];
+  /** Case-insensitive extension keys mapped to user-facing badge labels. */
+  fileExtensionBadgeAliases: Record<string, string>;
   titleSync: boolean;
   nonMarkdownIdSeparator: NonMarkdownResourceIdSeparator;
   resourceOpenMode: "tab" | "split-right";
@@ -38,6 +42,8 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   newNoteFolder: "",
   newNoteDefaultContent: "",
   ignoredPathPrefixes: [".obsidian/", ".trash/"],
+  ignoredFileBadgeExtensions: [],
+  fileExtensionBadgeAliases: {},
   titleSync: true,
   nonMarkdownIdSeparator: DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR,
   resourceOpenMode: "tab",

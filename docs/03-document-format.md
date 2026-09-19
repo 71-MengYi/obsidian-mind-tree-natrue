@@ -121,6 +121,12 @@ interface MindTreeNode {
   updatedAt: string;
 }
 
+interface NodeStyle {
+  /** 图片节点的独立显示尺寸；必须成对出现。 */
+  imageWidth?: number;
+  imageHeight?: number;
+}
+
 type NodeMarker =
   | { type: 'progress'; value: 'todo' | 'inprogress' | 'done' | 'cancelled' }
   | { type: 'priority'; value: 'red' | 'yellow' | 'blue' }
@@ -146,7 +152,9 @@ type ResourceRef =
 
 `documentId`、`schemaVersion` 与 `settings` 均不进入压缩 JSON；文档设置由文件头的 `layoutMode`、`recursiveScan`、`collectionMode`、`theme`、`connectionStyle` 和 `nodeShape` 提供。节点 ID 由 `nodes` 映射的键表达，不在节点对象中重复保存。模型不存 `parentId` 和浮点排序值：唯一根节点由 `rootId` 指定，其余父子关系与顺序统一由 `childIds` 表达。画布平移与缩放属于视图会话状态，不属于文档数据，也不进入压缩 JSON。
 
-`fileSubtype: 'excalidraw'` 是关联文件 Frontmatter 的派生缓存，仅当 `excalidraw-plugin` 为 `raw` 或 `parsed` 时存在；文件名和扩展名不参与判断。关联文件可解析时以当前 Frontmatter 校正该缓存，文件暂时无法解析时保留最后状态。该字段不改变 Markdown 文件的 `fileKind: 'note'`。
+图片节点继续使用 `fileKind: 'image'`，不增加独立节点类型。`NodeStyle.imageWidth/imageHeight` 只记录该引用在导图中的显示尺寸并写入压缩 JSON，必须作为有效正数成对出现；它们不改变源图片，也不进入 YAML 或 Markdown 大纲。同一图片被多个节点引用时，各节点可保存不同显示尺寸。
+
+`fileSubtype: 'excalidraw'` 是关联文件 Frontmatter 的派生缓存，仅当 `excalidraw-plugin` 为 `raw` 或 `parsed` 时存在；文件名和扩展名不参与判断。关联文件可解析时以当前 Frontmatter 校正该缓存，文件暂时无法解析时保留最后状态。该字段不改变 Markdown 文件的 `fileKind: 'note'`。普通非 Markdown 文件的扩展名显示标签由 `pathHint` 与全局插件设置在运行时派生，不属于节点字段，也不进入本格式。
 
 加载时必须校验：
 
@@ -174,7 +182,12 @@ type ResourceRef =
 
 - 结构或内容变化后延迟 500 ms 自动保存；连续输入会重新计时。
 - 视口平移、缩放和复位不改变文档状态，不触发自动保存，也不改变保存按钮状态。
-- 切换视图、关闭文件或卸载插件前立即刷新待保存内容。
-- 每次覆盖前保留一个最近成功副本。
-- 保存前重新读取磁盘文件：若外部变化只发生在大纲区，则直接按机器数据重建大纲；若文件头、压缩数据区或其他 Markdown 说明与本地基线同时发生变化，则停止自动覆盖并进入冲突处理。
-- 插件崩溃恢复只应用于未成功写入磁盘的会话状态，并且不得静默覆盖更新更晚的文件。
+- 同一 Obsidian 进程内，同一路径的所有分栏和弹出窗口共享一份文档、100 步线性撤销历史、磁盘基线、冲突状态和保存队列；选择、平移与缩放仍由各视图独立维护。最后一个视图完成待保存写入后才释放共享会话。
+- 标题输入框中的原始草稿属于共享会话内的本地工作。`Ctrl/Cmd+S`、文件切换、正常关闭及首次写入资源身份前必须先提交草稿，再等待文件级保存；`Escape` 仍取消草稿。插件不写持久化草稿日志，因此应用被强制终止时尚未确认的输入不在保证范围内。
+- 保存前在 `Vault.process()` 内重新读取磁盘文件，并按“磁盘基线 / 当前内存 / 最新磁盘”比较受管理的逻辑数据。冲突主体是解压并规范化后的 JSON；gzip/Base64 重压缩或换行差异不构成冲突。
+- `documentId` 作为独立身份条件保护：首次从空值写入可安全接纳，已有身份被外部单方替换或删除必须阻断；六项树设置按 YAML 字段分别三方合并。只有同一受管理数据被本地和外部改成不同结果时才进入冲突处理。
+- 自动一级标题、大纲、普通 Markdown 正文及未知 Frontmatter 不参与冲突判断。非冲突保存以最新磁盘文本为底稿，因此这些外部内容会被保留，而标题与大纲仍按当前树重新生成。
+- `schemaVersion` 只用于兼容性校验；无效或未来版本、缺失或损坏的压缩数据会阻止自动覆盖，但普通版本规范化不被视为内容冲突。
+- 外部版本会替换当前受管理逻辑数据时，即使本地会话原本是干净状态，也必须先把当前内存文档写入无 `documentId` 的 Recovery，并重新读取验证结构与逻辑指纹；创建或验证失败时禁止接纳外部版本。相同逻辑结果、插件自身写回以及仅非冲突区变化不创建 Recovery。
+- 写入成功后必须重新读取磁盘并核对受管理逻辑快照；只有验证通过才更新基线和绿色保存状态。写入期间产生的新修改会保留为未保存并进入下一轮串行写入。
+- `.mtn.md` 是唯一权威导图数据；共享会话是可丢弃的运行时缓存，资源索引是可重建的路径映射，二者都不能替代原文件。
