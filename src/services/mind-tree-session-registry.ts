@@ -1,5 +1,5 @@
 import type { MindTreeDocument } from "../types";
-import type { ManagedMindTreeSnapshot } from "./document-conflict";
+import type { VersionConflictCoordinator, VersionChoiceResult } from "./version-conflict-coordinator";
 import { DocumentSession } from "./document-session";
 
 export type SharedSessionChangeReason =
@@ -26,17 +26,6 @@ export interface SharedSessionParticipant {
   readonly onSessionChange: (snapshot: SharedSessionSnapshot) => void;
   /** Commit the visible DOM draft before another view claims the editor. */
   readonly commitActiveDraft: () => void;
-  readonly refreshConflictRecovery: () => Promise<void>;
-  /** Become the sole UI owner if the previous conflict view is closed. */
-  readonly adoptSaveConflict: (conflict: SharedSaveConflictState) => void;
-}
-
-/** Durable conflict details shared independently of any one leaf's DOM. */
-export interface SharedSaveConflictState {
-  readonly externalSource: string;
-  readonly externalSnapshot?: ManagedMindTreeSnapshot;
-  readonly recoveryPath: string;
-  readonly recoveredLocalFingerprint: string;
 }
 
 export interface SharedTitleDraft {
@@ -63,17 +52,18 @@ export class SharedMindTreeSession {
   private activeEditorId?: string;
   private titleDraft?: SharedTitleDraft;
   private externalSourceInFlight?: string;
-  private recoveryOperations = new Map<string, Promise<string>>();
-  private recoveryTail: Promise<void> = Promise.resolve();
   private pendingWriteSource?: string;
-  private conflictOwnerId?: string;
-  private conflictState?: SharedSaveConflictState;
+  conflict?: VersionConflictCoordinator;
+  restoring = false;
+  restoreError?: string;
+  private resolvedDraft?: VersionChoiceResult["draft"];
   private fileOperationTail: Promise<void> = Promise.resolve();
 
   private _path: string;
 
   constructor(path: string) {
     this._path = normalizeSessionPath(path);
+    this.history.isMutationBlocked = () => this.mutationLocked;
   }
 
   get path(): string { return this._path; }
@@ -88,27 +78,12 @@ export class SharedMindTreeSession {
   }
 
   detach(id: string): void {
-    const wasConflictOwner = this.conflictOwnerId === id;
     this.participants.delete(id);
-    let stateChanged = false;
     if (this.activeEditorId === id) {
       this.activeEditorId = undefined;
-      if (this.titleDraft?.ownerId === id) this.titleDraft = undefined;
-      stateChanged = true;
+      this.titleDraft = undefined;
     }
-    if (wasConflictOwner) {
-      const nextOwner = this.participants.entries().next().value as
-        | [string, SharedSessionParticipant]
-        | undefined;
-      this.conflictOwnerId = nextOwner?.[0];
-      if (nextOwner && this.conflictState) {
-        nextOwner[1].adoptSaveConflict(this.conflictState);
-      } else if (!nextOwner) {
-        this.conflictState = undefined;
-      }
-      stateChanged = true;
-    }
-    if (stateChanged) this.notify("status", id);
+    this.notify("status", id);
   }
 
   rename(path: string): void {
@@ -130,6 +105,7 @@ export class SharedMindTreeSession {
     originId: string,
     reason: SharedSessionChangeReason = "document"
   ): void {
+    if (this.mutationLocked && reason !== "source") return;
     this._document = document;
     this.notify(reason, originId);
   }
@@ -145,6 +121,7 @@ export class SharedMindTreeSession {
 
   /** Only one textarea draft may be authoritative for a shared file. */
   claimEditor(id: string): void {
+    if (this.mutationLocked) return;
     if (this.activeEditorId && this.activeEditorId !== id) {
       this.commitEditorOwner(this.activeEditorId);
     }
@@ -152,6 +129,7 @@ export class SharedMindTreeSession {
   }
 
   commitEditorBeforeMutation(originId: string): void {
+    if (this.mutationLocked) return;
     if (this.activeEditorId && this.activeEditorId !== originId) {
       this.commitEditorOwner(this.activeEditorId);
     }
@@ -163,7 +141,7 @@ export class SharedMindTreeSession {
     originalTitle: string,
     value: string
   ): void {
-    if (this.activeEditorId !== ownerId) return;
+    if (this.mutationLocked || this.activeEditorId !== ownerId) return;
     this.titleDraft = { ownerId, nodeId, originalTitle, value };
     this.notify("status", ownerId);
   }
@@ -209,54 +187,40 @@ export class SharedMindTreeSession {
     return this.pendingWriteSource === source;
   }
 
-  get hasConflict(): boolean { return this.conflictOwnerId !== undefined; }
+  get hasConflict(): boolean { return this.conflict?.active === true; }
+  get mutationLocked(): boolean { return this.restoring || Boolean(this.restoreError) || this.hasConflict; }
 
-  claimConflict(ownerId: string, state: SharedSaveConflictState): boolean {
-    if (this.conflictOwnerId && this.conflictOwnerId !== ownerId) return false;
-    this.conflictOwnerId = ownerId;
-    this.conflictState = state;
-    this.notify("status", ownerId);
-    return true;
+  /** Publish conflict state even to the view that detected it; no focus transfer. */
+  notifyConflict(): void { this.notify("status"); }
+
+  acceptVersion(result: VersionChoiceResult): void {
+    const previous = this._document;
+    if (result.choice === "external") this.history.load(result.source);
+    else if (previous && result.draft) {
+      // Add the confirmed draft to the existing linear history exactly once.
+      this.history.execute(previous, () => undefined);
+      this.history.markChanged();
+    }
+    this._document = result.document;
+    this._source = result.source;
+    this._parseError = undefined;
+    this.history.markSaved(this.history.currentRevision, result.source);
+    this.titleDraft = undefined;
+    this.activeEditorId = undefined;
+    this.resolvedDraft = result.draft;
+    this.notify("source");
   }
 
-  updateConflict(ownerId: string, state: SharedSaveConflictState): void {
-    if (this.conflictOwnerId !== ownerId) return;
-    this.conflictState = state;
-  }
-
-  clearConflict(ownerId: string): void {
-    if (this.conflictOwnerId !== ownerId) return;
-    this.conflictOwnerId = undefined;
-    this.conflictState = undefined;
-    this.notify("status", ownerId);
-  }
-
-  async refreshConflictRecovery(): Promise<void> {
-    if (!this.conflictOwnerId) return;
-    await this.participants.get(this.conflictOwnerId)?.refreshConflictRecovery();
+  takeResolvedDraft(): VersionChoiceResult["draft"] {
+    const draft = this.resolvedDraft;
+    this.resolvedDraft = undefined;
+    return draft;
   }
 
   /** Serialize root-file rename/identity side effects for every attached leaf. */
   async runFileOperation<T>(task: () => Promise<T>): Promise<T> {
     const operation = this.fileOperationTail.catch(() => undefined).then(task);
     this.fileOperationTail = operation.then(() => undefined, () => undefined);
-    return operation;
-  }
-
-  /**
-   * A logical baseline transition creates at most one Recovery even when all
-   * open leaves observe the same external filesystem event.
-   */
-  recoveryForTransition(key: string, create: () => Promise<string>): Promise<string> {
-    const existing = this.recoveryOperations.get(key);
-    if (existing) return existing;
-    const operation = this.recoveryTail.catch(() => undefined).then(create);
-    this.recoveryTail = operation.then(() => undefined, () => undefined);
-    this.recoveryOperations.set(key, operation);
-    void operation.then(
-      () => { if (this.recoveryOperations.get(key) === operation) this.recoveryOperations.delete(key); },
-      () => { if (this.recoveryOperations.get(key) === operation) this.recoveryOperations.delete(key); }
-    );
     return operation;
   }
 
@@ -296,12 +260,12 @@ export class MindTreeSessionRegistry {
     const session = this.sessions.get(normalized);
     if (!session) return;
     session.detach(participantId);
-    if (session.participantCount === 0) this.sessions.delete(normalized);
+    if (session.participantCount === 0 && !session.mutationLocked) this.sessions.delete(normalized);
   }
 
   releaseSession(session: SharedMindTreeSession, participantId: string): void {
     session.detach(participantId);
-    if (session.participantCount > 0) return;
+    if (session.participantCount > 0 || session.mutationLocked) return;
     for (const [path, candidate] of this.sessions) {
       if (candidate === session) this.sessions.delete(path);
     }

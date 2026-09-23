@@ -14,6 +14,8 @@ export class SaveConflictError extends Error {
  * document revision a successful write represented.
  */
 export class DocumentSession {
+  /** Shared-session safety gate; not merely a disabled toolbar. */
+  isMutationBlocked: () => boolean = () => false;
   private baselineSource = "";
   private revision = 0;
   private savedRevision = 0;
@@ -63,6 +65,7 @@ export class DocumentSession {
 
   /** Execute one user command with one clone and retain the old immutable state. */
   execute(document: MindTreeDocument, mutator: (draft: MindTreeDocument) => void): MindTreeDocument {
+    if (this.isMutationBlocked()) throw new SaveConflictError();
     const draft = cloneDocument(document);
     mutator(draft);
     this.undoStack.push(document);
@@ -72,6 +75,7 @@ export class DocumentSession {
   }
 
   undo(document: MindTreeDocument): MindTreeDocument | undefined {
+    if (this.isMutationBlocked()) return undefined;
     const previous = this.undoStack.pop();
     if (!previous) return undefined;
     this.redoStack.push(document);
@@ -79,6 +83,7 @@ export class DocumentSession {
   }
 
   redo(document: MindTreeDocument): MindTreeDocument | undefined {
+    if (this.isMutationBlocked()) return undefined;
     const next = this.redoStack.pop();
     if (!next) return undefined;
     this.undoStack.push(document);
@@ -130,11 +135,4 @@ export class DocumentSession {
       if (await task()) this.saveRequested = true;
     }
   }
-}
-
-/** Clone local work for recovery without duplicating its linkable document ID. */
-export function createRecoveryDocument(document: MindTreeDocument): MindTreeDocument {
-  const recovery = cloneDocument(document);
-  delete recovery.documentId;
-  return recovery;
 }

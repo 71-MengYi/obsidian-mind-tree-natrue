@@ -18,6 +18,7 @@ import type { ImageNodePresentation, ImageNodeVisual } from "../image-nodes";
 import { createNodeVisualState, type NodeVisualState } from "./node-render-model";
 
 export interface NodeRenderState {
+  readonly readOnly?: boolean;
   readonly document: Readonly<MindTreeDocument>;
   readonly positions: ReadonlyArray<PositionedNode>;
   readonly width: number;
@@ -119,12 +120,20 @@ export class NodeRenderer {
       element.style.setProperty("--mtn-node-bg", node.style.background);
     }
 
-    if (image) this.renderImage(element, node, image, actions);
+    if (image) this.renderImage(element, node, image, actions, state.readOnly);
     if (state.editingNodeId === node.id) this.renderEditor(element, node, position, state, actions, image);
     else this.renderTitle(element, node, position, state);
     this.renderMarkers(element, node, visual.resourceBadges);
     this.renderResourceControls(element, node, visual, actions);
     this.renderFoldControl(element, node, state.foldDirections.get(node.id) ?? "right", actions);
+
+    if (state.readOnly) {
+      // Keep the original geometry/appearance, but previews cannot open a
+      // resource or begin an edit/drag. Only temporary fold controls are live.
+      const open = element.querySelector<HTMLButtonElement>(".mtn-resource-open");
+      if (open) { open.disabled = true; open.tabIndex = -1; }
+      return;
+    }
 
     element.addEventListener("pointerdown", (event) => actions.nodePointerDown(event, node.id));
     element.addEventListener("dblclick", (event) => {
@@ -215,7 +224,8 @@ export class NodeRenderer {
     element: HTMLElement,
     node: MindTreeNode,
     image: ImageNodeVisual,
-    actions: NodeRenderActions
+    actions: NodeRenderActions,
+    readOnly = false
   ): void {
     const frame = element.createDiv("mtn-node-image-frame");
     const preview = frame.createEl("img", {
@@ -225,6 +235,7 @@ export class NodeRenderer {
     preview.loading = "lazy";
     preview.decoding = "async";
     preview.addEventListener("dragstart", (event) => event.preventDefault());
+    if (readOnly) return;
 
     const handle = frame.createEl("button", {
       cls: "mtn-image-resize-handle",

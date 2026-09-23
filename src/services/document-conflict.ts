@@ -206,7 +206,7 @@ export function externalMergeWouldReplaceLocal(
   return !sameManagedMindTreeSnapshot(snapshotFromDocument(localDocument), result.externalSnapshot);
 }
 
-function snapshotFromDocument(document: Readonly<MindTreeDocument>): ManagedMindTreeSnapshot {
+export function snapshotFromDocument(document: Readonly<MindTreeDocument>): ManagedMindTreeSnapshot {
   const copy = cloneDocument(document as MindTreeDocument);
   return {
     document: copy,
@@ -215,6 +215,46 @@ function snapshotFromDocument(document: Readonly<MindTreeDocument>): ManagedMind
     ...(copy.documentId ? { documentId: copy.documentId } : {}),
     settings: { ...copy.settings }
   };
+}
+
+export type ExternalVersionAssessment =
+  | { kind: "unchanged"; external: ManagedMindTreeSnapshot; document: MindTreeDocument }
+  | { kind: "choose"; external: ManagedMindTreeSnapshot }
+  | { kind: "blocked"; message: string; external?: ManagedMindTreeSnapshot };
+
+/**
+ * External ownership is now explicit, even for a clean local session. The old
+ * three-way merge is used only for identity validation and harmless changes;
+ * it must never silently adopt externally changed tree data or settings.
+ */
+export function assessExternalVersion(
+  baselineSource: string,
+  localDocument: MindTreeDocument,
+  externalSource: string,
+  options: Readonly<ParseMindTreeOptions> = {}
+): ExternalVersionAssessment {
+  const result = mergeMindTreeExternalChange(baselineSource, localDocument, externalSource, options);
+  if (result.kind === "conflict") {
+    const unsafe = result.reasons.find((reason) => reason.kind === "document-id"
+      || reason.kind === "invalid-baseline" || reason.kind === "invalid-external");
+    if (unsafe) return {
+      kind: "blocked",
+      message: unsafe.kind === "document-id" ? "identity" : "invalid-source",
+      external: result.externalSnapshot
+    };
+  }
+  const external = result.externalSnapshot!;
+  const baseline = createManagedMindTreeSnapshot(baselineSource, options);
+  const local = snapshotFromDocument(localDocument);
+  const contentEquals = (a: ManagedMindTreeSnapshot, b: ManagedMindTreeSnapshot): boolean =>
+    a.machineFingerprint === b.machineFingerprint
+    && DOCUMENT_SETTING_PROPERTIES.every((property) => a.settings[property] === b.settings[property]);
+  if (!contentEquals(external, baseline) && !contentEquals(external, local)) return { kind: "choose", external };
+  const document = cloneDocument(localDocument);
+  // A first identity assignment is safe, but replacement/removal of an
+  // established identity was rejected above. Identity is not a tree version.
+  if (!document.documentId && external.documentId) document.documentId = external.documentId;
+  return { kind: "unchanged", external, document };
 }
 
 function errorMessage(error: unknown): string {

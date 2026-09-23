@@ -4,7 +4,9 @@ import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile } from "./
 import { t } from "./i18n";
 import { ResourceIndexService, type IndexedResource } from "./services/resource-index";
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
-import { MindTreeSessionRegistry } from "./services/mind-tree-session-registry";
+import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
+import { PendingConflictStore } from "./services/pending-conflict-store";
+import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
 import { normalizePluginData, type PluginData } from "./plugin-data";
 import { DEFAULT_SETTINGS, MindTreeSettingTab, type MindTreeSettings } from "./settings";
 import {
@@ -23,6 +25,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   resources!: ResourceIndexService;
   /** Every open leaf of the same file shares one document/history/write queue. */
   readonly mindTreeSessions = new MindTreeSessionRegistry();
+  pendingConflicts!: PendingConflictStore;
   private switchingFilePath?: string;
   private pendingActivationTimer?: number;
   private resourceIndexData: Record<string, IndexedResource> = {};
@@ -35,6 +38,17 @@ export default class MindTreeNaturePlugin extends Plugin {
 
   async onload(): Promise<void> {
     await this.loadSettings();
+    // Obsidian local storage is vault-scoped and is not synced as plugin data.
+    // Every device writes only its own journal directory.
+    const clientKey = `${this.manifest.id}:pending-conflict-client`;
+    let clientId: unknown = this.app.loadLocalStorage(clientKey);
+    if (typeof clientId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(clientId)) {
+      clientId = crypto.randomUUID();
+      this.app.saveLocalStorage(clientKey, clientId);
+    }
+    this.pendingConflicts = new PendingConflictStore(this.app.vault.adapter,
+      this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`, clientId as string,
+      () => this.documentParseOptions());
     this.resources = new ResourceIndexService(this.app, this.resourceIndexData, (entries) => {
       this.resourceIndexData = entries;
       this.schedulePluginDataSave();
@@ -139,6 +153,11 @@ export default class MindTreeNaturePlugin extends Plugin {
       }));
       this.registerEvent(this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile)) return;
+        if (isMindTreePath(file.path)) {
+          for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+            if (leaf.view instanceof MindTreeView && leaf.view.file?.path === file.path) leaf.view.checkExternalVersion();
+          }
+        }
         const indexed = this.resources.indexFile(file);
         if (indexed?.fileKind !== "image") return;
         // Image contents can be replaced without changing their stable ID or
@@ -161,6 +180,12 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
         if (!(file instanceof TFile)) return;
         this.mindTreeSessions.rename(oldPath, file.path);
+        const session = this.mindTreeSessions.get(file.path);
+        void (session?.conflict?.active
+          ? session.conflict.rename(file.path)
+          : this.pendingConflicts.load(oldPath).then(async (record) => {
+            if (record) await this.pendingConflicts.put({ ...record, path: file.path });
+          })).catch((error: unknown) => new Notice(t("conflict.storageError", { message: String(error) })));
         this.resources.handleRename(file, oldPath);
         for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
           if (leaf.view instanceof MindTreeView) leaf.view.handleResourceRename(file, oldPath);
@@ -198,6 +223,33 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.schedulePluginDataRetry(error);
       throw error;
     }
+  }
+
+  private documentParseOptions() {
+    return {
+      defaultLayoutMode: this.settings.defaultLayoutMode, defaultTheme: this.settings.theme,
+      defaultNodeShape: this.settings.nodeShape, defaultCollectionMode: this.settings.defaultCollectionMode,
+      defaultConnectionStyle: this.settings.connectionStyle
+    };
+  }
+
+  /** Session-owned I/O ports remain valid after the last view closes. */
+  ensureConflictCoordinator(session: SharedMindTreeSession): VersionConflictCoordinator {
+    if (session.conflict) return session.conflict;
+    const requireFile = (): TFile => {
+      const file = this.app.vault.getFileByPath(session.path);
+      if (!file) throw new Error(t("conflict.fileMissing", { path: session.path }));
+      return file;
+    };
+    session.conflict = new VersionConflictCoordinator({
+      store: this.pendingConflicts, options: () => this.documentParseOptions(), path: () => session.path,
+      read: () => this.app.vault.read(requireFile()),
+      process: (transform) => this.app.vault.process(requireFile(), transform),
+      beginWrite: (source) => session.beginWrite(source), endWrite: (source) => session.endWrite(source),
+      changed: () => session.notifyConflict(), resolved: (result) => session.acceptVersion(result),
+      createId: () => crypto.randomUUID()
+    });
+    return session.conflict;
   }
 
   /**
