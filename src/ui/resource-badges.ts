@@ -59,6 +59,9 @@ export const MAX_FILE_BADGE_RULE_ENTRIES = 256;
 
 const MAX_BADGE_MEASUREMENT_CACHE_ENTRIES = 1_000;
 const VALID_EXTENSION_PATTERN = /^[a-z0-9+_-]+(?:\.[a-z0-9+_-]+)*$/i;
+// Automatic filename parsing is stricter than existing user-entered rule keys.
+// Keep the latter unchanged so loading settings never rewrites saved rules.
+const AUTO_EXTENSION_SEGMENT_PATTERN = /^[a-z0-9]+$/i;
 const UNSAFE_EXTENSION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FALLBACK_BADGE_LABELS: ResourceBadgeLabels = { mindTree: "思维树", drawing: "绘图" };
 const EMPTY_BADGE_RULES: FileBadgeRules = {
@@ -84,15 +87,24 @@ export function normalizeFileBadgeAlias(value: string): string | undefined {
 }
 
 /**
- * Return the complete suffix after the first meaningful dot. A leading dot in
- * a hidden filename is not an extension separator by itself.
+ * Read whole alphanumeric suffix segments from right to left. An invalid segment
+ * belongs to the filename, so stop there instead of rejecting the valid suffix
+ * after it or extracting only part of that segment. The first meaningful dot
+ * bounds the scan: neither the filename stem nor a hidden-file prefix is a suffix.
  */
 export function deriveFileBadgeExtension(path: string): string | undefined {
   const filename = path.replace(/\\/g, "/").split("/").at(-1) ?? "";
   const cleanName = stripNonMarkdownResourceId(filename);
   const firstDot = cleanName.indexOf(".", cleanName.startsWith(".") ? 1 : 0);
   if (firstDot <= 0 || firstDot === cleanName.length - 1) return undefined;
-  return normalizeFileBadgeExtension(cleanName.slice(firstDot + 1));
+  const segments = cleanName.slice(firstDot + 1).split(".");
+  let suffixStart = segments.length;
+  while (suffixStart > 0 && AUTO_EXTENSION_SEGMENT_PATTERN.test(segments[suffixStart - 1]!)) {
+    suffixStart -= 1;
+  }
+  if (suffixStart === segments.length) return undefined;
+  // Retain the existing case normalization, length limit and unsafe-key checks.
+  return normalizeFileBadgeExtension(segments.slice(suffixStart).join("."));
 }
 
 /** Full compound suffix wins, while a final-extension rule remains convenient. */
