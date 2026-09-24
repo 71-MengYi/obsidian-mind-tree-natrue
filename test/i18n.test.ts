@@ -8,7 +8,9 @@ test("provides English and Chinese interface translations", () => {
   assert.equal(translate("settings.openMode.splitRight", "zh"), "右侧竖向拆分");
   assert.match(translate("notice.duplicateResourceId", "zh", { paths: "A.mtn.md, B.mtn.md" }), /A\.mtn\.md, B\.mtn\.md/);
   assert.match(translate("notice.clipboardReadFailed", "zh"), /剪贴板/);
-  assert.match(translate("modal.recoveryReminder.warning", "zh", { count: 2 }), /2 个/);
+  assert.equal(translate("conflict.current", "zh"), "当前版本");
+  assert.equal(translate("conflict.external", "en"), "Latest external version");
+  assert.match(translate("conflict.storageError", "zh", { message: "test" }), /test/);
   assert.equal(translate("settings.fileBadges.heading", "en"), "File type labels");
   assert.equal(translate("settings.fileBadges.heading", "zh"), "文件类型标签");
   assert.equal(translate("menu.linkFile", "zh"), "关联已有文件");
@@ -25,6 +27,17 @@ test("provides English and Chinese interface translations", () => {
 test("interpolates translated message variables", () => {
   assert.equal(translate("menu.deleteBranch", "en", { count: 3 }), "Delete branch (3)");
   assert.equal(translate("menu.deleteBranch", "zh-cn", { count: 3 }), "删除分支（3）");
+});
+
+test("file badge descriptions explain opt-in Markdown aliases in both languages", () => {
+  for (const language of ["en", "zh"]) {
+    assert.match(translate("settings.fileBadges.desc", language), /Markdown/);
+    assert.match(translate("settings.fileBadges.alias.desc", language), /md.*plugin\.md/);
+  }
+  assert.match(translate("settings.fileBadges.desc", "en"), /only when an alias matches/);
+  assert.match(translate("settings.fileBadges.desc", "zh"), /仅在匹配到别名时显示/);
+  assert.match(translate("settings.fileBadges.ignore.desc", "en"), /do not affect dedicated labels/);
+  assert.match(translate("settings.fileBadges.ignore.desc", "zh"), /不影响专用标签/);
 });
 
 test("template actions consistently describe files in both languages", () => {

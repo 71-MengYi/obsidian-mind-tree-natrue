@@ -30,6 +30,7 @@ export class DocumentSession {
   private saveTask?: () => Promise<boolean>;
   private undoStack: MindTreeDocument[] = [];
   private redoStack: MindTreeDocument[] = [];
+  private writeTail: Promise<unknown> = Promise.resolve();
 
   load(source: string): void {
     this.baselineSource = source;
@@ -68,10 +69,22 @@ export class DocumentSession {
     if (this.isMutationBlocked()) throw new SaveConflictError();
     const draft = cloneDocument(document);
     mutator(draft);
+    this.retainConfirmedSnapshot(document);
+    return draft;
+  }
+
+  /** Only version acceptance may retain a frozen draft while the session is locked. */
+  retainConfirmedSnapshot(document: MindTreeDocument): void {
     this.undoStack.push(document);
     if (this.undoStack.length > 100) this.undoStack.shift();
     this.redoStack = [];
-    return draft;
+  }
+
+  /** Saves, explicit version choices and identity writes share one atomic lane. */
+  runExclusiveWrite<T>(task: () => Promise<T>): Promise<T> {
+    const next = this.writeTail.catch(() => undefined).then(task);
+    this.writeTail = next;
+    return next;
   }
 
   undo(document: MindTreeDocument): MindTreeDocument | undefined {
@@ -132,7 +145,7 @@ export class DocumentSession {
       this.saveRequested = false;
       const task = this.saveTask;
       if (!task) return;
-      if (await task()) this.saveRequested = true;
+      if (await this.runExclusiveWrite(task)) this.saveRequested = true;
     }
   }
 }

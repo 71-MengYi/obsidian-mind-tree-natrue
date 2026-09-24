@@ -6,7 +6,6 @@ import {
   Scope,
   TextFileView,
   TFile,
-  TFolder,
   WorkspaceLeaf
 } from "obsidian";
 import {
@@ -56,29 +55,15 @@ import {
 import { reconcileLinkedFileReferences } from "../services/linked-resource-sync";
 import { DuplicateResourceIdError } from "../services/resource-index";
 import {
-  findSameNameRecoveryPaths,
-  isRecoveryReminderContextCurrent,
-  recoveryRootPathForFile,
-  type RecoveryReminderContext
-} from "../services/recovery-reminder";
-import {
-  createManagedMindTreeSnapshot,
-  externalMergeWouldReplaceLocal,
-  hasExternalMindTreeRebase,
-  mergeMindTreeExternalChange,
-  rebaseMindTreeDocument,
-  sameManagedMindTreeSnapshot,
-  type ManagedMindTreeSnapshot,
-  type MindTreeMergeResult
+  assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot
 } from "../services/document-conflict";
+import { VersionComparison } from "./components/version-comparison";
 import {
   DocumentSession,
-  SaveConflictError,
-  createRecoveryDocument
+  SaveConflictError
 } from "../services/document-session";
 import type {
   SharedMindTreeSession,
-  SharedSaveConflictState,
   SharedSessionChangeReason,
   SharedSessionSnapshot
 } from "../services/mind-tree-session-registry";
@@ -180,11 +165,8 @@ import {
   TemplateSuggestModal,
   UrlPromptModal,
   MoveFilesModal,
-  RecoveryReminderModal,
-  SaveConflictModal,
   type CandidateAction,
-  type DeleteBranchAction,
-  type SaveConflictAction
+  type DeleteBranchAction
 } from "./modals";
 
 /** A visible node center captured before a layout pass changes world coordinates. */
@@ -193,8 +175,6 @@ interface LayoutViewportAnchor {
   x: number;
   y: number;
 }
-
-type ViewSaveConflict = SharedSaveConflictState;
 
 interface PasteInsertionContext {
   parentId: NodeId;
@@ -221,10 +201,11 @@ export class MindTreeView extends TextFileView {
   private readonly dragDropController = new DragDropController();
   /** Exact snapshot returned to TextFileView while one queued write is active. */
   private pendingSerializedSource?: string;
-  private saveConflict?: ViewSaveConflict;
-  private conflictPreparation?: Promise<void>;
-  private conflictModal?: SaveConflictModal;
-  private recoveryReminderModal?: RecoveryReminderModal;
+  private versionComparison?: VersionComparison;
+  private externalCheckRequested = false;
+  private externalCheckTask?: Promise<void>;
+  private versionChoicePending = false;
+  private readonly titleRenameNodeIds = new Set<NodeId>();
   /** Guards delayed load work after this view has been detached. */
   private viewClosed = false;
   private parseError?: string;
@@ -361,11 +342,8 @@ export class MindTreeView extends TextFileView {
     this.keyboardAvoidanceController?.destroy();
     this.keyboardAvoidanceController = undefined;
     this.markerPopover?.close();
-    // Closing a leaf is not the user's "later" decision. Dismiss the DOM only;
-    // detachSharedSession transfers the verified conflict to another leaf.
-    this.conflictModal?.dismiss();
-    this.conflictModal = undefined;
-    this.dismissRecoveryReminder();
+    this.versionComparison?.destroy();
+    this.versionComparison = undefined;
     const ownerWindow = this.ownerWindow();
     if (this.saveTimer !== undefined) ownerWindow.clearTimeout(this.saveTimer);
     if (this.textMetricRefreshFrame !== undefined) ownerWindow.cancelAnimationFrame(this.textMetricRefreshFrame);
@@ -402,7 +380,6 @@ export class MindTreeView extends TextFileView {
     // File loading may render synchronously inside super.onLoadFile. Mark the
     // viewport first so no frame can reuse the previous file's pan/zoom.
     this.displayFilePath = file.path;
-    this.dismissRecoveryReminder();
     this.initialRootCenterPending = true;
     this.rootEl?.addClass("is-initializing-viewport");
     this.selectedIds.clear();
@@ -411,20 +388,19 @@ export class MindTreeView extends TextFileView {
     this.editingDraftValue = "";
     this.attachSharedSession(file.path);
     await super.onLoadFile(file);
+    await this.restorePendingVersion();
     // Keep the cache current even if the host replaced the TFile instance while
     // loading. Once attached, this.file remains the authoritative rename source.
     this.displayFilePath = this.file?.path ?? file.path;
     // setViewData normally sees this.file, but synchronizing again here covers
     // host/plugin load orders where the file is attached only after parsing.
-    this.applySystemMutation((draft) => this.synchronizeDocumentTitleWithFile(draft, file));
+    this.applySystemMutation((draft) => {
+      const resourcesChanged = this.reconcileLinkedResources(draft);
+      return this.synchronizeDocumentTitleWithFile(draft, file) || resourcesChanged;
+    });
     // setViewData can render before TextFileView attaches this.file. Refresh the
     // manual-scan availability now that the backing file is authoritative.
     this.refreshBottomStatusBar();
-    const recoveryReminderContext: RecoveryReminderContext = {
-      filePath: normalizePath(file.path),
-      sessionToken: this.documentSessionToken
-    };
-    this.ownerWindow().setTimeout(() => this.showRecoveryReminder(recoveryReminderContext));
     this.ownerWindow().setTimeout(() => void this.scanSameFolder(file), 250);
   }
 
@@ -446,23 +422,47 @@ export class MindTreeView extends TextFileView {
     this.sharedSession = session;
     this.sharedSessionPath = normalized;
     this.documentSession = session.history;
+    this.plugin.ensureConflictCoordinator(session);
+    if (!session.pendingRestoreChecked) session.restoring = true;
     session.attach(this.sharedParticipantId, {
       onSessionChange: (snapshot) => this.applySharedSessionSnapshot(snapshot),
-      commitActiveDraft: () => this.commitVisibleEditorDraft(),
-      refreshConflictRecovery: async () => {
-        if (this.saveConflict) {
-          await this.prepareSaveConflict(
-            this.saveConflict.externalSource,
-            this.saveConflict.externalSnapshot
-          );
-        }
-      },
-      adoptSaveConflict: (conflict) => {
-        this.saveConflict = { ...conflict };
-        this.setStatus(t("status.saveConflict"), "warning");
-        this.openSaveConflictModal();
-      }
+      commitActiveDraft: () => this.commitVisibleEditorDraft()
     });
+  }
+
+  /** Check durable pending work before automatic collection or saving. */
+  private async restorePendingVersion(): Promise<void> {
+    const session = this.sharedSession;
+    if (!session) return;
+    if (!session.pendingRestoreChecked && !session.restoreTask) {
+      session.restoring = true;
+      session.restoreTask = (async () => {
+        try {
+          await session.conflict?.restore();
+          session.restoreError = undefined;
+          session.pendingRestoreChecked = true;
+        } catch (error) {
+          session.restoreError = error instanceof Error ? error.message : String(error);
+        } finally {
+          session.restoring = false;
+          session.restoreTask = undefined;
+          session.notifyConflict();
+        }
+      })();
+    }
+    await session.restoreTask;
+    if (this.sharedSession !== session) return;
+    this.document = session.document;
+    this.parseError = session.parseError;
+    this.sourceData = session.source;
+    this.data = session.source;
+    this.render();
+    if (session.restoreError) this.setStatus(t("conflict.storageError", { message: session.restoreError }), "error");
+    if (!session.mutationLocked) {
+      this.resumeChosenDraftSideEffects();
+      this.checkExternalVersion();
+      if (this.documentSession.dirty) this.scheduleSave();
+    }
   }
 
   /**
@@ -471,6 +471,11 @@ export class MindTreeView extends TextFileView {
    */
   private async flushViewBeforeDetach(expectedPath = this.sharedSessionPath): Promise<void> {
     if (!expectedPath || !this.sharedSession || this.sharedSessionPath !== normalizePath(expectedPath)) return;
+    await this.externalCheckTask;
+    if (this.mutationLocked()) {
+      await this.sharedSession.conflict?.settle();
+      return;
+    }
     this.commitVisibleEditorDraft();
     try {
       await this.pendingTitleFileOperation;
@@ -493,10 +498,8 @@ export class MindTreeView extends TextFileView {
     if (!session) return;
     session.releaseEditor(this.sharedParticipantId);
     this.plugin.mindTreeSessions.releaseSession(session, this.sharedParticipantId);
-    this.saveConflict = undefined;
-    this.conflictPreparation = undefined;
-    this.conflictModal?.dismiss();
-    this.conflictModal = undefined;
+    this.versionComparison?.destroy();
+    this.versionComparison = undefined;
     this.sharedSession = undefined;
     this.sharedSessionPath = undefined;
     this.documentSession = new DocumentSession();
@@ -521,10 +524,11 @@ export class MindTreeView extends TextFileView {
         this.editingNodeId = undefined;
         this.editingDraftValue = "";
       }
-      if (needsRender) {
+      if (needsRender || snapshot.hasConflict || this.versionComparison) {
         this.pruneSelection();
-        this.render(layoutAnchor);
+        this.render(this.versionComparison ? undefined : layoutAnchor);
       }
+      if (!this.mutationLocked()) this.resumeChosenDraftSideEffects();
       if (snapshot.parseError) this.setStatus(snapshot.parseError, "error");
       else if (snapshot.hasConflict) this.setStatus(t("status.saveConflict"), "warning");
       else this.setStatus(
@@ -536,52 +540,12 @@ export class MindTreeView extends TextFileView {
     }
   }
 
-  /**
-   * Remind only about exact same-name copies beside the file that initiated
-   * this load. A session/path guard prevents a delayed dialog leaking into the
-   * next file when one leaf is switched quickly.
-   */
-  private showRecoveryReminder(context: Readonly<RecoveryReminderContext>): void {
-    if (this.viewClosed || !isRecoveryReminderContextCurrent(
-      context,
-      this.displayFilePath ?? this.file?.path,
-      this.documentSessionToken
-    )) return;
-
-    const recoveryRootPath = recoveryRootPathForFile(context.filePath);
-    if (!recoveryRootPath) return;
-    const recoveryRoot = this.app.vault.getAbstractFileByPath(recoveryRootPath);
-    if (!(recoveryRoot instanceof TFolder)) return;
-
-    const candidatePaths: string[] = [];
-    for (const timestampFolder of recoveryRoot.children) {
-      if (!(timestampFolder instanceof TFolder)) continue;
-      for (const candidate of timestampFolder.children) {
-        if (candidate instanceof TFile) candidatePaths.push(candidate.path);
-      }
-    }
-    const recoveryPaths = findSameNameRecoveryPaths(context.filePath, candidatePaths);
-    if (recoveryPaths.length === 0 || !isRecoveryReminderContextCurrent(
-      context,
-      this.displayFilePath ?? this.file?.path,
-      this.documentSessionToken
-    )) return;
-
-    this.dismissRecoveryReminder();
-    const reminder = new RecoveryReminderModal(this.app, recoveryPaths, () => {
-      if (this.recoveryReminderModal === reminder) this.recoveryReminderModal = undefined;
-    });
-    this.recoveryReminderModal = reminder;
-    reminder.open();
-  }
-
-  private dismissRecoveryReminder(): void {
-    const reminder = this.recoveryReminderModal;
-    this.recoveryReminderModal = undefined;
-    reminder?.close();
+  private mutationLocked(): boolean {
+    return this.sharedSession?.mutationLocked === true;
   }
 
   override async save(_clear = false): Promise<void> {
+    if (this.mutationLocked()) throw new SaveConflictError();
     await this.documentSession.requestSave(() => this.performQueuedSave());
   }
 
@@ -608,441 +572,174 @@ export class MindTreeView extends TextFileView {
    * another editor changes the file between an ordinary read and modify call.
    */
   private async performQueuedSave(): Promise<boolean> {
-    let document = this.document;
+    if (this.mutationLocked()) throw new SaveConflictError();
     const file = this.file;
-    if (!document || !file || this.parseError) {
-      return false;
-    }
-    if (this.sharedSession?.hasConflict && !this.saveConflict) {
-      await this.sharedSession.refreshConflictRecovery();
-      throw new SaveConflictError();
-    }
-    if (this.saveConflict) {
-      // The user may continue editing after choosing “later”. Refresh the
-      // durable Recovery before rejecting another save so closing the last
-      // view cannot strand newer work only in memory.
-      await this.prepareSaveConflict(
-        this.saveConflict.externalSource,
-        this.saveConflict.externalSnapshot
-      );
-      throw new SaveConflictError();
-    }
-
-    // Resource metadata is corrected at the save boundary as well as on file
-    // events. Record that mutation as a revision so a concurrent later edit is
-    // never accidentally reported as already saved.
-    if (this.applySystemMutation(
-      (draft) => this.reconcileLinkedResources(draft),
-      document.rootId,
-      false
-    )) document = this.document!;
-
+    if (!this.document || !file || this.parseError) return false;
+    const session = this.sharedSession;
+    const token = this.documentSessionToken;
+    this.applySystemMutation((draft) => this.reconcileLinkedResources(draft), this.document.rootId, false);
+    const document = cloneDocument(this.document);
     const revision = this.documentSession.currentRevision;
     const baseline = this.documentSession.sourceBaseline || this.sourceData;
-    const localDocument = cloneDocument(document);
-    let mergeResult: MindTreeMergeResult | undefined;
     let serialized: string | undefined;
-    let deferredExternalAcceptance = false;
     try {
-      await this.app.vault.process(file, (diskSource) => {
-        mergeResult = mergeMindTreeExternalChange(
-          baseline,
-          localDocument,
-          diskSource,
-          this.parseOptions()
-        );
-        if (mergeResult.kind === "conflict") {
-          return diskSource;
-        }
-        if (hasExternalMindTreeRebase(mergeResult.rebase)
-          && this.externalResultDiffersFromLocal(mergeResult)) {
-          // Recovery creation is asynchronous and therefore cannot run inside
-          // Vault.process's synchronous callback. Leave the disk untouched and
-          // complete the verified Recovery transition immediately afterward.
-          deferredExternalAcceptance = true;
-          return diskSource;
-        }
-        // Preserve the latest external prose and unknown Frontmatter. Only the
-        // generated heading, outline and managed YAML/data regions are rebuilt.
-        serialized = serializeMindTreeFile(mergeResult.document, diskSource);
+      await this.app.vault.process(file, (disk) => {
+        if (this.mutationLocked() || this.sharedSession !== session || this.documentSessionToken !== token) return disk;
+        const assessment = assessExternalVersion(baseline, document, disk, this.parseOptions());
+        if (assessment.kind !== "unchanged") return disk;
+        serialized = serializeMindTreeFile(assessment.document, disk);
         this.pendingSerializedSource = serialized;
-        this.sharedSession?.beginWrite(serialized);
+        session?.beginWrite(serialized);
         return serialized;
       });
-    } catch (error) {
-      if (serialized !== undefined) this.sharedSession?.endWrite(serialized);
-      throw error;
+      const latest = await this.app.vault.read(file);
+      if (this.sharedSession !== session || this.documentSessionToken !== token) return false;
+      if (serialized === undefined) {
+        await this.acceptExternalSource(latest);
+        if (this.mutationLocked()) throw new SaveConflictError();
+        return true;
+      }
+      let verified = false;
+      try {
+        verified = sameManagedMindTreeSnapshot(createManagedMindTreeSnapshot(serialized, this.parseOptions()),
+          createManagedMindTreeSnapshot(latest, this.parseOptions()));
+      } catch { /* Invalid/future data must never be overwritten on a retry. */ }
+      if (!verified) {
+        await this.enterVersionPreview();
+        throw new SaveConflictError();
+      }
+      const written = createManagedMindTreeSnapshot(serialized, this.parseOptions());
+      if (written.documentId && !this.document?.documentId) this.adoptDocumentIdentity(file.path, written.documentId);
+      this.sourceData = latest;
+      this.data = latest;
+      this.documentSession.markSaved(revision, latest);
+      session?.replaceSource(latest, this.sharedParticipantId);
+      this.setStatus(this.hasUnsavedState() ? t("status.unsaved") : t("status.saved"), this.hasUnsavedState() ? "dirty" : "saved");
+      return this.documentSession.dirty;
     } finally {
       this.pendingSerializedSource = undefined;
-    }
-
-    try {
-      if (deferredExternalAcceptance && mergeResult?.kind === "merged") {
-        await this.processExternalSource(await this.app.vault.read(file));
-        return false;
-      }
-
-      if (!mergeResult || mergeResult.kind === "conflict" || serialized === undefined) {
-        const conflictingSource = await this.app.vault.read(file);
-        const latestMerge = mergeMindTreeExternalChange(
-          baseline,
-          localDocument,
-          conflictingSource,
-          this.parseOptions()
-        );
-        // The source may have changed again after the locked comparison. If its
-        // newest managed state is now mergeable, let the save queue retry under
-        // Vault.process instead of presenting a stale conflict.
-        if (latestMerge.kind === "merged") return true;
-        // A clean in-memory view can still represent the newest local version
-        // while Sync delivers an older but valid file. It therefore receives the
-        // same verified Recovery protection as an unsaved view.
-        await this.prepareSaveConflict(conflictingSource, latestMerge.externalSnapshot);
-        throw new SaveConflictError();
-      }
-
-      if (mergeResult.rebase.machineDocument
-        && this.documentSession.currentRevision !== revision) {
-        // A user command landed after the locked merge had already selected an
-        // external machine tree. Replaying an arbitrary structural delta onto
-        // that tree is unsafe, so retain the newer local state and ask explicitly
-        // instead of replacing either side in memory.
-        this.sourceData = serialized;
-        this.data = serialized;
-        this.documentSession.markSaved(revision, serialized);
-        this.sharedSession?.replaceSource(serialized, this.sharedParticipantId);
-        await this.prepareSaveConflict(serialized, createManagedMindTreeSnapshot(serialized, this.parseOptions()));
-        throw new SaveConflictError();
-      }
-
-      if (hasExternalMindTreeRebase(mergeResult.rebase)) {
-        const externalRebase = mergeResult.rebase;
-        const layoutAnchor = this.captureLayoutViewportAnchor();
-        // Identity and per-tree settings can be safely overlaid onto a command
-        // that landed while the write was active. Machine-tree replacement was
-        // handled above and reaches here only for the captured revision.
-        this.document = this.documentSession.currentRevision === revision
-          ? mergeResult.document
-          : rebaseMindTreeDocument(this.document!, externalRebase);
-        this.documentSession.rebaseHistory((snapshot) => rebaseMindTreeDocument(snapshot, externalRebase));
-        this.sharedSession?.replaceDocument(this.document, this.sharedParticipantId, "source");
-        this.pruneSelection();
-        this.render(layoutAnchor);
-      }
-
-      // Vault.process protects the read/modify pair inside Obsidian. A sync
-      // provider can still replace the file immediately afterward, so do not
-      // report green until the managed logical state is read back and verified.
-      const persistedSource = await this.app.vault.read(file);
-      const expectedSnapshot = createManagedMindTreeSnapshot(serialized, this.parseOptions());
-      const persistedSnapshot = this.tryCreateManagedSnapshot(persistedSource);
-      if (!persistedSnapshot || !sameManagedMindTreeSnapshot(expectedSnapshot, persistedSnapshot)) {
-        await this.prepareSaveConflict(
-          persistedSource,
-          persistedSnapshot,
-          undefined,
-          this.documentWithPendingDraft()
-        );
-        throw new SaveConflictError();
-      }
-
-      this.sourceData = persistedSource;
-      this.data = persistedSource;
-      this.documentSession.markSaved(revision, persistedSource);
-      this.sharedSession?.replaceSource(persistedSource, this.sharedParticipantId);
-      if (this.hasUnsavedState()) {
-        this.setStatus(t("status.unsaved"), "dirty");
-        // A raw active title draft is intentionally not autosaved into the tree.
-        // Only a newer committed revision should request another write pass.
-        return this.documentSession.dirty;
-      }
-      this.setStatus(t("status.saved"), "saved");
-      return false;
-    } finally {
-      if (serialized !== undefined) this.sharedSession?.endWrite(serialized);
+      if (serialized !== undefined) session?.endWrite(serialized);
     }
   }
 
-  /** Create one durable recovery copy before exposing conflict choices. */
-  private async prepareSaveConflict(
-    externalSource: string,
-    externalSnapshot = this.tryCreateManagedSnapshot(externalSource),
-    recoveryPath?: string,
-    recoveryDocument = this.documentWithPendingDraft()
-  ): Promise<void> {
-    const expectedSession = this.sharedSession;
-    const expectedToken = this.documentSessionToken;
-    if (this.saveConflict) {
-      const localFingerprint = this.recoveryDocumentFingerprint(recoveryDocument);
-      const recoveryStillValid = localFingerprint === this.saveConflict.recoveredLocalFingerprint
-        && await this.isRecoveryCopyValid(this.saveConflict.recoveryPath, recoveryDocument);
-      if (!recoveryStillValid) {
-        const transitionKey = externalSnapshot
-          ? this.recoveryTransitionKey(
-              this.documentSession.sourceBaseline || this.sourceData,
-              externalSnapshot,
-              recoveryDocument
-            )
-          : `invalid|${localFingerprint}|${sourceFingerprint(externalSource)}`;
-        const nextRecoveryPath = await (
-          this.sharedSession?.recoveryForTransition(
-            transitionKey,
-            () => this.createRecoveryCopy(recoveryDocument, externalSource)
-          ) ?? this.createRecoveryCopy(recoveryDocument, externalSource)
-        );
-        if (!this.isAsyncSessionCurrent(expectedSession, expectedToken)) return;
-        this.saveConflict = {
-          ...this.saveConflict,
-          recoveryPath: nextRecoveryPath,
-          recoveredLocalFingerprint: localFingerprint
-        };
-        // The existing modal contains the old path. Re-open it with the newest
-        // verified copy rather than presenting misleading recovery metadata.
-        this.conflictModal?.dismiss();
-        this.conflictModal = undefined;
-      }
-      this.saveConflict = {
-        ...this.saveConflict,
-        externalSource,
-        externalSnapshot
-      };
-      this.sharedSession?.updateConflict(this.sharedParticipantId, this.saveConflict);
-      this.openSaveConflictModal();
+  /** Event payloads can be stale: read disk after the shared in-flight write. */
+  checkExternalVersion(): void {
+    if (this.viewClosed || !this.file || !this.sharedSession) return;
+    const session = this.sharedSession;
+    if (session.restoring || session.restoreError) { this.externalCheckRequested = true; return; }
+    if (session.conflict?.active) {
+      void session.conflict.refresh().catch((error: unknown) => this.reportSaveFailure(error));
       return;
     }
-    if (this.conflictPreparation) {
-      await this.conflictPreparation;
-      return this.prepareSaveConflict(externalSource, externalSnapshot, recoveryPath, recoveryDocument);
-    }
-    this.conflictPreparation = (async () => {
-      const transitionKey = externalSnapshot
-        ? this.recoveryTransitionKey(
-            this.documentSession.sourceBaseline || this.sourceData,
-            externalSnapshot,
-            recoveryDocument
-          )
-        : `invalid|${sourceFingerprint(externalSource)}`;
-      const verifiedRecoveryPath = recoveryPath ?? await (
-        this.sharedSession?.recoveryForTransition(
-          transitionKey,
-          () => this.createRecoveryCopy(recoveryDocument, externalSource)
-        ) ?? this.createRecoveryCopy(recoveryDocument, externalSource)
-      );
-      if (!this.isAsyncSessionCurrent(expectedSession, expectedToken)) return;
-      const nextConflict: ViewSaveConflict = {
-        externalSource,
-        externalSnapshot,
-        recoveryPath: verifiedRecoveryPath,
-        recoveredLocalFingerprint: this.recoveryDocumentFingerprint(recoveryDocument)
-      };
-      if (this.sharedSession && !this.sharedSession.claimConflict(this.sharedParticipantId, nextConflict)) return;
-      this.saveConflict = nextConflict;
-      this.setStatus(t("status.saveConflict"), "warning");
-      this.openSaveConflictModal();
-    })().finally(() => { this.conflictPreparation = undefined; });
-    return this.conflictPreparation;
+    this.externalCheckRequested = true;
+    if (this.externalCheckTask) return;
+    const token = this.documentSessionToken;
+    this.externalCheckTask = (async () => {
+      while (this.externalCheckRequested && !this.viewClosed && this.sharedSession === session && this.documentSessionToken === token) {
+        this.externalCheckRequested = false;
+        await session.history.runExclusiveWrite(async () => {
+          if (this.viewClosed || this.sharedSession !== session || this.documentSessionToken !== token || session.restoring) return;
+          const file = this.app.vault.getFileByPath(session.path);
+          if (!file) { await this.enterVersionPreview(); return; }
+          const source = await this.app.vault.read(file);
+          if (this.sharedSession !== session || this.documentSessionToken !== token) return;
+          if (session.conflict?.active) await session.conflict.refresh();
+          else if (!session.isPendingWrite(source)) await this.acceptExternalSource(source);
+        });
+      }
+    })().catch((error: unknown) => this.reportSaveFailure(error)).finally(() => { this.externalCheckTask = undefined; });
   }
 
-  private tryCreateManagedSnapshot(source: string): ManagedMindTreeSnapshot | undefined {
-    try {
-      return createManagedMindTreeSnapshot(source, this.parseOptions());
-    } catch {
-      return undefined;
+  private async acceptExternalSource(source: string): Promise<void> {
+    const document = this.document;
+    if (!document) return;
+    const assessment = assessExternalVersion(this.documentSession.sourceBaseline || this.sourceData,
+      this.documentWithPendingDraft(), source, this.parseOptions());
+    if (assessment.kind !== "unchanged") { await this.enterVersionPreview(); return; }
+    if (assessment.document.documentId && !document.documentId && this.file) {
+      this.adoptDocumentIdentity(this.file.path, assessment.document.documentId);
     }
+    // Only the serialization template and a safe first identity are accepted
+    // silently. Active drafts and local undo history remain unchanged.
+    this.sourceData = source;
+    this.data = source;
+    this.documentSession.replaceBaseline(source);
+    this.sharedSession?.replaceSource(source, this.sharedParticipantId);
   }
 
-  private sameConflictExternal(
-    conflict: Readonly<ViewSaveConflict>,
-    source: string,
-    snapshot: ManagedMindTreeSnapshot | undefined
-  ): boolean {
-    if (conflict.externalSnapshot && snapshot) {
-      return sameManagedMindTreeSnapshot(conflict.externalSnapshot, snapshot);
-    }
-    // Invalid data has no logical snapshot. Exact equality is the only safe
-    // equivalence rule until a valid file appears on disk again.
-    return !conflict.externalSnapshot && !snapshot && conflict.externalSource === source;
+  private async enterVersionPreview(): Promise<void> {
+    const session = this.sharedSession;
+    if (!session || !this.document) return;
+    const current = this.documentWithPendingDraft();
+    const draft = session.draft;
+    await this.plugin.ensureConflictCoordinator(session).enter(current,
+      this.documentSession.sourceBaseline || this.sourceData, draft);
   }
 
-  private dismissSaveConflict(): void {
-    this.saveConflict = undefined;
-    this.sharedSession?.clearConflict(this.sharedParticipantId);
-    this.conflictModal?.dismiss();
-    this.conflictModal = undefined;
-  }
-
-  /** Recovery files intentionally omit link identity to avoid duplicate owners. */
-  private async createRecoveryCopy(
-    sourceDocument = this.documentWithPendingDraft(),
-    latestExternalSource?: string
-  ): Promise<string> {
-    const file = this.file;
-    if (!file) throw new Error("No mind tree is available for recovery.");
-    const recoveryDocument = createRecoveryDocument(sourceDocument);
-    // A valid newest source preserves external prose/unknown Frontmatter. If
-    // the external file is damaged, use the last valid baseline as the safe
-    // serialization template instead of propagating the corruption.
-    const template = latestExternalSource && this.tryCreateManagedSnapshot(latestExternalSource)
-      ? latestExternalSource
-      : this.documentSession.sourceBaseline || this.sourceData;
-    const source = serializeMindTreeFile(recoveryDocument, template);
-    const expectedSnapshot = createManagedMindTreeSnapshot(source, this.parseOptions());
-    const parentPath = file.parent?.path ?? "";
-    const recoveryFolder = normalizePath([
-      parentPath,
-      "_Mind Tree Recovery",
-      recoveryTimestamp()
-    ].filter(Boolean).join("/"));
-    await this.ensureVaultFolder(recoveryFolder);
-    let recoveryPath = normalizePath(`${recoveryFolder}/${file.name}`);
-    let suffix = 2;
-    while (this.app.vault.getAbstractFileByPath(recoveryPath)) {
-      const extension = file.extension ? `.${file.extension}` : "";
-      recoveryPath = normalizePath(`${recoveryFolder}/${file.basename}-${suffix}${extension}`);
-      suffix += 1;
-    }
-    const recoveryFile = await this.app.vault.create(recoveryPath, source);
-    if (!await this.isRecoveryCopyValid(recoveryFile.path, recoveryDocument, expectedSnapshot)) {
-      throw new Error("Recovery verification failed; external data was not accepted.");
-    }
-    return recoveryPath;
-  }
-
-  /** Re-read a Recovery before trusting it as the durable local counterpart. */
-  private async isRecoveryCopyValid(
-    recoveryPath: string,
-    sourceDocument: MindTreeDocument,
-    expectedSnapshot?: ManagedMindTreeSnapshot
-  ): Promise<boolean> {
-    const recoveryFile = this.app.vault.getFileByPath(normalizePath(recoveryPath));
-    if (!recoveryFile) return false;
-    try {
-      const verifiedSource = await this.app.vault.read(recoveryFile);
-      const verifiedSnapshot = createManagedMindTreeSnapshot(verifiedSource, this.parseOptions());
-      const expected = expectedSnapshot ?? createManagedMindTreeSnapshot(
-        serializeMindTreeFile(
-          createRecoveryDocument(sourceDocument),
-          this.documentSession.sourceBaseline || this.sourceData
-        ),
-        this.parseOptions()
-      );
-      return verifiedSnapshot.documentId === undefined
-        && sameManagedMindTreeSnapshot(expected, verifiedSnapshot);
-    } catch {
+  /** Keep the original canvas mounted and preserve its own viewport. */
+  private syncVersionPreview(): boolean {
+    const state = this.sharedSession?.conflict?.state;
+    if (!state) {
+      if (this.versionComparison) {
+        this.versionComparison.destroy();
+        this.versionComparison = undefined;
+        this.rootEl.hidden = false;
+        this.rootEl.inert = false;
+      }
       return false;
     }
-  }
-
-  private async ensureVaultFolder(folderPath: string): Promise<void> {
-    let current = "";
-    for (const segment of normalizePath(folderPath).split("/").filter(Boolean)) {
-      current = current ? `${current}/${segment}` : segment;
-      if (!this.app.vault.getAbstractFileByPath(current)) await this.app.vault.createFolder(current);
-    }
-  }
-
-  private openSaveConflictModal(): void {
-    const conflict = this.saveConflict;
-    if (!conflict || this.conflictModal) return;
-    this.conflictModal = new SaveConflictModal(this.app, conflict.recoveryPath, (action) => {
-      this.conflictModal = undefined;
-      void this.resolveSaveConflict(action).catch((error: unknown) => {
-        if (error instanceof SaveConflictError) {
-          this.setStatus(t("status.saveConflict"), "warning");
-          return;
-        }
-        this.setStatus(t("status.saveFailed", {
-          message: error instanceof Error ? error.message : String(error)
-        }), "error");
-      });
-    });
-    this.conflictModal.open();
-  }
-
-  private async resolveSaveConflict(action: SaveConflictAction): Promise<void> {
-    const conflict = this.saveConflict;
-    if (!conflict) return;
-    if (action === "later") {
-      this.setStatus(t("status.saveConflict"), "warning");
-      return;
-    }
-    if (action === "open-recovery") {
-      const recovery = this.app.vault.getAbstractFileByPath(conflict.recoveryPath);
-      if (recovery instanceof TFile) await this.app.workspace.getLeaf("tab").openFile(recovery, { active: true });
-      this.setStatus(t("status.saveConflict"), "warning");
-      return;
-    }
-    if (action === "external") {
-      const file = this.file;
-      if (!file) return;
-      const latestDiskSource = await this.app.vault.read(file);
-      let parsed: ReturnType<typeof parseMindTreeFile>;
-      try {
-        parsed = parseMindTreeFile(latestDiskSource, this.parseOptions());
-      } catch {
-        await this.prepareSaveConflict(latestDiskSource, undefined);
-        throw new SaveConflictError();
-      }
-      // The dialog may have remained open while the user continued editing.
-      // Never accept the disk version until Recovery contains that newest work.
-      const recoveryDocument = this.documentWithPendingDraft();
-      if (this.recoveryDocumentFingerprint(recoveryDocument)
-          !== conflict.recoveredLocalFingerprint
-        || !await this.isRecoveryCopyValid(conflict.recoveryPath, recoveryDocument)) {
-        await this.prepareSaveConflict(
-          latestDiskSource,
-          this.tryCreateManagedSnapshot(latestDiskSource),
-          undefined,
-          recoveryDocument
-        );
-        throw new SaveConflictError();
-      }
-      const layoutAnchor = this.captureLayoutViewportAnchor();
-      const repairedResources = this.reconcileLinkedResources(parsed.document);
-      const repairedTitle = this.synchronizeDocumentTitleWithFile(parsed.document, file);
-      const repaired = repairedResources
-        || repairedTitle
-        || parsed.migratedFromSchemaVersion !== undefined
-        || parsed.defaultedDocumentSettings === true;
-      this.dismissSaveConflict();
-      this.sharedSession?.releaseEditor(this.sharedParticipantId);
+    if (!this.versionComparison) {
+      this.cancelCanvasGestures();
+      this.markerPopover?.close();
+      if (this.saveTimer !== undefined) this.ownerWindow().clearTimeout(this.saveTimer);
+      this.saveTimer = undefined;
+      // Invalidate pre-conflict modal/import callbacks. Raw draft data is
+      // already frozen; blurring/destroying its UI must not commit or rename.
+      this.documentSessionToken = createId();
       this.editingNodeId = undefined;
       this.editingDraftValue = "";
-      this.document = parsed.document;
-      this.sourceData = latestDiskSource;
-      this.data = latestDiskSource;
-      this.documentSession.load(latestDiskSource);
-      if (repaired) this.documentSession.markChanged();
-      this.sharedSession?.replaceDocument(this.document, this.sharedParticipantId, "source");
-      this.sharedSession?.replaceSource(latestDiskSource, this.sharedParticipantId);
-      this.pruneSelection();
-      this.render(layoutAnchor);
-      if (repaired) {
-        this.setStatus(t("status.unsaved"), "dirty");
-        this.scheduleSave();
-      } else {
-        this.setStatus(t("status.saved"), "saved");
-      }
-      return;
+      this.keyboardAvoidanceController?.reset();
+      this.rootEl.inert = true;
+      this.rootEl.hidden = true;
+      this.versionComparison = new VersionComparison(this.contentEl, {
+        ...this.plugin.settings,
+        resolveImageFile: (node) => node.resource?.type === "file" ? this.plugin.resources.resolve(node.resource) : undefined,
+        resourcePath: (file) => this.app.vault.getResourcePath(file)
+      }, {
+        choose: (side) => void this.chooseVersion(side),
+        retry: () => void this.sharedSession?.conflict?.retry()
+      });
     }
+    this.versionComparison.update(state);
+    return true;
+  }
 
-    const file = this.file;
-    if (!file) return;
-    const latestDiskSource = await this.app.vault.read(file);
-    const latestSnapshot = this.tryCreateManagedSnapshot(latestDiskSource);
-    if (!this.sameConflictExternal(conflict, latestDiskSource, latestSnapshot)) {
-      this.dismissSaveConflict();
-      await this.prepareSaveConflict(latestDiskSource, latestSnapshot);
-      throw new SaveConflictError();
-    }
-    // The explicit overwrite decision applies only to the version shown by the
-    // dialog. Adopt it as the comparison baseline, then enqueue the local state.
-    this.dismissSaveConflict();
-    this.sourceData = latestDiskSource;
-    this.data = latestDiskSource;
-    this.documentSession.replaceBaseline(latestDiskSource);
-    this.sharedSession?.replaceSource(latestDiskSource, this.sharedParticipantId);
-    await this.save();
+  private async chooseVersion(side: "current" | "external"): Promise<void> {
+    const session = this.sharedSession;
+    if (!session?.conflict || this.versionChoicePending) return;
+    this.versionChoicePending = true;
+    try { await session.history.runExclusiveWrite(() => session.conflict!.choose(side)); }
+    catch (error) { this.reportSaveFailure(error); }
+    finally { this.versionChoicePending = false; }
+  }
+
+  /** Filename side effects run only after the current draft version won. */
+  private resumeChosenDraftSideEffects(): void {
+    const session = this.sharedSession;
+    if (!session || this.mutationLocked() || this.file?.path !== session.path) return;
+    const draft = session.takeResolvedDraft();
+    if (!draft) return;
+    const node = this.document?.nodes[draft.nodeId];
+    if (!node || node.title === draft.originalTitle) return;
+    this.titleRenameNodeIds.add(node.id);
+    this.trackTitleFileOperation(async () => {
+      try {
+        if (node.id === this.document?.rootId) await this.renameTreeFileForEditedRoot(node.title, draft.originalTitle);
+        else if (node.resource?.type === "file" && node.titleSync === "bidirectional") {
+          await this.renameFileForEditedNode(node.id, node.title, draft.originalTitle, node.resource);
+        }
+      } finally { this.titleRenameNodeIds.delete(node.id); }
+    });
   }
 
   setViewData(data: string, clear: boolean): void {
@@ -1059,31 +756,9 @@ export class MindTreeView extends TextFileView {
       clear = false;
     }
 
-    if (!clear && data === this.documentSession.sourceBaseline) {
-      this.sourceData = data;
-      this.data = data;
-      return;
-    }
     if (!clear && this.document) {
-      if (data === this.pendingSerializedSource || this.sharedSession?.isPendingWrite(data)) {
-        this.sourceData = data;
-        this.data = data;
-        this.documentSession.replaceBaseline(data);
-        this.sharedSession?.replaceSource(data, this.sharedParticipantId);
-        return;
-      }
-      if (data === this.documentSession.sourceBaseline) return;
-      // TextFileView can deliver the same filesystem event to every leaf. Only
-      // one participant performs the merge/Recovery transition; it publishes
-      // the accepted result back to all other leaves.
-      const sharedSession = this.sharedSession;
-      if (sharedSession && !sharedSession.claimExternalSource(data)) return;
-      const sessionToken = this.documentSessionToken;
-      void this.processExternalSource(data, sharedSession, sessionToken).catch((error: unknown) => {
-        this.setStatus(t("status.recoveryFailed", {
-          message: error instanceof Error ? error.message : String(error)
-        }), "error");
-      }).finally(() => sharedSession?.releaseExternalSource(data));
+      if (data === this.pendingSerializedSource || this.sharedSession?.isPendingWrite(data)) return;
+      this.checkExternalVersion();
       return;
     }
     // Async link resolution must never use an optional persisted documentId as
@@ -1101,8 +776,8 @@ export class MindTreeView extends TextFileView {
       this.sharedSession?.initialize(parsed.document, data);
       // File identity is authoritative; pathHint is only a cached fallback.
       // Repairing it here closes the rename/link-rewrite race before rendering.
-      const repairedResourceState = this.reconcileLinkedResources(parsed.document);
-      const repairedDocumentTitle = this.file
+      const repairedResourceState = !this.mutationLocked() && this.reconcileLinkedResources(parsed.document);
+      const repairedDocumentTitle = this.file && !this.mutationLocked()
         ? this.synchronizeDocumentTitleWithFile(parsed.document, this.file)
         : false;
       const repairedState = repairedResourceState
@@ -1125,117 +800,7 @@ export class MindTreeView extends TextFileView {
     this.render(layoutAnchor);
   }
 
-  /**
-   * Process one observable external source against the shared baseline. Any
-   * externally-owned logical replacement is preceded by a verified Recovery;
-   * generated Markdown/prose-only changes simply refresh the serialization
-   * template because they cannot erase tree state.
-   */
-  private async processExternalSource(
-    data: string,
-    expectedSession = this.sharedSession,
-    expectedToken = this.documentSessionToken
-  ): Promise<void> {
-    if (!this.isAsyncSessionCurrent(expectedSession, expectedToken)) return;
-    const document = this.document;
-    if (!document || data === this.documentSession.sourceBaseline) return;
-    const baseline = this.documentSession.sourceBaseline || this.sourceData;
-    const mergeResult = mergeMindTreeExternalChange(baseline, document, data, this.parseOptions());
-
-    if (mergeResult.kind === "conflict") {
-      await this.prepareSaveConflict(
-        data,
-        mergeResult.externalSnapshot,
-        undefined,
-        this.documentWithPendingDraft()
-      );
-      return;
-    }
-
-    const hasExternalManagedChange = hasExternalMindTreeRebase(mergeResult.rebase);
-    const draft = this.sharedSession?.draft;
-    if (draft && mergeResult.rebase.machineDocument) {
-      // A textarea draft is local work even though it intentionally has not
-      // entered the layout document. Never let a remote machine tree silently
-      // replace it.
-      await this.prepareSaveConflict(
-        data,
-        mergeResult.externalSnapshot,
-        undefined,
-        this.documentWithPendingDraft()
-      );
-      return;
-    }
-
-    if (hasExternalManagedChange && this.externalResultDiffersFromLocal(mergeResult)) {
-      const recoveryDocument = this.documentWithPendingDraft();
-      const transitionKey = this.recoveryTransitionKey(
-        baseline,
-        mergeResult.externalSnapshot,
-        recoveryDocument
-      );
-      await (this.sharedSession?.recoveryForTransition(
-        transitionKey,
-        () => this.createRecoveryCopy(recoveryDocument, data)
-      ) ?? this.createRecoveryCopy(recoveryDocument, data));
-      if (!this.isAsyncSessionCurrent(expectedSession, expectedToken)) return;
-
-      // A local command may have landed while Recovery I/O was pending. Repeat
-      // the complete transition so the next Recovery contains that newer work;
-      // a merely mergeable result is not enough because the verified copy we
-      // just wrote belongs to the previous in-memory revision.
-      if (!this.document || this.document !== document) {
-        await this.processExternalSource(data, expectedSession, expectedToken);
-        return;
-      }
-    }
-
-    this.applyMergedExternalSource(data, mergeResult);
-  }
-
-  private isAsyncSessionCurrent(
-    expectedSession: SharedMindTreeSession | undefined,
-    expectedToken: string
-  ): boolean {
-    return !this.viewClosed
-      && this.sharedSession === expectedSession
-      && this.documentSessionToken === expectedToken;
-  }
-
-  /** Apply a previously verified external merge and broadcast it to all leaves. */
-  private applyMergedExternalSource(data: string, mergeResult: Extract<MindTreeMergeResult, { kind: "merged" }>): void {
-    const hasManagedRebase = hasExternalMindTreeRebase(mergeResult.rebase);
-    const layoutAnchor = hasManagedRebase ? this.captureLayoutViewportAnchor() : undefined;
-    if (hasManagedRebase) {
-      this.document = mergeResult.document;
-      this.documentSession.rebaseHistory((snapshot) => rebaseMindTreeDocument(snapshot, mergeResult.rebase));
-    }
-    this.dismissSaveConflict();
-    this.sourceData = data;
-    this.data = data;
-    this.documentSession.replaceBaseline(data);
-    if (hasManagedRebase) {
-      this.sharedSession?.replaceDocument(this.document, this.sharedParticipantId, "source");
-    }
-    this.sharedSession?.replaceSource(data, this.sharedParticipantId);
-    if (layoutAnchor) {
-      this.pruneSelection();
-      this.render(layoutAnchor);
-    }
-    if (this.hasUnsavedState()) {
-      this.setStatus(t("status.unsaved"), "dirty");
-      if (this.documentSession.dirty) this.scheduleSave();
-    } else {
-      this.setStatus(t("status.saved"), "saved");
-    }
-  }
-
-  /** Compare the external logical result with the current local document. */
-  private externalResultDiffersFromLocal(mergeResult: Extract<MindTreeMergeResult, { kind: "merged" }>): boolean {
-    return externalMergeWouldReplaceLocal(mergeResult, this.documentWithPendingDraft());
-  }
-
-  /** Overlay the raw textarea value only for safety comparison/Recovery. */
+  /** Overlay the textarea in the frozen candidate without file side effects. */
   private documentWithPendingDraft(): MindTreeDocument {
     const document = this.document;
     if (!document) throw new Error("No mind tree is loaded.");
@@ -1243,39 +808,8 @@ export class MindTreeView extends TextFileView {
     if (!draftState || !document.nodes[draftState.nodeId]) return document;
     const overlaid = cloneDocument(document);
     const title = draftState.value.replace(/[\r\n]+/g, " ").trim() || t("node.untitled");
-    renameNode(overlaid, draftState.nodeId, title);
+    if (overlaid.nodes[draftState.nodeId]!.title !== title) renameNode(overlaid, draftState.nodeId, title);
     return overlaid;
-  }
-
-  private recoveryTransitionKey(
-    baselineSource: string,
-    externalSnapshot: ManagedMindTreeSnapshot,
-    localDocument = this.documentWithPendingDraft()
-  ): string {
-    const baseline = this.tryCreateManagedSnapshot(baselineSource);
-    const local = this.tryCreateManagedSnapshot(serializeMindTreeFile(localDocument, baselineSource));
-    return [
-      baseline?.machineFingerprint ?? "invalid",
-      baseline?.documentId ?? "",
-      JSON.stringify(baseline?.settings ?? {}),
-      local?.machineFingerprint ?? "invalid-local",
-      local?.documentId ?? "",
-      JSON.stringify(local?.settings ?? {}),
-      externalSnapshot.machineFingerprint,
-      externalSnapshot.documentId ?? "",
-      JSON.stringify(externalSnapshot.settings)
-    ].join("|");
-  }
-
-  private recoveryDocumentFingerprint(document: MindTreeDocument): string {
-    const snapshot = createManagedMindTreeSnapshot(
-      serializeMindTreeFile(createRecoveryDocument(document), this.documentSession.sourceBaseline || this.sourceData),
-      this.parseOptions()
-    );
-    return [
-      snapshot.machineFingerprint,
-      JSON.stringify(snapshot.settings)
-    ].join("|");
   }
 
   clear(): void {
@@ -1283,16 +817,9 @@ export class MindTreeView extends TextFileView {
     this.keyboardAvoidanceController?.reset();
     this.sharedSession?.releaseEditor(this.sharedParticipantId);
     this.markerPopover?.close();
-    this.dismissRecoveryReminder();
-    if (!this.sharedSession?.initialized) {
-      this.dismissSaveConflict();
-    } else {
-      // TextFileView can clear a closing leaf before detach transfers the
-      // shared conflict. Remove only this leaf's DOM, not the session state.
-      this.conflictModal?.dismiss();
-      this.conflictModal = undefined;
-    }
-    this.conflictPreparation = undefined;
+    this.versionComparison?.destroy();
+    this.versionComparison = undefined;
+    if (this.rootEl) { this.rootEl.hidden = false; this.rootEl.inert = false; }
     this.pendingSerializedSource = undefined;
     // TextFileView may call clear while another leaf still owns this shared
     // history. Only an uninitialized/new session (or detached fallback) may
@@ -1328,6 +855,7 @@ export class MindTreeView extends TextFileView {
   /** Save pending edits before another tree assigns this file its first link ID. */
   async flushForDocumentIdentityWrite(expectedPath: string): Promise<void> {
     if (normalizePath(this.file?.path ?? "") !== normalizePath(expectedPath)) return;
+    if (this.mutationLocked()) throw new SaveConflictError();
     this.commitVisibleEditorDraft();
     await this.pendingTitleFileOperation;
     await this.flushPendingSave();
@@ -1345,7 +873,7 @@ export class MindTreeView extends TextFileView {
 
   /** Refresh cached link targets from the stable resource index. */
   private reconcileLinkedResources(document: MindTreeDocument): boolean {
-    return reconcileLinkedFileReferences(document, (reference) => this.plugin.resources.describe(reference));
+    return reconcileLinkedFileReferences(document, (reference) => this.plugin.resources.describe(reference), this.titleRenameNodeIds);
   }
 
   /** The .mtn.md filename is authoritative for both document and root titles. */
@@ -1803,6 +1331,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private async saveFromStatusBar(): Promise<void> {
+    if (this.mutationLocked()) return;
     if (!this.document || this.parseError) return;
     this.commitVisibleEditorDraft();
     this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
@@ -1871,6 +1400,7 @@ export class MindTreeView extends TextFileView {
    * Markdown outline and compressed data from the same document snapshot.
    */
   private async saveImmediately(): Promise<void> {
+    if (this.mutationLocked()) return;
     if (!this.document || this.parseError) return;
     this.commitVisibleEditorDraft();
     await this.pendingTitleFileOperation;
@@ -1951,6 +1481,7 @@ export class MindTreeView extends TextFileView {
 
   private render(layoutAnchor?: LayoutViewportAnchor): void {
     if (!this.rootEl) return;
+    if (this.syncVersionPreview()) return;
     if (this.parseError) {
       this.nodeLayerEl.empty();
       this.connectionsEl.empty();
@@ -1968,7 +1499,7 @@ export class MindTreeView extends TextFileView {
     this.rootEl.dataset.mtnNodeShape = document.settings.nodeShape;
     this.rootEl.dataset.mtnConnectionStyle = document.settings.connectionStyle;
     this.rootEl.dataset.mtnLayout = document.settings.layoutMode;
-    this.rootEl.toggleClass("is-readonly", false);
+    this.rootEl.toggleClass("is-readonly", this.mutationLocked());
     // Theme attributes must be present before reading computed typography.
     this.textMeasurer?.refreshStyles();
     const textMeasurer = this.textMeasurer ?? fallbackNodeTextMeasurer;
@@ -2056,6 +1587,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private beginImageResize(event: GesturePointer, nodeId: NodeId, image: ImageNodeVisual, externallyManaged = false): void {
+    if (this.mutationLocked()) return;
     const node = this.document?.nodes[nodeId];
     if (!node || node.resource?.type !== "file" || node.resource.fileKind !== "image") return;
     this.selectOnly(nodeId);
@@ -2236,6 +1768,7 @@ export class MindTreeView extends TextFileView {
 
   /** Resolve internal files or import external files, then insert at the live target. */
   private async onCanvasFileDrop(event: DragEvent): Promise<void> {
+    if (this.mutationLocked()) return;
     const document = this.document;
     const transfer = event.dataTransfer;
     if (!document || !transfer) return;
@@ -2380,6 +1913,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private onDocumentPaste(event: ClipboardEvent): void {
+    if (this.mutationLocked()) return;
     if (!this.document || this.parseError || !this.shouldCaptureDocumentPaste(event)) return;
     const context: PasteInsertionContext = {
       parentId: this.resolveInsertionParentId(),
@@ -2850,16 +2384,16 @@ export class MindTreeView extends TextFileView {
 
   private isAssociationTargetCurrent(target: AssociationTarget): boolean {
     return isAssociationTargetAvailable(
-      target, this.documentSessionToken, this.viewClosed || this.parseError ? undefined : this.document
+      target, this.documentSessionToken, this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document
     );
   }
 
   private requireAssociationTarget(target: AssociationTarget, draft = this.document): MindTreeNode {
-    return requireAssociationTarget(target, this.documentSessionToken, this.viewClosed || this.parseError ? undefined : draft);
+    return requireAssociationTarget(target, this.documentSessionToken, this.viewClosed || this.parseError || this.mutationLocked() ? undefined : draft);
   }
 
   private isResourceTargetCurrent(target: ResourceTarget): boolean {
-    return isResourceTargetCurrent(target, this.documentSessionToken, this.viewClosed || this.parseError ? undefined : this.document);
+    return isResourceTargetCurrent(target, this.documentSessionToken, this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document);
   }
 
   /** A single guarded mutation boundary for every existing/new file association. */
@@ -3023,9 +2557,12 @@ export class MindTreeView extends TextFileView {
     references: FileResourceRef[],
     destinationFolder: string
   ): Promise<void> {
+    if (this.mutationLocked()) return;
+    const token = this.documentSessionToken;
     const movedPaths = new Map<string, string>();
     const failures: string[] = [];
     for (const reference of references) {
+      if (this.mutationLocked() || token !== this.documentSessionToken) return;
       try {
         const moved = await this.plugin.resources.moveLinkedFile(reference, destinationFolder);
         movedPaths.set(reference.resourceId, moved.path);
@@ -3047,6 +2584,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private async enableTitleSync(nodeId: NodeId): Promise<void> {
+    if (this.mutationLocked()) return;
     const node = this.document?.nodes[nodeId];
     if (node?.resource?.type !== "file") return;
     const resourceId = node.resource.resourceId;
@@ -3121,6 +2659,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private requestDeleteBranch(nodeId: NodeId): void {
+    if (this.mutationLocked()) return;
     const document = this.document;
     if (!document) return;
     const targetNodeIds = getTopLevelSelectedNodeIds(document, this.selectedIds.has(nodeId) ? this.selectedIds : [nodeId]);
@@ -3207,10 +2746,14 @@ export class MindTreeView extends TextFileView {
       if (resource?.type === "file") linkedFiles.set(resource.resourceId, { ...resource });
     }
     const resources = [...linkedFiles.values()];
+    const token = this.documentSessionToken;
     new DeleteBranchModal(
       this.app,
       { topicTitles, filePaths: resources.map((resource) => resource.pathHint) },
-      (action) => void this.executeDeleteBranch(targetNodeIds, topicNodeIds, resources, action, structureMode)
+      (action) => {
+        if (token !== this.documentSessionToken || this.mutationLocked()) return;
+        void this.executeDeleteBranch(targetNodeIds, topicNodeIds, resources, action, structureMode);
+      }
     ).open();
   }
 
@@ -3222,6 +2765,8 @@ export class MindTreeView extends TextFileView {
     action: DeleteBranchAction,
     structureMode: "branch" | "node-only"
   ): Promise<void> {
+    if (this.mutationLocked()) return;
+    const token = this.documentSessionToken;
     if (action === "topics-only") {
       this.deleteTopics(targetNodeIds, structureMode);
       return;
@@ -3230,6 +2775,7 @@ export class MindTreeView extends TextFileView {
     const deletedResourceIds = new Set<string>();
     const failedPaths: string[] = [];
     for (const resource of resources) {
+      if (this.mutationLocked() || token !== this.documentSessionToken) return;
       try {
         await this.plugin.resources.trashLinkedFile(resource);
         deletedResourceIds.add(resource.resourceId);
@@ -3238,6 +2784,7 @@ export class MindTreeView extends TextFileView {
       }
     }
 
+    if (this.mutationLocked() || token !== this.documentSessionToken) return;
     if (action === "topics-and-files") {
       this.deleteTopics(targetNodeIds, structureMode);
     } else if (deletedResourceIds.size > 0) {
@@ -3283,6 +2830,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private beginEdit(nodeId: NodeId, selectionMode: "all" | "end" = "all"): void {
+    if (this.mutationLocked()) return;
     if (this.editingNodeId === nodeId) return;
     if (this.editingNodeId) {
       const previousId = this.editingNodeId;
@@ -3325,6 +2873,7 @@ export class MindTreeView extends TextFileView {
 
   /** Read the DOM value before a lifecycle operation destroys the textarea. */
   private commitVisibleEditorDraft(): void {
+    if (this.mutationLocked()) return;
     const nodeId = this.editingNodeId;
     if (!nodeId) return;
     const editor = this.nodeLayerEl?.querySelector<HTMLTextAreaElement>(
@@ -3334,6 +2883,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private finishEdit(nodeId: NodeId, value: string): void {
+    if (this.mutationLocked()) return;
     const document = this.document;
     if (this.editingNodeId !== nodeId || !document) return;
     this.keyboardAvoidanceController?.end();
@@ -3353,14 +2903,15 @@ export class MindTreeView extends TextFileView {
       return;
     }
     const previousTitle = node.title;
+    this.titleRenameNodeIds.add(nodeId);
     this.commit((draft) => renameNode(draft, nodeId, title));
     const updated = this.document?.nodes[nodeId];
     if (nodeId === this.document?.rootId && this.file) {
-      this.trackTitleFileOperation(() => this.renameTreeFileForEditedRoot(title, previousTitle));
+      this.trackTitleFileOperation(() => this.renameTreeFileForEditedRoot(title, previousTitle).finally(() => this.titleRenameNodeIds.delete(nodeId)));
     } else if (updated?.resource?.type === "file" && updated.titleSync === "bidirectional") {
       const reference = updated.resource;
-      this.trackTitleFileOperation(() => this.renameFileForEditedNode(nodeId, title, previousTitle, reference));
-    }
+      this.trackTitleFileOperation(() => this.renameFileForEditedNode(nodeId, title, previousTitle, reference).finally(() => this.titleRenameNodeIds.delete(nodeId)));
+    } else this.titleRenameNodeIds.delete(nodeId);
   }
 
   private trackTitleFileOperation(operation: () => Promise<void>): void {
@@ -3369,7 +2920,7 @@ export class MindTreeView extends TextFileView {
     const tracked = previous.catch(() => undefined).then(() => (
       session ? session.runFileOperation(operation) : operation()
     ));
-    const completed = tracked.finally(() => {
+    const completed = tracked.catch((error: unknown) => this.reportSaveFailure(error)).finally(() => {
       if (this.pendingTitleFileOperation === completed) this.pendingTitleFileOperation = undefined;
     });
     this.pendingTitleFileOperation = completed;
@@ -3377,6 +2928,7 @@ export class MindTreeView extends TextFileView {
 
   /** Cut every top-level selected branch, but never the protected root node. */
   private async cutSelected(): Promise<void> {
+    if (this.mutationLocked()) return;
     const document = this.document;
     if (!document || !this.primarySelectedId || this.cutInProgress) return;
     const sourcePath = this.file?.path;
@@ -3506,7 +3058,7 @@ export class MindTreeView extends TextFileView {
     options: Readonly<{ force?: boolean; notifyWhenEmpty?: boolean }> = {}
   ): Promise<void> {
     const document = this.document;
-    if (!document) return;
+    if (!document || this.mutationLocked() || this.file?.path !== file.path) return;
     if (!options.force && (this.scannedFilePath === file.path || document.settings.collectionMode === "off")) return;
     this.scannedFilePath = file.path;
     const candidates = this.plugin.resources.sameDirectoryCandidates(
@@ -3529,16 +3081,19 @@ export class MindTreeView extends TextFileView {
   }
 
   private async collectCandidates(files: TFile[], action: CandidateAction): Promise<void> {
+    if (this.mutationLocked()) return;
     if (!this.document) return;
+    const token = this.documentSessionToken;
     const references: Array<{ file: TFile; reference: FileResourceRef }> = [];
     for (const file of files) {
+      if (this.mutationLocked() || token !== this.documentSessionToken) return;
       try {
         references.push({ file, reference: await this.plugin.resources.ensureStableReference(file) });
       } catch (error) {
         new Notice(t("notice.skippedFile", { path: file.path, message: this.describeResourceError(error) }));
       }
     }
-    if (references.length === 0) return;
+    if (references.length === 0 || this.mutationLocked() || token !== this.documentSessionToken) return;
     this.commit((draft) => {
       let parentId = draft.rootId;
       if (action === "collect") {
@@ -3564,6 +3119,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private commit(mutator: (draft: MindTreeDocument) => void, anchorNodeId = this.document?.rootId): void {
+    if (this.mutationLocked()) return;
     this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
     if (!this.document || this.parseError) return;
     const layoutAnchor = this.captureLayoutViewportAnchor(anchorNodeId);
@@ -3584,7 +3140,7 @@ export class MindTreeView extends TextFileView {
     schedule = true
   ): boolean {
     const document = this.document;
-    if (!document || this.parseError) return false;
+    if (!document || this.parseError || this.mutationLocked()) return false;
     const draft = cloneDocument(document);
     if (!mutator(draft)) return false;
     const layoutAnchor = this.captureLayoutViewportAnchor(anchorNodeId);
@@ -3613,6 +3169,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private scheduleSave(): void {
+    if (this.mutationLocked()) return;
     const ownerWindow = this.ownerWindow();
     if (this.saveTimer !== undefined) ownerWindow.clearTimeout(this.saveTimer);
     this.saveTimer = ownerWindow.setTimeout(() => {
@@ -3769,24 +3326,6 @@ export class MindTreeView extends TextFileView {
 
 function clamp(value: number, minimum: number, maximum: number): number {
   return Math.max(minimum, Math.min(maximum, value));
-}
-
-/** Filesystem-safe local timestamp; milliseconds avoid collisions on rapid retries. */
-function recoveryTimestamp(now = new Date()): string {
-  const two = (value: number): string => value.toString().padStart(2, "0");
-  const three = (value: number): string => value.toString().padStart(3, "0");
-  return `${now.getFullYear()}${two(now.getMonth() + 1)}${two(now.getDate())}`
-    + `-${two(now.getHours())}${two(now.getMinutes())}${two(now.getSeconds())}-${three(now.getMilliseconds())}`;
-}
-
-/** Bounded key for de-duplicating invalid external payloads without retaining them. */
-function sourceFingerprint(source: string): string {
-  let hash = 0x811c9dc5;
-  for (let index = 0; index < source.length; index += 1) {
-    hash ^= source.charCodeAt(index);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `${source.length}:${(hash >>> 0).toString(16)}`;
 }
 
 function deduplicateFiles(files: TFile[]): TFile[] {

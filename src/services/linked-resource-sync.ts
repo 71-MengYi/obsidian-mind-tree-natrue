@@ -22,7 +22,8 @@ export interface ResolvedLinkedFile {
  */
 export function reconcileLinkedFileReferences(
   document: MindTreeDocument,
-  resolve: (reference: FileResourceRef) => ResolvedLinkedFile | undefined
+  resolve: (reference: FileResourceRef) => ResolvedLinkedFile | undefined,
+  pendingTitleRenames: ReadonlySet<string> = new Set()
 ): boolean {
   let changed = false;
   for (const node of Object.values(document.nodes)) {
@@ -41,7 +42,7 @@ export function reconcileLinkedFileReferences(
     // A host link rewrite can reload stale compressed node data after the rename
     // event already rendered the new title. Re-derive bidirectional titles here
     // so that every load/save boundary closes that race before old data is shown.
-    if (node.titleSync === "bidirectional") {
+    if (node.titleSync === "bidirectional" && !pendingTitleRenames.has(node.id)) {
       const canonicalTitle = linkedFileTitle(file.path);
       if (node.title !== canonicalTitle) {
         renameNode(document, node.id, canonicalTitle);

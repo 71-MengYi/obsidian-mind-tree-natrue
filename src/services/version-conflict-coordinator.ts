@@ -31,6 +31,7 @@ export interface VersionConflictPorts {
   endWrite: (source: string) => void;
   changed: () => void;
   resolved: (result: VersionChoiceResult) => void;
+  restored: (document: MindTreeDocument, baseline: string) => void;
   createId: () => string;
 }
 
@@ -69,6 +70,7 @@ export class VersionConflictCoordinator {
     this.record = record;
     this.current = createManagedMindTreeSnapshot(record.currentSource, this.ports.options()).document;
     this.durable = true;
+    this.ports.restored(cloneDocument(this.current), record.baselineSource);
     this.ports.changed();
     // A crash after the verified write but before cleanup is not a new choice.
     // A prepared receipt is sufficient only if disk actually matches it.
@@ -134,7 +136,7 @@ export class VersionConflictCoordinator {
         const source = await this.ports.read();
         if (sequence !== this.readSequence) continue;
         const result = assessExternalVersion(this.record.baselineSource, this.current, source, this.ports.options());
-        this.external = result.kind === "unchanged" ? result.external : result.external;
+        this.external = result.external;
         this.error = result.kind === "blocked" ? result.message : undefined;
       } catch (error) {
         if (sequence !== this.readSequence) continue;
@@ -153,7 +155,7 @@ export class VersionConflictCoordinator {
   }
 
   async settle(): Promise<void> {
-    await this.stage;
+    await this.stage?.catch(() => undefined);
     if (this.record && !this.durable) await this.persist();
   }
 

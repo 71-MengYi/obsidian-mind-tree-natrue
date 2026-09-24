@@ -144,12 +144,17 @@ function resolveResourceBadgesFromLookups(
   if (specialBadges.length > 0) return specialBadges;
 
   const resource = node.resource;
-  if (resource?.type !== "file" || isMarkdownPath(resource.pathHint)) return [];
+  if (resource?.type !== "file") return [];
   const extension = deriveFileBadgeExtension(resource.pathHint);
   if (!extension) return [];
   const candidates = fileBadgeExtensionCandidates(extension);
   if (candidates.some((candidate) => ignored.has(candidate))) return [];
   const alias = candidates.map((candidate) => aliases.get(candidate)).find((value) => value !== undefined);
+  // Markdown is opt-in, not excluded from rule matching: plugin.md can use a
+  // specific alias and ordinary notes can use an md alias. Without a matching
+  // alias, preserve their existing badge-free appearance instead of adding MD.
+  // Dedicated mind-tree/drawing badges have already returned above.
+  if (alias === undefined && isMarkdownPath(resource.pathHint)) return [];
   return [{ kind: "extension", label: alias ?? extension.toUpperCase() }];
 }
 

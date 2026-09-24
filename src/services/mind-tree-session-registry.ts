@@ -56,6 +56,8 @@ export class SharedMindTreeSession {
   conflict?: VersionConflictCoordinator;
   restoring = false;
   restoreError?: string;
+  restoreTask?: Promise<void>;
+  pendingRestoreChecked = false;
   private resolvedDraft?: VersionChoiceResult["draft"];
   private fileOperationTail: Promise<void> = Promise.resolve();
 
@@ -193,17 +195,29 @@ export class SharedMindTreeSession {
   /** Publish conflict state even to the view that detected it; no focus transfer. */
   notifyConflict(): void { this.notify("status"); }
 
+  /** Restart restoration replaces a disk-loaded cache, never an active edit. */
+  restoreFrozenVersion(document: MindTreeDocument, baseline: string): void {
+    this._document = document;
+    this._source = baseline;
+    this._parseError = undefined;
+    this._initialized = true;
+    this.history.load(baseline);
+    this.history.markChanged();
+    this.notify("source");
+  }
+
   acceptVersion(result: VersionChoiceResult): void {
     const previous = this._document;
     if (result.choice === "external") this.history.load(result.source);
     else if (previous && result.draft) {
       // Add the confirmed draft to the existing linear history exactly once.
-      this.history.execute(previous, () => undefined);
+      this.history.retainConfirmedSnapshot(previous);
       this.history.markChanged();
     }
     this._document = result.document;
     this._source = result.source;
     this._parseError = undefined;
+    this._initialized = true;
     this.history.markSaved(this.history.currentRevision, result.source);
     this.titleDraft = undefined;
     this.activeEditorId = undefined;

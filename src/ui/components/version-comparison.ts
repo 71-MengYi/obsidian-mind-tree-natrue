@@ -15,7 +15,7 @@ function settingDescription(key: keyof MindTreeDocumentSettings, settings: MindT
     connectionStyle: CONNECTION_OPTIONS, collectionMode: COLLECTION_MODE_OPTIONS };
   if (key === "recursiveScan") return `${t("conflict.recursiveScan")}: ${settings[key] ? t("conflict.yes") : t("conflict.no")}`;
   const item = catalogs[key].find((item) => item.value === settings[key]);
-  const names = { layoutMode: "viewSettings.layout", theme: "viewSettings.theme", nodeShape: "viewSettings.nodeShape",
+  const names = { layoutMode: "settings.layout.name", theme: "viewSettings.theme", nodeShape: "viewSettings.nodeShape",
     connectionStyle: "viewSettings.connectionStyle", collectionMode: "settings.scan.name" } as const;
   return `${t(names[key])}: ${item ? t(item.label) : settings[key]}`;
 }

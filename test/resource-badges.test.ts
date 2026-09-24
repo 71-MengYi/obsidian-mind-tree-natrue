@@ -4,6 +4,7 @@ import { addNode, createEmptyDocument } from "../src/domain/tree";
 import { renderOutline } from "../src/format/outline";
 import { renderBranchSvg } from "../src/services/export";
 import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
+import { layoutTree } from "../src/ui/layout";
 import {
   createResourceBadgePresentation,
   deriveFileBadgeExtension,
@@ -145,7 +146,7 @@ test("shortened suffixes share ignore and alias precedence without mutating save
   assert.deepEqual(document, originalDocument);
 });
 
-test("ordinary Markdown has no extension badge and special Markdown types keep only dedicated badges", () => {
+test("Markdown without an alias has no extension badge and special types keep dedicated badges", () => {
   const document = createEmptyDocument("Badges");
   const node = addNode(document, document.rootId, "Linked");
   node.resource = { type: "file", resourceId: "note", pathHint: "notes/Linked.md", fileKind: "note" };
@@ -161,6 +162,112 @@ test("ordinary Markdown has no extension badge and special Markdown types keep o
   assert.deepEqual(resolveResourceBadges(node, emptyRules, labels), [
     { kind: "excalidraw", label: "绘图" }
   ]);
+});
+
+test("Markdown aliases are opt-in and accept normalized md rule keys", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "笔记");
+  node.resource = { type: "file", resourceId: "note", pathHint: "notes/笔记.MD", fileKind: "note" };
+  const originalDocument = structuredClone(document);
+  for (const key of ["md", ".MD", " .mD "]) {
+    const rules = { ...emptyRules, fileExtensionBadgeAliases: { [key]: "笔记" } };
+    const expected = [{ kind: "extension", label: "笔记" }];
+    assert.deepEqual(resolveResourceBadges(node, rules, labels), expected);
+    assert.deepEqual(createResourceBadgePresentation(rules, labels).resolve(node), expected);
+  }
+  for (const rules of [emptyRules, { ...emptyRules, fileExtensionBadgeAliases: { pdf: "附件", md: "   " } }]) {
+    assert.deepEqual(resolveResourceBadges(node, rules, labels), []);
+    assert.deepEqual(createResourceBadgePresentation(rules, labels).resolve(node), []);
+  }
+  assert.deepEqual(document, originalDocument, "Badge rules must not change the note's identity or classification");
+});
+
+test("compound Markdown aliases prefer the full suffix before falling back to md", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "笔记");
+  node.resource = { type: "file", resourceId: "plugin-note", pathHint: "notes/笔记.Plugin.MD", fileKind: "note" };
+  assert.equal(deriveFileBadgeExtension(node.resource.pathHint), "plugin.md");
+  assert.deepEqual(fileBadgeExtensionCandidates("PLUGIN.MD"), ["plugin.md", "md"]);
+  const cases: ReadonlyArray<readonly [FileBadgeRules, string | undefined]> = [
+    [{ ...emptyRules, fileExtensionBadgeAliases: { ".PLUGIN.md": "插件文件", md: "笔记" } }, "插件文件"],
+    [{ ...emptyRules, fileExtensionBadgeAliases: { md: "笔记" } }, "笔记"],
+    [{ ...emptyRules, fileExtensionBadgeAliases: { "plugin.md": "插件文件" } }, "插件文件"],
+    [{ ...emptyRules, fileExtensionBadgeAliases: { plugin: "不匹配" } }, undefined],
+    [emptyRules, undefined]
+  ];
+  for (const [rules, alias] of cases) {
+    const expected = alias === undefined ? [] : [{ kind: "extension", label: alias }];
+    assert.deepEqual(resolveResourceBadges(node, rules, labels), expected);
+    assert.deepEqual(createResourceBadgePresentation(rules, labels).resolve(node), expected);
+  }
+});
+
+test("Markdown ignore rules take precedence over both full and final-suffix aliases", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "Linked");
+  node.resource = { type: "file", resourceId: "note", pathHint: "notes/Linked.plugin.md", fileKind: "note" };
+  for (const ignored of [".MD", ".Plugin.MD"]) {
+    const rules: FileBadgeRules = {
+      ignoredFileBadgeExtensions: [ignored],
+      fileExtensionBadgeAliases: { "plugin.md": "插件文件", md: "笔记" }
+    };
+    assert.deepEqual(resolveResourceBadges(node, rules, labels), []);
+    assert.deepEqual(createResourceBadgePresentation(rules, labels).resolve(node), []);
+  }
+  node.resource.pathHint = "notes/Linked.md";
+  assert.deepEqual(resolveResourceBadges(node, {
+    ignoredFileBadgeExtensions: [".MD"], fileExtensionBadgeAliases: { md: "笔记" }
+  }, labels), []);
+});
+
+test("dedicated mind-tree and drawing badges override Markdown aliases and ignore rules", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "Linked");
+  const rules: FileBadgeRules = {
+    ignoredFileBadgeExtensions: ["md", "mtn.md", "excalidraw.md"],
+    fileExtensionBadgeAliases: { md: "笔记", "mtn.md": "自定义导图", "excalidraw.md": "自定义绘图" }
+  };
+  const presentation = createResourceBadgePresentation(rules, labels);
+  node.resource = { type: "file", resourceId: "tree", pathHint: "trees/Linked.mtn.md", fileKind: "note" };
+  assert.deepEqual(resolveResourceBadges(node, rules, labels), [{ kind: "mind-tree", label: "思维树" }]);
+  assert.deepEqual(presentation.resolve(node), [{ kind: "mind-tree", label: "思维树" }]);
+  node.resource.fileSubtype = "excalidraw";
+  for (const path of ["drawings/Linked.md", "drawings/Linked.excalidraw.md"]) {
+    node.resource.pathHint = path;
+    assert.deepEqual(resolveResourceBadges(node, rules, labels), [{ kind: "excalidraw", label: "绘图" }]);
+    assert.deepEqual(presentation.resolve(node), [{ kind: "excalidraw", label: "绘图" }]);
+  }
+});
+
+test("Markdown aliases add only measured badge width and never modify persisted data", () => {
+  const document = createEmptyDocument("Export");
+  const node = addNode(document, document.rootId, "Linked");
+  node.resource = { type: "file", resourceId: "note", pathHint: "notes/Linked.plugin.md", fileKind: "note" };
+  const originalDocument = structuredClone(document);
+  const originalOutline = renderOutline(document);
+  const measurer: ResourceBadgeMeasurer = { measure: () => ({ width: 28, height: 16 }) };
+  const hidden = createResourceBadgePresentation(emptyRules, labels, measurer);
+  const visible = createResourceBadgePresentation({
+    ...emptyRules, fileExtensionBadgeAliases: { "plugin.md": "插件文件" }
+  }, labels, measurer);
+  const position = (presentation: ReturnType<typeof createResourceBadgePresentation>) =>
+    layoutTree(document, document.rootId, true, 240, "right", "level", fallbackNodeTextMeasurer, presentation)
+      .nodes.find((position) => position.id === node.id)!;
+  const before = position(hidden);
+  const after = position(visible);
+  assert.equal(after.width - before.width, 30, "The measured badge and its 2px gap are the only added space");
+  assert.equal(after.contentWidth, before.contentWidth, "The title's text region stays unchanged");
+  assert.equal(after.height, before.height);
+  assert.equal(after.x, before.x, "Badge width must not shift the title anchor");
+  assert.deepEqual(position(hidden), before, "Removing the alias immediately restores compact geometry");
+  const svg = renderBranchSvg(
+    document, document.rootId, 240, "right", "theme", "vibrant", "rounded", "level",
+    undefined, fallbackNodeTextMeasurer, visible
+  );
+  assert.match(svg, /class="mtn-extension-marker"/);
+  assert.match(svg, />插件文件<\/text>/);
+  assert.deepEqual(document, originalDocument);
+  assert.equal(renderOutline(document), originalOutline);
 });
 
 test("marker geometry uses measured badge boxes and adds gaps only for visible items", () => {

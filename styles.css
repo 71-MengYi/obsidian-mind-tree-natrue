@@ -25,6 +25,26 @@
   pointer-events: none !important;
 }
 
+.mtn-version-comparison {
+  height: 100%; display: flex; flex-direction: column; min-width: 0;
+  color: var(--text-normal); background: var(--background-primary);
+}
+.mtn-version-heading { padding: 10px 14px; border-bottom: 1px solid var(--background-modifier-border); font-size: var(--font-ui-small); }
+.mtn-version-heading > div { margin-top: 4px; color: var(--text-muted); }
+.mtn-version-status { min-height: 1.4em; }
+.mtn-version-panes { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+.mtn-version-pane { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.mtn-version-pane.is-external { border-left: 1px solid var(--background-modifier-border); }
+.mtn-version-pane > h3 { margin: 0; padding: 10px; font-size: var(--font-ui-medium); }
+.mtn-version-settings { padding: 0 10px 8px; font-size: var(--font-ui-smaller); color: var(--text-muted); overflow-wrap: anywhere; }
+.mtn-version-pane > .mtn-version-tree { flex: 1; min-height: 0; height: auto; }
+.mtn-version-tree .mtn-canvas { cursor: grab; }
+.mtn-version-tree .mtn-resource-open:disabled { opacity: 1; pointer-events: none; }
+.mtn-version-keep { position: absolute; top: 50%; z-index: 20; white-space: normal; max-width: calc(100% - 16px); }
+.is-current > .mtn-version-keep { right: 8px; }
+.is-external > .mtn-version-keep { left: 8px; }
+.mtn-view[hidden] { display: none !important; }
+
 .mtn-view {
   --mtn-toolbar-height: 42px;
   --mtn-theme-root-accent: #6366f1;
@@ -1314,18 +1334,6 @@
 .mtn-view.is-readonly .mtn-save-button,
 .mtn-view.is-readonly .mtn-history-button { opacity: 0.55; pointer-events: none; }
 .mtn-modal-input { width: 100%; }
-
-.mtn-recovery-reminder-paths {
-  max-height: min(40vh, 320px);
-  overflow: auto;
-  padding-inline-start: 24px;
-}
-
-.mtn-recovery-reminder-paths > li {
-  overflow-wrap: anywhere;
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-smaller);
-}
 
 /* Text import intentionally favors source readability over a compact prompt:
    users must be able to inspect indentation before selecting a parser. */

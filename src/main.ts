@@ -7,6 +7,8 @@ import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
 import { PendingConflictStore } from "./services/pending-conflict-store";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
+import { MindTreeOpenCoordinator } from "./services/mind-tree-open-coordinator";
+import { canonicalTreePath } from "./services/pending-conflict-store";
 import { normalizePluginData, type PluginData } from "./plugin-data";
 import { DEFAULT_SETTINGS, MindTreeSettingTab, type MindTreeSettings } from "./settings";
 import {
@@ -26,7 +28,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   /** Every open leaf of the same file shares one document/history/write queue. */
   readonly mindTreeSessions = new MindTreeSessionRegistry();
   pendingConflicts!: PendingConflictStore;
-  private switchingFilePath?: string;
+  private openCoordinator!: MindTreeOpenCoordinator<WorkspaceLeaf>;
   private pendingActivationTimer?: number;
   private resourceIndexData: Record<string, IndexedResource> = {};
   private dataSaveTimer?: number;
@@ -247,6 +249,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       process: (transform) => this.app.vault.process(requireFile(), transform),
       beginWrite: (source) => session.beginWrite(source), endWrite: (source) => session.endWrite(source),
       changed: () => session.notifyConflict(), resolved: (result) => session.acceptVersion(result),
+      restored: (document, baseline) => session.restoreFrozenVersion(document, baseline),
       createId: () => crypto.randomUUID()
     });
     return session.conflict;
@@ -295,7 +298,10 @@ export default class MindTreeNaturePlugin extends Plugin {
       });
     };
     try {
-      if (sharedSession) await sharedSession.runFileOperation(writeIdentity);
+      if (sharedSession) await sharedSession.runFileOperation(() => sharedSession.history.runExclusiveWrite(async () => {
+        if (sharedSession.mutationLocked) throw new Error(t("status.saveConflict"));
+        await writeIdentity();
+      }));
       else await writeIdentity();
 
       const verifiedSource = await this.app.vault.read(this.app.vault.getFileByPath(file.path) ?? file);
@@ -334,21 +340,52 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   private registerDirectOpenRouting(): void {
+    const plugin = this;
+    this.openCoordinator = new MindTreeOpenCoordinator({
+      findExisting: (path, requested) => {
+        let match: WorkspaceLeaf | undefined;
+        this.app.workspace.iterateAllLeaves((leaf) => {
+          if (!match && leaf !== requested && leaf.getViewState().type === MIND_TREE_VIEW_TYPE
+            && canonicalTreePath(this.getLeafFilePath(leaf) ?? "") === path) match = leaf;
+        });
+        return match;
+      },
+      reveal: (leaf) => this.app.workspace.revealLeaf(leaf),
+      discardRedirected: (requested, winner, path) => {
+        if (requested === winner) return;
+        const state = requested.getViewState();
+        // Never close a reused leaf containing some other document. Empty
+        // request leaves and restored duplicates contain no distinct user work.
+        if (state.type === "empty" || (["markdown", MIND_TREE_VIEW_TYPE].includes(state.type)
+          && canonicalTreePath(this.getLeafFilePath(requested) ?? "") === path)) requested.detach();
+      }
+    });
     this.register(around(WorkspaceLeaf.prototype, {
+      openFile(next: WorkspaceLeaf["openFile"]) {
+        return function (this: WorkspaceLeaf, file: TFile, ...rest: Parameters<WorkspaceLeaf["openFile"]> extends [TFile, ...infer R] ? R : never) {
+          if (!isMindTreePath(file.path)) return next.apply(this, [file, ...rest]);
+          return plugin.openCoordinator.open(file.path, this, () => next.apply(this, [file, ...rest]), rest[0]?.active !== false)
+            .then(() => undefined);
+        };
+      },
       setViewState(next: WorkspaceLeaf["setViewState"]) {
         return function (
           this: WorkspaceLeaf,
           viewState: ViewState,
           ...rest: [ViewStateResult?]
         ): ReturnType<WorkspaceLeaf["setViewState"]> {
-          return next.apply(this, [routeMindTreeViewState(viewState), ...rest]);
+          const routed = routeMindTreeViewState(viewState);
+          const path = routed.state?.["file"];
+          if (routed.type !== MIND_TREE_VIEW_TYPE || typeof path !== "string"
+            || plugin.openCoordinator.isOpening(path, this)) return next.apply(this, [routed, ...rest]);
+          return plugin.openCoordinator.open(path, this, () => next.apply(this, [routed, ...rest]), routed.active === true)
+            .then(() => undefined);
         };
       }
     }));
   }
 
   async activateMindTree(file: TFile, preferredLeaf?: WorkspaceLeaf): Promise<void> {
-    if (this.switchingFilePath === file.path) return;
     const existing = this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)
       .find((leaf) => this.getLeafFilePath(leaf) === file.path);
     if (existing) {
@@ -357,13 +394,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     }
     const leaf = preferredLeaf ?? this.app.workspace.getMostRecentLeaf() ?? this.app.workspace.getLeaf("tab");
     if (leaf.getViewState().type === MIND_TREE_VIEW_TYPE && this.getLeafFilePath(leaf) === file.path) return;
-    this.switchingFilePath = file.path;
-    try {
-      await leaf.setViewState({ type: MIND_TREE_VIEW_TYPE, state: { file: file.path }, active: true });
-      await this.app.workspace.revealLeaf(leaf);
-    } finally {
-      this.switchingFilePath = undefined;
-    }
+    await leaf.setViewState({ type: MIND_TREE_VIEW_TYPE, state: { file: file.path }, active: true });
   }
 
   private async activateMindTreeLeaf(leaf: WorkspaceLeaf | null): Promise<void> {
