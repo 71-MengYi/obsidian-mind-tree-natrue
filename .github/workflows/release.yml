@@ -1,0 +1,135 @@
+name: Release
+
+# 推送形如 1.2.0 的标签时，自动构建并发布 Release（附带 main.js、manifest.json、styles.css）：
+#
+#   git tag -a 1.2.0 -m "1.2.0"
+#   git push origin 1.2.0
+#
+# 也可以在仓库的 Actions 页面手动触发（workflow_dispatch），为已存在的标签补发 Release。
+#
+# 为什么规则这么严：插件内置更新器（src/services/updates/release-client.ts）和 BRAT 都固定
+# 读取 releases/latest，并要求
+#   1. 该 release 不是草稿、不是预发布（否则 releases/latest 会跳过它）；
+#   2. tag 名严格是 X.Y.Z，且与 manifest.json 里的 version 完全一致（不接受 v 前缀、后缀）；
+#   3. main.js、manifest.json、styles.css 三个资产各恰好出现一次，且带 sha256 digest。
+# 所以工作流先建草稿、传完三个资产后再发布，避免出现"已发布但资产不全"的坏版本。
+
+on:
+  push:
+    tags:
+      - "*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的标签名（例如 1.1.1），用于补发或重发 Release"
+        required: true
+        type: string
+
+# 创建 Release 需要写权限。
+permissions:
+  contents: write
+
+# 同一个标签的并发运行排队而不是互相取消，避免两个运行同时改一个 Release。
+concurrency:
+  group: release-${{ inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      # push 事件用推送的标签名；手动触发用输入的标签名。
+      RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+
+      # 发布用的代码取自标签本身；但自检脚本要取默认分支上的最新版，
+      # 否则补发旧标签时会因为当时的提交里还没有这个脚本而失败。
+      - name: Checkout release tooling
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+          path: .release-tools
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Preflight（标签与 manifest.json 必须一致）
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          if [[ ! "$tag" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]]; then
+            echo "::error::标签 '$tag' 不是 X.Y.Z 形式。插件更新器只接受严格三段版本号，不能带 v 前缀或 -beta 之类的后缀。"
+            exit 1
+          fi
+          version="$(node --input-type=commonjs -p "require('./manifest.json').version")"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::标签是 $tag，但 manifest.json 里写的是 $version。发布前请把两者改成一致并提交推送。"
+            exit 1
+          fi
+          node --input-type=commonjs -e '
+            const versions = require("./versions.json");
+            const tag = process.argv[1];
+            if (versions[tag]) console.log(`versions.json 已包含 ${tag} -> ${versions[tag]}`);
+            else console.log(`::warning::versions.json 里没有 ${tag} 条目，提交到 Obsidian 社区目录时需要补上。`);
+          ' "$tag"
+          echo "### Release $tag" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Check artifacts（三个文件齐全且未超插件体积上限）
+        run: |
+          set -euo pipefail
+          for file in main.js manifest.json styles.css; do
+            if [ ! -s "$file" ]; then
+              echo "::error::$file 缺失或为空，构建没有产出可发布的文件。"
+              exit 1
+            fi
+            printf '%-14s %9s bytes\n' "$file" "$(stat -c%s "$file")"
+          done
+          # 构建出来的是不是真的插件包（防止把占位文件发出去）。
+          grep -q 'mind-tree-nature' main.js
+          # 与 release-client.ts 的 UPDATE_LIMITS 保持一致。
+          test "$(stat -c%s manifest.json)" -le 65536
+          test "$(stat -c%s main.js)" -le 10485760
+          test "$(stat -c%s styles.css)" -le 2097152
+
+      - name: Publish release（先草稿，后发布）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$RELEASE_TAG"
+          if gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "标签 $tag 已有 Release：先改回草稿再覆盖三个资产。"
+            gh release edit "$tag" -R "$GITHUB_REPOSITORY" --draft --title "$tag"
+            gh release upload "$tag" -R "$GITHUB_REPOSITORY" --clobber main.js manifest.json styles.css
+          else
+            gh release create "$tag" -R "$GITHUB_REPOSITORY" \
+              --title "$tag" --draft --verify-tag --generate-notes \
+              main.js manifest.json styles.css
+          fi
+          # 三个资产都传完了，才让这个版本对外可见。
+          gh release edit "$tag" -R "$GITHUB_REPOSITORY" --draft=false
+          # 显式标记为 Latest（插件读的就是 releases/latest）。
+          gh release edit "$tag" -R "$GITHUB_REPOSITORY" --latest \
+            || echo "::warning::未能显式标记为 Latest，请到 Releases 页面确认该版本显示为 Latest。"
+          gh release view "$tag" -R "$GITHUB_REPOSITORY"
+
+      - name: Verify published release（按插件更新器的规则自检）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node .release-tools/.github/scripts/verify-release.mjs "$RELEASE_TAG"
