@@ -1,9 +1,9 @@
 {
   "id": "mind-tree-nature",
   "name": "Mind Tree Nature",
-  "version": "0.1.0",
+  "version": "1.1.0",
   "minAppVersion": "1.8.7",
-  "description": "Organize notes, files, and links in an offline-first mind tree backed by readable Markdown and YAML.",
-  "author": "Meng Yi",
+  "description": "让你的笔记结构随思维自然成型。",
+  "author": "蒙毅",
   "isDesktopOnly": false
 }

@@ -10,6 +10,7 @@ export class SettingsPersistence<T> {
   private retry?: ReturnType<typeof setTimeout>;
   private retryAttempt = 0;
   private readFailed = false;
+  private lastFailure?: unknown;
 
   constructor(private readonly ports: {
     read(): Promise<T>;
@@ -33,10 +34,12 @@ export class SettingsPersistence<T> {
         const value = await this.ports.read();
         if (this.disposed || generation !== this.generation) return;
         this.readFailed = false;
+        this.lastFailure = undefined;
         this.ports.apply(value);
       } catch (error) {
         if (generation !== this.generation || this.disposed) return;
         this.readFailed = true;
+        this.lastFailure = error;
         this.ports.failed(error, "read");
       }
     });
@@ -61,9 +64,11 @@ export class SettingsPersistence<T> {
         }
         await this.ports.write(value);
         this.retryAttempt = 0;
+        this.lastFailure = undefined;
       } catch (error) {
         if (this.disposed || generation !== this.generation) return;
         this.ports.failed(error, "write");
+        this.lastFailure = error;
         const delay = Math.min(30_000, 1000 * 2 ** Math.min(this.retryAttempt++, 5));
         this.retry = setTimeout(() => {
           this.retry = undefined;
@@ -77,6 +82,15 @@ export class SettingsPersistence<T> {
     if (this.retry !== undefined) clearTimeout(this.retry);
     this.retry = undefined;
     this.retryAttempt = 0;
+  }
+
+  /** Unlike ordinary UI saves, update preparation must observe failed writes. */
+  async flush(): Promise<void> {
+    let tail: Promise<unknown>;
+    do { tail = this.tail; await tail; } while (tail !== this.tail);
+    if (this.disposed || this.readFailed || this.lastFailure || this.retry !== undefined) {
+      throw this.lastFailure ?? new Error("Settings have not been saved.");
+    }
   }
 
   destroy(): void {

@@ -3,6 +3,7 @@ import { t, type TranslationKey } from "./i18n";
 import type MindTreeNaturePlugin from "./main";
 import type { ResourceIndexProgress } from "./services/resource-catalog";
 import { BasicSettingsPage, MindMapSettingsPage, TopicNoteSettingsPage } from "./ui/settings-pages";
+import type { SettingsPageObject } from "./ui/settings-pages/ports";
 export { DEFAULT_SETTINGS } from "./settings-model";
 export type { MindTreeSettings } from "./settings-model";
 
@@ -22,12 +23,14 @@ export class MindTreeSettingTab extends PluginSettingTab {
   private activePage: SettingsPage = "basic";
   private externalRefreshPending = false;
   private deferredRefreshCleanup?: () => void;
+  private page?: SettingsPageObject;
 
   constructor(app: App, private readonly plugin: MindTreeNaturePlugin) {
     super(app, plugin);
   }
 
   display(): void {
+    this.page?.destroy?.();
     const { containerEl } = this;
     containerEl.empty();
     containerEl.addClass("mtn-settings");
@@ -39,11 +42,12 @@ export class MindTreeSettingTab extends PluginSettingTab {
       settings: this.plugin.settings,
       save: () => this.plugin.saveSettings(),
       refreshOpenLayouts: () => this.plugin.refreshOpenMindTreeLayouts(),
-      rebuildResourceIndex: (progress?: (value: ResourceIndexProgress) => void) => this.plugin.rebuildResourceIndex(progress)
+      rebuildResourceIndex: (progress?: (value: ResourceIndexProgress) => void) => this.plugin.rebuildResourceIndex(progress),
+      updates: this.plugin.updates
     };
-    if (this.activePage === "basic") new BasicSettingsPage(panel, port);
-    else if (this.activePage === "mind-map") new MindMapSettingsPage(panel, port);
-    else new TopicNoteSettingsPage(panel, port);
+    if (this.activePage === "basic") this.page = new BasicSettingsPage(panel, port);
+    else if (this.activePage === "mind-map") this.page = new MindMapSettingsPage(panel, port);
+    else this.page = new TopicNoteSettingsPage(panel, port);
   }
 
   /** Do not replace an input (or its IME composition) while a user is typing. */
@@ -69,6 +73,8 @@ export class MindTreeSettingTab extends PluginSettingTab {
   }
 
   hide(): void {
+    this.page?.destroy?.();
+    this.page = undefined;
     this.deferredRefreshCleanup?.();
     this.externalRefreshPending = false;
   }

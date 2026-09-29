@@ -14,6 +14,8 @@ import { DEFAULT_NODE_WRAP_WIDTH } from "./ui/layout";
 
 /** Persisted cross-tree preferences, kept free of Obsidian UI dependencies. */
 export interface MindTreeSettings {
+  /** Explicit opt-in; checks never install code without a user click. */
+  autoCheckUpdates: boolean;
   templateFolder: string;
   newNoteFolder: string;
   newNoteDefaultContent: string;
@@ -38,6 +40,7 @@ export interface MindTreeSettings {
 }
 
 export const DEFAULT_SETTINGS: MindTreeSettings = {
+  autoCheckUpdates: false,
   templateFolder: "",
   newNoteFolder: "",
   newNoteDefaultContent: "",

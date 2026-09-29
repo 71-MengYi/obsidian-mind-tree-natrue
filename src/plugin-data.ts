@@ -32,6 +32,7 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
   const legacyCollectionMode = settings?.["defaultCollectionMode"] ?? settings?.["scanSameFolder"];
   return {
     settings: {
+      autoCheckUpdates: safeBoolean(settings?.["autoCheckUpdates"], DEFAULT_SETTINGS.autoCheckUpdates),
       templateFolder: safeVaultDirectory(settings?.["templateFolder"], DEFAULT_SETTINGS.templateFolder),
       newNoteFolder: safeVaultDirectory(settings?.["newNoteFolder"], DEFAULT_SETTINGS.newNoteFolder),
       newNoteDefaultContent: normalizeNewNoteDefaultContent(settings?.["newNoteDefaultContent"]),

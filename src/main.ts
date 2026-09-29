@@ -1,4 +1,4 @@
-import { addIcon, normalizePath, Notice, Plugin, removeIcon, TFile, WorkspaceLeaf, type ViewState, type ViewStateResult } from "obsidian";
+import { addIcon, normalizePath, Notice, Platform, Plugin, removeIcon, requestUrl, requireApiVersion, TFile, WorkspaceLeaf, type ViewState, type ViewStateResult } from "obsidian";
 import { around } from "monkey-around";
 import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile } from "./format/document";
 import { t } from "./i18n";
@@ -23,6 +23,13 @@ import { MindTreeView } from "./ui/mind-tree-view";
 import { CreateMindTreeModal, TextPromptModal } from "./ui/modals";
 import { LAYOUT_OPTIONS } from "./ui/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
+import { ReleaseClient, UpdateError } from "./services/updates/release-client";
+import { UpdateStore } from "./services/updates/update-store";
+import { UpdateCoordinator, updateRuntime } from "./services/updates/update-coordinator";
+import { PluginReloadBridge } from "./services/updates/plugin-reload-bridge";
+import { WorkspaceUpdateHost, type UpdateViewParticipant } from "./services/updates/workspace-update-host";
+import { UpdateActivity } from "./services/updates/update-activity";
+import { updateMessage } from "./services/updates/update-messages";
 
 export default class MindTreeNaturePlugin extends Plugin {
   settings: MindTreeSettings = structuredClone(DEFAULT_SETTINGS);
@@ -37,9 +44,19 @@ export default class MindTreeNaturePlugin extends Plugin {
   private settingsPersistence!: SettingsPersistence<MindTreeSettings>;
   private settingTab?: MindTreeSettingTab;
   private unloading = false;
+  readonly updateRuntime = updateRuntime(this.app);
+  updates!: UpdateCoordinator;
+  /** Internal readiness handshake, checked by the reload compatibility adapter. */
+  updateReady = false;
+  private readonly updateActivity = new UpdateActivity();
+  private updateUnloadTask: Promise<void> = Promise.resolve();
+  private coreInitialized = false;
 
 
   async onload(): Promise<void> {
+    if (!await this.initializeUpdater()) return;
+    this.coreInitialized = true;
+    this.register(this.updateActivity.observe(this, ["createMindTree", "writeMindTreeDocumentId"]));
     this.settingsPersistence = new SettingsPersistence({
       read: async () => {
         const raw: unknown = await this.loadData();
@@ -86,6 +103,11 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.scheduleResourceCacheSave();
     }, () => this.settings.nonMarkdownIdSeparator, (file, documentId, expectedDocumentId) =>
       this.writeMindTreeDocumentId(file, documentId, expectedDocumentId));
+    this.register(this.updateActivity.observe(this.resources, [
+      "ensureStableReference", "ensureStableReferences", "createNote", "createFileFromTemplate",
+      "discardTemplateFile", "importExternalFile", "importClipboardImage", "renameLinkedFile",
+      "moveLinkedFile", "trashLinkedFile"
+    ]));
     addIcon(SHARE_SQUARE_ICON, SHARE_SQUARE_ICON_SVG);
     this.register(() => removeIcon(SHARE_SQUARE_ICON));
     addIcon(CHAIN_BROKEN_ICON, CHAIN_BROKEN_ICON_SVG);
@@ -177,6 +199,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     }));
 
     this.app.workspace.onLayoutReady(() => {
+      this.updates.startup(this.settings.autoCheckUpdates);
       void this.rebuildResourceIndex().catch((error: unknown) => this.reportIndexFailure(error));
       void this.reportUnlocatedPendingVersions();
       void this.deduplicateRestoredMindTrees();
@@ -227,10 +250,14 @@ export default class MindTreeNaturePlugin extends Plugin {
       }));
       void this.activateMindTreeLeaf(this.app.workspace.getMostRecentLeaf());
     });
+    this.updateReady = true;
   }
 
   onunload(): void {
     this.unloading = true;
+    this.updateReady = false;
+    this.updates?.dispose();
+    if (!this.coreInitialized) return;
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
     if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
     // Only a disposable local cache is flushed at unload, never old user settings.
@@ -241,7 +268,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     // The index must outlive a title draft's final filename synchronization.
     // The public unload hook is synchronous, so retain services until the views'
     // existing idempotent flush completes, then release the scanner.
-    void Promise.allSettled(leaves.map(async (leaf) => {
+    this.updateUnloadTask = Promise.allSettled(leaves.map(async (leaf) => {
       try {
         if (leaf.view instanceof MindTreeView) await leaf.view.prepareForPluginUnload();
         leaf.detach();
@@ -252,6 +279,74 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.resourceCache?.save(this.resources?.entries() ?? []);
       this.resources?.destroy();
     });
+  }
+
+  waitForUpdateUnload(): Promise<void> { return this.updateUnloadTask; }
+
+  /** Initialize update recovery before any document sessions or async writers. */
+  private async initializeUpdater(): Promise<boolean> {
+    const directory = normalizePath(this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`);
+    const clientKey = `${this.manifest.id}:update-client`;
+    const pointerKey = `${this.manifest.id}:update-transaction`;
+    let clientId: unknown;
+    let storageError: UpdateError | undefined;
+    try { clientId = this.app.loadLocalStorage(clientKey); }
+    catch { storageError = new UpdateError("storage", directory); }
+    if (typeof clientId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(clientId)) {
+      clientId = crypto.randomUUID();
+      try {
+        this.app.saveLocalStorage(clientKey, clientId);
+        if (this.app.loadLocalStorage(clientKey) !== clientId) throw new Error();
+      } catch { storageError = new UpdateError("storage", directory); }
+    }
+    const store = new UpdateStore(this.app.vault.adapter, {
+      load: () => this.app.loadLocalStorage(pointerKey),
+      save: (value) => this.app.saveLocalStorage(pointerKey, value)
+    }, directory, clientId as string);
+    const bridge = new PluginReloadBridge(this.app);
+    const host = new WorkspaceUpdateHost(this.app, bridge, this.updateRuntime, {
+      // Duck typing is deliberate: a newly loaded bundle has a different class
+      // identity. Never use the old bundle's instanceof to restore new views.
+      views: () => this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)
+        .map((leaf) => leaf.view as unknown as UpdateViewParticipant)
+        .filter((view) => typeof view.captureUpdatePresentation === "function"),
+      settle: () => this.updateActivity.settle(),
+      flushSettings: async () => { try { await this.settingsPersistence.flush(); } catch { throw new UpdateError("save"); } },
+      isUnloading: () => this.unloading,
+      hasBlockingDialog: () => {
+        const documents = new Set<Document>([this.app.workspace.containerEl.ownerDocument]);
+        this.app.workspace.iterateAllLeaves((leaf) => documents.add(leaf.view.containerEl.ownerDocument));
+        return [...documents].some((document) => [...document.querySelectorAll<HTMLElement>(".modal-container,.menu")]
+          .some((element) => element.getClientRects().length > 0
+            && !element.contains(this.settingTab?.containerEl ?? null)
+            && !element.querySelector(".mod-settings,.vertical-tabs-container")));
+      }
+    });
+    this.updates = new UpdateCoordinator(new ReleaseClient((url) => requestUrl({ url,
+      headers: { Accept: "application/vnd.github+json" }, throw: false }), requireApiVersion, Platform.isMobile),
+      store, host, this.updateRuntime, this.manifest.version, (state) => new Notice(updateMessage(state), 10_000));
+    if (storageError) { this.updates.block(storageError); return true; }
+    if (!this.updateRuntime.installing) {
+      try {
+        const recovered = await store.recover();
+        if (recovered?.rolledBack) {
+          new Notice(t("update.recovered", { version: recovered.version }));
+          // Reload even if manifest versions match: a crash might have replaced
+          // main.js but not manifest.json, so the running code can still be new.
+          this.updateRuntime.installing = true;
+          this.updateRuntime.startupChecked = true;
+          setTimeout(() => {
+            void bridge.load(recovered.version).catch(() => new Notice(t("update.error.recovery", { path: store.directory }), 0))
+              .finally(() => { this.updateRuntime.installing = false; });
+          }, 0);
+          return false;
+        }
+      } catch (error) {
+        this.updates.block(error instanceof UpdateError ? error : new UpdateError("recovery", store.directory));
+        new Notice(updateMessage(this.updates.state), 0);
+      }
+    }
+    return true;
   }
 
   async loadSettings(): Promise<void> { await this.settingsPersistence.reload(); }
@@ -587,11 +682,13 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   private promptCreateMindTree(): void {
+    if (this.updateRuntime.paused) return;
     new TextPromptModal(this.app, t("tree.create"), t("tree.newName"), t("tree.namePlaceholder"), t("action.create"), (title) => void this.createMindTree(title)).open();
   }
 
   /** Ribbon creation explicitly asks for a destination instead of inferring it. */
   private promptCreateMindTreeInFolder(): void {
+    if (this.updateRuntime.paused) return;
     const active = this.app.workspace.getActiveFile();
     const currentFolderPath = active?.parent?.isRoot() ? "" : active?.parent?.path ?? "";
     const folderPaths = [...new Set([
@@ -607,6 +704,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   private async createMindTree(title: string, targetFolderPath?: string): Promise<void> {
+    if (this.updateRuntime.paused) return;
     try {
       const active = this.app.workspace.getActiveFile();
       // Commands retain their existing active-file default; the Ribbon passes
@@ -641,6 +739,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   private activeMindTreeView(): MindTreeView | undefined {
+    if (this.updateRuntime.paused) return undefined;
     const leaf = this.app.workspace.getMostRecentLeaf();
     return leaf?.view instanceof MindTreeView ? leaf.view : undefined;
   }

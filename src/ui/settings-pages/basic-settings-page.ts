@@ -6,9 +6,11 @@ import {
   normalizeFileBadgeExtension
 } from "../resource-badges";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
+import { PluginUpdateSection } from "./plugin-update-section";
 
 export class BasicSettingsPage implements SettingsPageObject {
   readonly element: HTMLElement;
+  private readonly updates: PluginUpdateSection;
 
   constructor(parent: HTMLElement, port: SettingsPagePort) {
     this.element = parent;
@@ -30,7 +32,10 @@ export class BasicSettingsPage implements SettingsPageObject {
     this.renderIgnoredExtensions(parent, port);
     this.renderExtensionAliases(parent, port);
     this.renderResourceIndex(parent, port);
+    this.updates = new PluginUpdateSection(parent, port);
   }
+
+  destroy(): void { this.updates.destroy(); }
 
   private renderResourceIndex(parent: HTMLElement, port: SettingsPagePort): void {
     parent.createEl("h3", { text: t("resourceIndex.heading") });
