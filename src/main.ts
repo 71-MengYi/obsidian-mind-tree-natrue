@@ -2,7 +2,9 @@ import { addIcon, normalizePath, Notice, Plugin, removeIcon, TFile, WorkspaceLea
 import { around } from "monkey-around";
 import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile } from "./format/document";
 import { t } from "./i18n";
-import { ResourceIndexService, type IndexedResource } from "./services/resource-index";
+import { ResourceIndexService, type ResourceIndexProgress, type ResourceIndexReport } from "./services/resource-index";
+import { LocalResourceCache } from "./services/local-resource-cache";
+import { SettingsPersistence, removeLegacyResourceIndex } from "./services/settings-persistence";
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
 import { PendingConflictStore } from "./services/pending-conflict-store";
@@ -23,23 +25,52 @@ import { LAYOUT_OPTIONS } from "./ui/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
 
 export default class MindTreeNaturePlugin extends Plugin {
-  settings: MindTreeSettings = { ...DEFAULT_SETTINGS };
+  settings: MindTreeSettings = structuredClone(DEFAULT_SETTINGS);
   resources!: ResourceIndexService;
   /** Every open leaf of the same file shares one document/history/write queue. */
   readonly mindTreeSessions = new MindTreeSessionRegistry();
   pendingConflicts!: PendingConflictStore;
   private openCoordinator!: MindTreeOpenCoordinator<WorkspaceLeaf>;
   private pendingActivationTimer?: number;
-  private resourceIndexData: Record<string, IndexedResource> = {};
-  private dataSaveTimer?: number;
-  private dataSaveRetryTimer?: number;
-  private dataSaveRetryAttempt = 0;
+  private resourceCache!: LocalResourceCache;
+  private cacheSaveTimer?: number;
+  private settingsPersistence!: SettingsPersistence<MindTreeSettings>;
+  private settingTab?: MindTreeSettingTab;
   private unloading = false;
-  /** Settings and resource-index writes share one chain so stale saves finish first. */
-  private dataSaveQueue: Promise<void> = Promise.resolve();
+
 
   async onload(): Promise<void> {
+    this.settingsPersistence = new SettingsPersistence({
+      read: async () => {
+        const raw: unknown = await this.loadData();
+        if (raw !== null && raw !== undefined && (typeof raw !== "object" || Array.isArray(raw))) {
+          throw new Error("Invalid plugin settings JSON");
+        }
+        return normalizePluginData(raw).settings;
+      },
+      write: (settings) => this.saveData({ settings } satisfies PluginData),
+      apply: (settings) => {
+        const changed = JSON.stringify(this.settings) !== JSON.stringify(settings);
+        Object.assign(this.settings, settings);
+        if (changed) {
+          this.settingTab?.refreshFromExternal();
+          this.refreshOpenMindTreeLayouts();
+        }
+      },
+      failed: (error, operation) => {
+        console.error("Mind Tree Nature: settings I/O failed", error);
+        new Notice(t(operation === "read" ? "settings.sync.readFailed" : "settings.sync.writeFailed"));
+      }
+    });
+    await this.removeLegacyIndexOnce();
     await this.loadSettings();
+    this.resourceCache = new LocalResourceCache(this.manifest.id, {
+      load: (key) => this.app.loadLocalStorage(key),
+      save: (key, value) => this.app.saveLocalStorage(key, value)
+    }, (error) => {
+      console.error("Mind Tree Nature: device-local cache unavailable", error);
+      new Notice(t("resourceIndex.cacheUnavailable"));
+    });
     // Obsidian local storage is vault-scoped and is not synced as plugin data.
     // Every device writes only its own journal directory.
     const clientKey = `${this.manifest.id}:pending-conflict-client`;
@@ -51,9 +82,8 @@ export default class MindTreeNaturePlugin extends Plugin {
     this.pendingConflicts = new PendingConflictStore(this.app.vault.adapter,
       this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`, clientId as string,
       () => this.documentParseOptions());
-    this.resources = new ResourceIndexService(this.app, this.resourceIndexData, (entries) => {
-      this.resourceIndexData = entries;
-      this.schedulePluginDataSave();
+    this.resources = new ResourceIndexService(this.app, this.resourceCache.load(), () => {
+      this.scheduleResourceCacheSave();
     }, () => this.settings.nonMarkdownIdSeparator, (file, documentId, expectedDocumentId) =>
       this.writeMindTreeDocumentId(file, documentId, expectedDocumentId));
     addIcon(SHARE_SQUARE_ICON, SHARE_SQUARE_ICON_SVG);
@@ -65,7 +95,8 @@ export default class MindTreeNaturePlugin extends Plugin {
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
       void this.activateMindTreeLeaf(leaf);
     }));
-    this.addSettingTab(new MindTreeSettingTab(this.app, this));
+    this.settingTab = new MindTreeSettingTab(this.app, this);
+    this.addSettingTab(this.settingTab);
 
     this.addRibbonIcon("git-fork", t("tree.create"), () => this.promptCreateMindTreeInFolder());
     this.addCommand({
@@ -146,12 +177,14 @@ export default class MindTreeNaturePlugin extends Plugin {
     }));
 
     this.app.workspace.onLayoutReady(() => {
-      this.resources.rebuild();
+      void this.rebuildResourceIndex().catch((error: unknown) => this.reportIndexFailure(error));
+      void this.reportUnlocatedPendingVersions();
+      void this.deduplicateRestoredMindTrees();
       this.registerEvent(this.app.workspace.on("file-open", (file) => {
         if (file && isMindTreePath(file.path)) this.scheduleMindTreeActivation(file);
       }));
       this.registerEvent(this.app.vault.on("create", (file) => {
-        if (file instanceof TFile) this.resources.indexFile(file);
+        if (file instanceof TFile) void this.refreshResource(file);
       }));
       this.registerEvent(this.app.vault.on("modify", (file) => {
         if (!(file instanceof TFile)) return;
@@ -160,37 +193,36 @@ export default class MindTreeNaturePlugin extends Plugin {
             if (leaf.view instanceof MindTreeView && leaf.view.file?.path === file.path) leaf.view.checkExternalVersion();
           }
         }
-        const indexed = this.resources.indexFile(file);
-        if (indexed?.fileKind !== "image") return;
-        // Image contents can be replaced without changing their stable ID or
-        // path. Refresh dimensions/previews in every tree that references it.
-        for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
-          if (leaf.view instanceof MindTreeView) leaf.view.handleResourceMetadataChange(indexed.resourceId);
-        }
+        void this.refreshResource(file);
       }));
-      // Vault modify can fire before MetadataCache has parsed new Frontmatter.
-      // Re-index and refresh linked views on the cache event, where the
-      // excalidraw-plugin property is authoritative and already available.
       this.registerEvent(this.app.metadataCache.on("changed", (file) => {
-        const indexed = this.resources.indexFile(file);
-        if (!indexed) return;
+        void this.refreshResource(file, "metadata");
+      }));
+      this.registerEvent(this.app.vault.on("delete", (file) => {
+        this.resources.removePath(file.path);
         for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
-          if (leaf.view instanceof MindTreeView) leaf.view.handleResourceMetadataChange(indexed.resourceId);
+          if (leaf.view instanceof MindTreeView && leaf.view.file?.path === file.path) leaf.view.checkExternalVersion();
         }
       }));
-      this.registerEvent(this.app.vault.on("delete", (file) => this.resources.removePath(file.path)));
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
-        if (!(file instanceof TFile)) return;
-        this.mindTreeSessions.rename(oldPath, file.path);
-        const session = this.mindTreeSessions.get(file.path);
-        void (session?.conflict?.active
-          ? session.conflict.rename(file.path)
-          : this.pendingConflicts.load(oldPath).then(async (record) => {
-            if (record) await this.pendingConflicts.put({ ...record, path: file.path });
-          })).catch((error: unknown) => new Notice(t("conflict.storageError", { message: String(error) })));
-        this.resources.handleRename(file, oldPath);
-        for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
-          if (leaf.view instanceof MindTreeView) leaf.view.handleResourceRename(file, oldPath);
+        // Folder moves may emit only a folder event, not an event per child.
+        const files = file instanceof TFile ? [file]
+          : this.app.vault.getFiles().filter((child) => child.path.startsWith(`${file.path}/`));
+        for (const child of files) {
+          const previousPath = oldPath + child.path.slice(file.path.length);
+          this.mindTreeSessions.rename(previousPath, child.path);
+          const session = this.mindTreeSessions.get(child.path);
+          if (isMindTreePath(child.path)) void (session?.conflict?.active
+            ? session.conflict.rename(child.path)
+            : this.pendingConflicts.load(previousPath).then(async (record) => {
+              if (record) await this.pendingConflicts.put({ ...record, path: child.path });
+            })).catch((error: unknown) => new Notice(t("conflict.storageError", { message: String(error) })));
+          void this.resources.handleRename(child, previousPath).then(() => {
+            if (this.unloading) return;
+            for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+              if (leaf.view instanceof MindTreeView) leaf.view.handleResourceRename(child, previousPath);
+            }
+          }).catch((error: unknown) => this.reportIndexFailure(error));
         }
       }));
       void this.activateMindTreeLeaf(this.app.workspace.getMostRecentLeaf());
@@ -200,31 +232,90 @@ export default class MindTreeNaturePlugin extends Plugin {
   onunload(): void {
     this.unloading = true;
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
-    if (this.dataSaveTimer !== undefined) window.clearTimeout(this.dataSaveTimer);
-    if (this.dataSaveRetryTimer !== undefined) window.clearTimeout(this.dataSaveRetryTimer);
-    // Plugin.onunload is synchronous in Obsidian's public API. Start one final
-    // best-effort flush, but never make document correctness depend on this
-    // reconstructible cache write completing after unload.
-    void this.savePluginData().catch((error: unknown) => {
-      console.error("Mind Tree Nature: final plugin-data save failed", error);
+    if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
+    // Only a disposable local cache is flushed at unload, never old user settings.
+    this.resourceCache?.save(this.resources?.entries() ?? []);
+    this.settingsPersistence?.destroy();
+    this.settingTab?.hide();
+    const leaves = this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE);
+    // The index must outlive a title draft's final filename synchronization.
+    // The public unload hook is synchronous, so retain services until the views'
+    // existing idempotent flush completes, then release the scanner.
+    void Promise.allSettled(leaves.map(async (leaf) => {
+      try {
+        if (leaf.view instanceof MindTreeView) await leaf.view.prepareForPluginUnload();
+        leaf.detach();
+      } catch (error) {
+        console.error("Mind Tree Nature: could not finish closing a view", error);
+      }
+    })).then(() => {
+      this.resourceCache?.save(this.resources?.entries() ?? []);
+      this.resources?.destroy();
     });
-    for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) leaf.detach();
   }
 
-  async loadSettings(): Promise<void> {
-    const normalized = normalizePluginData(await this.loadData());
-    this.settings = normalized.settings;
-    this.resourceIndexData = normalized.resourceIndex;
+  async loadSettings(): Promise<void> { await this.settingsPersistence.reload(); }
+  async saveSettings(): Promise<void> { await this.settingsPersistence.save(this.settings); }
+
+  /** Obsidian owns the merge; adopt the result without echoing it back to Sync. */
+  async onExternalSettingsChange(): Promise<void> {
+    if (!this.unloading) await this.settingsPersistence?.reload();
   }
 
-  async saveSettings(): Promise<void> {
+  private async removeLegacyIndexOnce(): Promise<void> {
+    const key = `${this.manifest.id}:local-index-migration:v1`;
     try {
-      await this.savePluginData();
-      this.dataSaveRetryAttempt = 0;
+      if (this.app.loadLocalStorage(key) === true) return;
+      const directory = this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`;
+      const path = `${directory}/data.json`;
+      const adapter = this.app.vault.adapter;
+      if (await adapter.exists(path)) {
+        const source = await adapter.read(path);
+        // Avoid an unnecessary write when no upgrade cleanup is needed.
+        if (removeLegacyResourceIndex(source) !== source) {
+          await adapter.process(path, removeLegacyResourceIndex);
+        }
+      }
+      this.app.saveLocalStorage(key, true);
     } catch (error) {
-      this.schedulePluginDataRetry(error);
-      throw error;
+      console.error("Mind Tree Nature: legacy index cleanup deferred", error);
+      new Notice(t("settings.sync.cleanupFailed"));
     }
+  }
+
+  async rebuildResourceIndex(progress?: (value: ResourceIndexProgress) => void): Promise<ResourceIndexReport> {
+    const report = await this.resources.rebuild(progress);
+    if (this.unloading) return report;
+    if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
+    this.cacheSaveTimer = undefined;
+    report.persisted = this.resourceCache.save(this.resources.entries());
+    // Rendering only: rebuilding must not mutate documents or their histories.
+    this.refreshOpenMindTreeLayouts();
+    return report;
+  }
+
+  private async refreshResource(file: TFile, event: "file" | "metadata" = "file"): Promise<void> {
+    try {
+      const indexed = await this.resources.indexFile(file, event);
+      if (this.unloading) return;
+      // Unlinked files (including most .mtn.md files) must not redraw every
+      // editor on each autosave or unrelated Markdown modification.
+      if (!indexed) return;
+      for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+        if (leaf.view instanceof MindTreeView) leaf.view.handleResourceMetadataChange(indexed.resourceId);
+      }
+    } catch (error) {
+      // The shared read already retried transient races at most three times.
+      // A persistent background failure waits for the next event/rebuild, not
+      // an unbounded retry loop or fallback to the previous identity.
+      console.warn("Mind Tree Nature: resource verification deferred", file.path, error);
+    }
+  }
+
+  private reportIndexFailure(error: unknown): void {
+    if (this.unloading) return;
+    console.error("Mind Tree Nature: index rebuild failed", error);
+    new Notice(t("resourceIndex.failed"));
   }
 
   private documentParseOptions() {
@@ -250,7 +341,25 @@ export default class MindTreeNaturePlugin extends Plugin {
       beginWrite: (source) => session.beginWrite(source), endWrite: (source) => session.endWrite(source),
       changed: () => session.notifyConflict(), resolved: (result) => session.acceptVersion(result),
       restored: (document, baseline) => session.restoreFrozenVersion(document, baseline),
-      createId: () => crypto.randomUUID()
+      createId: () => crypto.randomUUID(),
+      checkIdentityAvailable: async (id) => {
+        const file = requireFile();
+        const guard = await this.resources.prepareIdentityRestore(id, file.path);
+        return () => {
+          if (requireFile() !== file) throw new Error(t("resourceIndex.identityChanged"));
+          guard();
+        };
+      },
+      scheduleResume: () => {
+        void session.history.runExclusiveWrite(() => session.conflict!.resumeUnchanged())
+          .then((result) => {
+            if (!result) return;
+            for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+              if (leaf.view instanceof MindTreeView && leaf.view.file?.path === session.path) leaf.view.checkExternalVersion();
+            }
+          })
+          .catch((error: unknown) => { console.error("Mind Tree metadata resume failed", error); });
+      }
     });
     return session.conflict;
   }
@@ -364,7 +473,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       openFile(next: WorkspaceLeaf["openFile"]) {
         return function (this: WorkspaceLeaf, file: TFile, ...rest: Parameters<WorkspaceLeaf["openFile"]> extends [TFile, ...infer R] ? R : never) {
           if (!isMindTreePath(file.path)) return next.apply(this, [file, ...rest]);
-          return plugin.openCoordinator.open(file.path, this, () => next.apply(this, [file, ...rest]), rest[0]?.active !== false)
+          return plugin.openCoordinator.open(file.path, this, () => next.apply(this, [file, ...rest]), rest[0]?.active !== false, true)
             .then(() => undefined);
         };
       },
@@ -377,7 +486,7 @@ export default class MindTreeNaturePlugin extends Plugin {
           const routed = routeMindTreeViewState(viewState);
           const path = routed.state?.["file"];
           if (routed.type !== MIND_TREE_VIEW_TYPE || typeof path !== "string"
-            || plugin.openCoordinator.isOpening(path, this)) return next.apply(this, [routed, ...rest]);
+            || plugin.openCoordinator.consumeNestedRoute(path, this)) return next.apply(this, [routed, ...rest]);
           return plugin.openCoordinator.open(path, this, () => next.apply(this, [routed, ...rest]), routed.active === true)
             .then(() => undefined);
         };
@@ -385,10 +494,58 @@ export default class MindTreeNaturePlugin extends Plugin {
     }));
   }
 
+  private async reportUnlocatedPendingVersions(): Promise<void> {
+    try {
+      const missing = (await this.pendingConflicts.pendingPaths()).filter((path) => !this.app.vault.getFileByPath(path));
+      if (missing.length) new Notice(t("conflict.unlocated", { paths: missing.join("\n") }), 0);
+    } catch (error) { new Notice(t("conflict.storageError", { message: String(error) }), 0); }
+  }
+
+  /** Restored leaves may predate routing hooks; keep one owner without focus changes. */
+  private async deduplicateRestoredMindTrees(): Promise<void> {
+    const groups = new Map<string, WorkspaceLeaf[]>();
+    const active = this.app.workspace.getMostRecentLeaf();
+    this.app.workspace.iterateAllLeaves((leaf) => {
+      const path = this.getLeafFilePath(leaf);
+      if (!path || !isMindTreePath(path) || !["markdown", MIND_TREE_VIEW_TYPE].includes(leaf.getViewState().type)) return;
+      const canonical = canonicalTreePath(path);
+      groups.set(canonical, [...groups.get(canonical) ?? [], leaf]);
+    });
+    for (const [path, leaves] of groups) {
+      // Retain a live tree (and its pending session) before a deferred Markdown
+      // leaf. Remove duplicates before conversion so routing cannot redirect
+      // the chosen owner to a duplicate that is about to be detached.
+      leaves.sort((a, b) => Number(b.getViewState().type === MIND_TREE_VIEW_TYPE) - Number(a.getViewState().type === MIND_TREE_VIEW_TYPE)
+        || Number(b === active) - Number(a === active));
+      const leaf = leaves[0]!;
+      for (const duplicate of leaves.slice(1)) duplicate.detach();
+      if (leaf.getViewState().type !== MIND_TREE_VIEW_TYPE) {
+        try { await leaf.setViewState({ type: MIND_TREE_VIEW_TYPE, state: { file: path }, active: false }); }
+        catch (error) { new Notice(t("notice.operationFailed", { message: String(error) })); }
+      }
+      if (active && active !== leaf && leaves.includes(active)) await this.app.workspace.revealLeaf(leaf);
+    }
+  }
+
+  /** Allocate a destination only if a tree does not already have an owner. */
+  async openLinkedFile(file: TFile, destination: () => WorkspaceLeaf): Promise<void> {
+    if (isMindTreePath(file.path)) {
+      const existing = this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)
+        .find((leaf) => canonicalTreePath(this.getLeafFilePath(leaf) ?? "") === canonicalTreePath(file.path));
+      if (existing) { await this.app.workspace.revealLeaf(existing); return; }
+      await this.activateMindTree(file, destination());
+      return;
+    }
+    const leaf = destination();
+    await leaf.openFile(file, { active: true });
+    await this.app.workspace.revealLeaf(leaf);
+  }
+
   async activateMindTree(file: TFile, preferredLeaf?: WorkspaceLeaf): Promise<void> {
     const existing = this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)
       .find((leaf) => this.getLeafFilePath(leaf) === file.path);
     if (existing) {
+      if (preferredLeaf && preferredLeaf !== existing && preferredLeaf.getViewState().type === "empty") preferredLeaf.detach();
       await this.app.workspace.revealLeaf(existing);
       return;
     }
@@ -488,41 +645,12 @@ export default class MindTreeNaturePlugin extends Plugin {
     return leaf?.view instanceof MindTreeView ? leaf.view : undefined;
   }
 
-  private schedulePluginDataSave(): void {
+  private scheduleResourceCacheSave(): void {
     if (this.unloading) return;
-    if (this.dataSaveTimer !== undefined) window.clearTimeout(this.dataSaveTimer);
-    this.dataSaveTimer = window.setTimeout(() => {
-      this.dataSaveTimer = undefined;
-      void this.savePluginData().then(() => {
-        this.dataSaveRetryAttempt = 0;
-      }).catch((error: unknown) => this.schedulePluginDataRetry(error));
+    if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
+    this.cacheSaveTimer = window.setTimeout(() => {
+      this.cacheSaveTimer = undefined;
+      this.resourceCache.save(this.resources.entries());
     }, 500);
-  }
-
-  /** Retry cache/settings persistence without leaking an unhandled rejection. */
-  private schedulePluginDataRetry(error: unknown): void {
-    console.error("Mind Tree Nature: plugin-data save failed", error);
-    if (this.unloading) return;
-    if (this.dataSaveRetryTimer !== undefined) return;
-    const delay = Math.min(30_000, 1_000 * 2 ** Math.min(this.dataSaveRetryAttempt, 5));
-    this.dataSaveRetryAttempt += 1;
-    this.dataSaveRetryTimer = window.setTimeout(() => {
-      this.dataSaveRetryTimer = undefined;
-      void this.savePluginData().then(() => {
-        this.dataSaveRetryAttempt = 0;
-      }).catch((retryError: unknown) => this.schedulePluginDataRetry(retryError));
-    }, delay);
-  }
-
-  private async savePluginData(): Promise<void> {
-    const snapshot = structuredClone({
-      settings: this.settings,
-      resourceIndex: this.resourceIndexData
-    } satisfies PluginData);
-    const operation = this.dataSaveQueue.then(() => this.saveData(snapshot));
-    // Keep the queue usable after an individual write failure while returning
-    // that failure to the explicit settings caller that initiated it.
-    this.dataSaveQueue = operation.catch(() => undefined);
-    await operation;
   }
 }

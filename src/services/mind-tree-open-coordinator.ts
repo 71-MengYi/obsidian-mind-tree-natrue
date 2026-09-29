@@ -8,7 +8,7 @@ export interface MindTreeOpenPorts<Leaf> {
 
 /** Path-based single-flight routing; identities are deliberately irrelevant. */
 export class MindTreeOpenCoordinator<Leaf> {
-  private readonly opening = new Map<string, { leaf: Leaf; task: Promise<Leaf> }>();
+  private readonly opening = new Map<string, { leaf: Leaf; task: Promise<Leaf>; nestedRoute: boolean }>();
 
   constructor(private readonly ports: MindTreeOpenPorts<Leaf>) {}
 
@@ -17,7 +17,15 @@ export class MindTreeOpenCoordinator<Leaf> {
     return this.opening.get(canonicalTreePath(path))?.leaf === leaf;
   }
 
-  async open(path: string, requested: Leaf, open: () => Promise<unknown>, activate = true): Promise<Leaf> {
+  /** One openFile → setViewState delegation is allowed; independent repeats wait. */
+  consumeNestedRoute(path: string, leaf: Leaf): boolean {
+    const entry = this.opening.get(canonicalTreePath(path));
+    if (!entry || entry.leaf !== leaf || !entry.nestedRoute) return false;
+    entry.nestedRoute = false;
+    return true;
+  }
+
+  async open(path: string, requested: Leaf, open: () => Promise<unknown>, activate = true, nestedRoute = false): Promise<Leaf> {
     const key = canonicalTreePath(path);
     const inFlight = this.opening.get(key);
     let winner: Leaf;
@@ -29,7 +37,7 @@ export class MindTreeOpenCoordinator<Leaf> {
         // Defer the actual open by a microtask so nested setViewState sees the
         // reservation before Obsidian starts constructing a view.
         const task = Promise.resolve().then(open).then(() => requested);
-        this.opening.set(key, { leaf: requested, task });
+        this.opening.set(key, { leaf: requested, task, nestedRoute });
         try { winner = await task; }
         finally { if (this.opening.get(key)?.task === task) this.opening.delete(key); }
       }

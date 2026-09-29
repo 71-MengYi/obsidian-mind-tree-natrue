@@ -26,7 +26,7 @@ export interface TemplateFilePorts<T extends TemplateFile> {
   processFrontMatter(file: T, update: (frontmatter: Record<string, unknown>) => void): Promise<void>;
   createResourceId(markdown: boolean): string;
   resourceIdExists(id: string): boolean;
-  register(reference: FileResourceRef): void;
+  register(reference: FileResourceRef): void | Promise<void>;
   trash(file: T): Promise<void>;
   removePath(path: string, resourceId: string): void;
 }
@@ -136,7 +136,8 @@ export class TemplateFileService<T extends TemplateFile> {
         type: "file", resourceId, pathHint: copied.path, fileKind: classifyFile(copied.path),
         ...(fileSubtype ? { fileSubtype } : {})
       };
-      this.ports.register(reference);
+      await this.ports.register(reference);
+      this.requireTarget(isTargetCurrent);
       return { file: copied, reference };
     } catch (error) {
       if (copied) {

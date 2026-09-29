@@ -14,8 +14,12 @@ export interface PendingConflictRecord {
   path: string;
   baselineSource: string;
   currentSource: string;
+  /** Confirmed state before the preview overlaid an uncommitted textarea. */
+  confirmedSource?: string;
   draft?: PendingTitleDraft;
-  receipt?: { choice: "current" | "external"; source: string; phase: "prepared" | "verified" };
+  /** Already confirmed titles whose filesystem rename was paused by conflict. */
+  titleRenames?: PendingTitleDraft[];
+  receipt?: { choice: "current" | "external"; source: string; phase: "prepared" | "verified"; resumeDraft?: boolean };
 }
 
 export interface PendingConflictIO {
@@ -48,13 +52,24 @@ export function validatePendingConflict(value: unknown, options: ParseMindTreeOp
   }
   createManagedMindTreeSnapshot(record.baselineSource, options);
   const current = createManagedMindTreeSnapshot(record.currentSource, options);
+  if (record.confirmedSource !== undefined) {
+    if (typeof record.confirmedSource !== "string") throw new Error("Invalid confirmed source.");
+    createManagedMindTreeSnapshot(record.confirmedSource, options);
+  }
   if (record.draft && (typeof record.draft.nodeId !== "string" || !current.document.nodes[record.draft.nodeId]
     || typeof record.draft.value !== "string" || typeof record.draft.originalTitle !== "string")) {
     throw new Error("Invalid pending title draft.");
   }
+  if (record.titleRenames !== undefined && (!Array.isArray(record.titleRenames)
+    || record.titleRenames.length > Object.keys(current.document.nodes).length
+    || record.titleRenames.some((rename) => !rename || typeof rename.nodeId !== "string"
+      || !current.document.nodes[rename.nodeId] || typeof rename.value !== "string" || typeof rename.originalTitle !== "string"))) {
+    throw new Error("Invalid pending title renames.");
+  }
   if (record.receipt) {
     if (!["current", "external"].includes(record.receipt.choice) || !["prepared", "verified"].includes(record.receipt.phase)
-      || typeof record.receipt.source !== "string") throw new Error("Invalid pending commit receipt.");
+      || typeof record.receipt.source !== "string"
+      || (record.receipt.resumeDraft !== undefined && typeof record.receipt.resumeDraft !== "boolean")) throw new Error("Invalid pending commit receipt.");
     createManagedMindTreeSnapshot(record.receipt.source, options);
   }
   return record;
@@ -97,6 +112,11 @@ export class PendingConflictStore {
       if (matches.length > 1) throw new Error("Multiple unresolved records refer to this file; none were discarded.");
       return matches[0];
     });
+  }
+
+  /** Startup diagnostics report orphans; they never infer a replacement path. */
+  pendingPaths(): Promise<string[]> {
+    return this.serial(async () => (await this.records()).map((record) => record.path));
   }
 
   put(record: PendingConflictRecord): Promise<void> {

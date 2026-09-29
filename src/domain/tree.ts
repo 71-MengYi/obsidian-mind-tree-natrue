@@ -13,6 +13,7 @@ import type {
   ValidationResult
 } from "../types";
 import { createDefaultDocumentSettings } from "../document-settings";
+import { copySettingsState } from "../document-settings-state";
 import { MAX_MIND_TREE_DEPTH, MAX_MIND_TREE_NODES, createSafeRecord } from "../input-limits";
 import { normalizeBranchClipboardPayload } from "./clipboard-payload";
 import { assertSafeNodeId } from "./runtime-node";
@@ -64,7 +65,9 @@ export function createEmptyDocument(
 }
 
 export function cloneDocument(document: MindTreeDocument): MindTreeDocument {
-  return JSON.parse(JSON.stringify(document)) as MindTreeDocument;
+  const clone = JSON.parse(JSON.stringify(document)) as MindTreeDocument;
+  copySettingsState(document, clone);
+  return clone;
 }
 
 export function getNode(document: MindTreeDocument, nodeId: NodeId): MindTreeNode {

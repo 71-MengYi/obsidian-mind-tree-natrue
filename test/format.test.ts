@@ -123,7 +123,7 @@ test("removed capsule and sketch settings fall back to rounded without a schema 
     assert.equal(parsed.migratedFromSchemaVersion, undefined);
     assert.equal(parsed.defaultedDocumentSettings, true);
     assert.equal(parsed.document.settings.nodeShape, "rounded");
-    assert.match(serializeMindTreeFile(parsed.document, legacy), /\nnodeShape: rounded\n/);
+    assert.match(serializeMindTreeFile(parsed.document, legacy), new RegExp(`\\nnodeShape: ${removedShape}\\n`));
     assert.equal(normalizeNodeShape(removedShape), "rounded");
   }
 });
@@ -136,7 +136,7 @@ test("invalid connection styles use the global default without a schema migratio
   assert.equal(parsed.migratedFromSchemaVersion, undefined);
   assert.equal(parsed.defaultedDocumentSettings, true);
   assert.equal(parsed.document.settings.connectionStyle, "smooth-dashed");
-  assert.match(serializeMindTreeFile(parsed.document, invalid), /\nconnectionStyle: smooth-dashed\n/);
+  assert.match(serializeMindTreeFile(parsed.document, invalid), /\nconnectionStyle: unsupported\n/);
   assert.equal(normalizeConnectionStyle("unsupported", "orthogonal"), "orthogonal");
 });
 
@@ -179,9 +179,7 @@ test("migrates the unversioned v1 baseline through the central migration factory
   assert.equal(parsed.document.settings.connectionStyle, "orthogonal");
   const upgraded = serializeMindTreeFile(parsed.document, v1);
   assert.match(upgraded, /\nschemaVersion: 2\n/);
-  assert.match(upgraded, /\nnodeShape: borderless\n/);
-  assert.match(upgraded, /\ncollectionMode: root\n/);
-  assert.match(upgraded, /\nconnectionStyle: orthogonal\n/);
+  assert.doesNotMatch(upgraded, /\n(?:nodeShape|collectionMode|connectionStyle):/);
 });
 
 test("fills a missing collection strategy without invoking a version migration", () => {

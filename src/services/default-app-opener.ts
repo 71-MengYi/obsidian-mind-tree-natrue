@@ -20,7 +20,7 @@ export class DefaultAppOpenError extends Error {
 export interface DefaultAppOpenPorts<T> {
   isDesktopApp(): boolean;
   loadShell(): DefaultAppShell | Promise<DefaultAppShell>;
-  resolveFile(reference: Readonly<FileResourceRef>): T | undefined;
+  resolveFile(reference: Readonly<FileResourceRef>): T | undefined | Promise<T | undefined>;
   getFullPath(file: T): string | undefined;
 }
 
@@ -64,7 +64,7 @@ export class DefaultAppOpener<T> {
       }
       // Resolve after the asynchronous boundary so moves/renames use the live
       // TFile, never the stale pathHint stored when the context menu opened.
-      const file = this.ports.resolveFile(reference);
+      const file = await this.ports.resolveFile(reference);
       if (!file) throw new DefaultAppOpenError("file-not-found", reference.pathHint);
       const path = this.ports.getFullPath(file);
       if (!path) throw new DefaultAppOpenError("unsupported-adapter");

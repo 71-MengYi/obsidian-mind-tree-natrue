@@ -44,7 +44,7 @@ test("file badge settings normalize case, deduplicate entries, and discard unsaf
   assert.equal(Object.getPrototypeOf(normalized.settings.fileExtensionBadgeAliases), null);
 });
 
-test("one malformed ownership entry discards the persisted index for a safe rebuild", () => {
+test("legacy synced indexes are ignored instead of becoming trusted ownership history", () => {
   const normalized = normalizePluginData({
     settings: {},
     resourceIndex: {
@@ -52,6 +52,6 @@ test("one malformed ownership entry discards the persisted index for a safe rebu
       bad: { resourceId: "different", path: "../escape.md", fileKind: "note" }
     }
   });
-  assert.deepEqual(Object.keys(normalized.resourceIndex), []);
-  assert.equal(Object.getPrototypeOf(normalized.resourceIndex), null);
+  assert.deepEqual(Object.keys(normalized), ["settings"]);
+  assert.equal(Object.hasOwn(normalized, "resourceIndex"), false);
 });

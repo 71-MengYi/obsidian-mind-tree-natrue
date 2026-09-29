@@ -7,3 +7,4 @@ export * from "./image-resize-controller";
 export * from "./touch-gesture";
 export * from "./touch-gesture-controller";
 export * from "./keyboard-avoidance-controller";
+export * from "./file-association-controller";

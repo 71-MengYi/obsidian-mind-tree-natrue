@@ -3,29 +3,20 @@ import assert from "node:assert/strict";
 import { decideDocumentIdentityWrite, decideDuplicateIdentity } from "../src/services/resource-identity";
 
 test("a unique unlinked or linked tree keeps its current identity state", () => {
-  assert.deepEqual(decideDuplicateIdentity("Math.mtn.md", undefined, false, ["Math.mtn.md"]), { action: "keep" });
+  assert.deepEqual(decideDuplicateIdentity(["Math.mtn.md"]), { action: "keep" });
 });
 
-test("a copied tree is reassigned when a historical owner is known", () => {
+test("historical owners never authorize silently reassigning duplicate tree identities", () => {
   assert.deepEqual(decideDuplicateIdentity(
-    "数学/信号处理/信号处理.mtn.md",
-    "数学/数学.mtn.md",
-    true,
     ["数学/数学.mtn.md", "数学/信号处理/信号处理.mtn.md"]
-  ), { action: "reassign" });
+  ), { action: "reject", paths: ["数学/信号处理/信号处理.mtn.md", "数学/数学.mtn.md"].sort((a, b) => a.localeCompare(b)) });
   assert.deepEqual(decideDuplicateIdentity(
-    "数学/数学.mtn.md",
-    "数学/数学.mtn.md",
-    true,
     ["数学/数学.mtn.md", "数学/信号处理/信号处理.mtn.md"]
-  ), { action: "keep" });
+  ), { action: "reject", paths: ["数学/信号处理/信号处理.mtn.md", "数学/数学.mtn.md"].sort((a, b) => a.localeCompare(b)) });
 });
 
 test("ambiguous duplicate identities are rejected with every conflicting path", () => {
   assert.deepEqual(decideDuplicateIdentity(
-    "B.mtn.md",
-    "A.mtn.md",
-    false,
     ["B.mtn.md", "A.mtn.md", "B.mtn.md"]
   ), { action: "reject", paths: ["A.mtn.md", "B.mtn.md"] });
 });

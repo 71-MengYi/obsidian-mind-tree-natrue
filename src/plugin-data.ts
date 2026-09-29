@@ -1,6 +1,5 @@
 import { normalizeConnectionStyle, normalizeNodeShape } from "./document-settings";
 import { assertSafeRecordKey, createSafeRecord } from "./input-limits";
-import type { IndexedResource } from "./services/resource-index";
 import { normalizeNewNoteDefaultContent } from "./services/note-content";
 import {
   DEFAULT_SETTINGS,
@@ -20,12 +19,10 @@ import {
 
 export interface PluginData {
   settings: Partial<MindTreeSettings>;
-  resourceIndex: Record<string, IndexedResource>;
 }
 
 export interface NormalizedPluginData {
   settings: MindTreeSettings;
-  resourceIndex: Record<string, IndexedResource>;
 }
 
 /** Treat data.json as untrusted input so one malformed value cannot block load. */
@@ -75,37 +72,8 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
       ),
       connectionStyle: normalizeConnectionStyle(settings?.["connectionStyle"], DEFAULT_SETTINGS.connectionStyle),
       nodeShape: normalizeNodeShape(settings?.["nodeShape"], DEFAULT_SETTINGS.nodeShape)
-    },
-    resourceIndex: normalizeResourceIndex(root?.["resourceIndex"])
-  };
-}
-
-function normalizeResourceIndex(value: unknown): Record<string, IndexedResource> {
-  const result = createSafeRecord<IndexedResource>();
-  const record = asRecord(value);
-  if (!record) return result;
-  for (const [storedId, rawEntry] of Object.entries(record)) {
-    const entry = asRecord(rawEntry);
-    const resourceId = nonEmptyString(entry?.["resourceId"]);
-    const path = safeVaultPath(entry?.["path"]);
-    const fileKind = entry?.["fileKind"];
-    try {
-      if (!resourceId || resourceId.length > 512 || storedId !== resourceId) throw new Error();
-      assertSafeRecordKey(resourceId);
-      if (!path || (fileKind !== "note" && fileKind !== "image" && fileKind !== "attachment")) throw new Error();
-    } catch {
-      // Ownership history affects duplicate-ID repair. A partially trusted,
-      // corrupted index is less safe than rebuilding every entry from Vault.
-      return createSafeRecord<IndexedResource>();
     }
-    result[resourceId] = {
-      resourceId,
-      path,
-      fileKind,
-      ...(entry?.["fileSubtype"] === "excalidraw" ? { fileSubtype: "excalidraw" as const } : {})
-    };
-  }
-  return result;
+  };
 }
 
 function normalizeNewNoteOpenMode(value: unknown): MindTreeSettings["newNoteOpenMode"] {
@@ -172,10 +140,6 @@ function safeVaultPath(value: unknown, allowEmpty = false): string | undefined {
   if (!normalized) return allowEmpty ? "" : undefined;
   if (normalized.split("/").some((segment) => !segment || segment === "." || segment === "..")) return undefined;
   return normalized;
-}
-
-function nonEmptyString(value: unknown): string | undefined {
-  return typeof value === "string" && value.length > 0 ? value : undefined;
 }
 
 function safeBoolean(value: unknown, fallback: boolean): boolean {

@@ -1,79 +1,76 @@
 import { App, normalizePath, TFile } from "obsidian";
 import { createId } from "../domain/tree";
-import { classifyFileSubtype } from "../domain/markers";
 import { EXTERNAL_FILE_REJECT_BYTES } from "../input-limits";
 import {
-  appendNonMarkdownResourceId,
-  buildLinkedResourcePath,
-  classifyFile,
-  createShortResourceId,
-  DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR,
-  extractNonMarkdownResourceId,
-  isMarkdownPath,
-  stripNonMarkdownResourceId,
+  appendNonMarkdownResourceId, buildLinkedResourcePath, classifyFile, createShortResourceId,
+  DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR, isMarkdownPath, stripNonMarkdownResourceId,
   type NonMarkdownResourceIdSeparator
 } from "../format/resource-id";
 import type { FileResourceRef, MindTreeDocument, ResourceId } from "../types";
 import { buildNewNoteBody } from "./note-content";
 import { decideDocumentIdentityWrite, decideDuplicateIdentity } from "./resource-identity";
 import { filesInTemplateFolder, TemplateFileService } from "./template-files";
+import { ResourceCatalog, type ResourceIndexProgress, type ResourceIndexReport } from "./resource-catalog";
+import type { IndexedResource } from "./local-resource-cache";
+import { t } from "../i18n";
+export type { IndexedResource } from "./local-resource-cache";
+export type { ResourceIndexProgress, ResourceIndexReport } from "./resource-catalog";
 
-export interface IndexedResource {
-  resourceId: ResourceId;
-  path: string;
-  fileKind: FileResourceRef["fileKind"];
-  fileSubtype?: FileResourceRef["fileSubtype"];
-}
-
-/** Raised instead of guessing which copied file owns a duplicated stable ID. */
+/** Duplicates never authorize modifying an existing file's identity. */
 export class DuplicateResourceIdError extends Error {
   constructor(readonly resourceId: ResourceId, readonly paths: string[]) {
-    super(`Duplicate resource ID ${resourceId}: ${paths.join(", ")}`);
+    super(t("resourceIndex.duplicate", { id: resourceId, paths: paths.join("\n") }));
     this.name = "DuplicateResourceIdError";
   }
 }
-
-export interface MindTreeDocumentIdWriteResult {
-  file: TFile;
-  documentId: ResourceId;
-}
-
+export interface MindTreeDocumentIdWriteResult { file: TFile; documentId: ResourceId }
 export type MindTreeDocumentIdWriter = (
-  file: TFile,
-  documentId: ResourceId,
-  expectedDocumentId?: ResourceId
+  file: TFile, documentId: ResourceId, expectedDocumentId?: ResourceId
 ) => Promise<MindTreeDocumentIdWriteResult>;
 
+export interface LinkedFileResult { file: TFile; reference: FileResourceRef }
+export interface FileAssociationProgress {
+  phase: "verify" | "associate" | "finish";
+  completed: number;
+  total: number;
+}
+export interface FileAssociationBatch {
+  linked: LinkedFileResult[];
+  failures: Array<{ path: string; error: unknown }>;
+  cancelled: boolean;
+  /** Synchronous last check at the document command boundary, not a cache lease. */
+  assertCurrent(): void;
+}
+
+/** Creation succeeded; a later association failure must not hide the retained file. */
+export class CreatedNoteAssociationError extends Error {
+  constructor(readonly file: TFile, readonly originalError: unknown) {
+    super(originalError instanceof Error ? originalError.message : String(originalError));
+    this.name = "CreatedNoteAssociationError";
+  }
+}
+
 export class ResourceIndexService {
-  private readonly byId = new Map<ResourceId, IndexedResource>();
-  private readonly byPath = new Map<string, IndexedResource>();
-  /** Every non-owner path observed with the same ID. Never overwrite silently. */
-  private readonly duplicatePathsById = new Map<ResourceId, Set<string>>();
-  /** Plugin-data owners predate the current scan and can safely identify copies. */
-  private readonly trustedOwnerIds = new Set<ResourceId>();
-  /** Concurrent first-link requests for one path must share the same identity write. */
+  private readonly catalog: ResourceCatalog<TFile>;
   private readonly pendingReferenceByPath = new Map<string, Promise<FileResourceRef>>();
-  /** Rename/move operations for one stable resource must never interleave. */
   private readonly resourceMutationTail = new Map<ResourceId, Promise<void>>();
-  /** Suppress redundant full data.json writes when only a read/query occurred. */
-  private lastEmittedFingerprint = "";
   private readonly templateFileService: TemplateFileService<TFile>;
 
   constructor(
     private readonly app: App,
-    initialEntries: Record<ResourceId, IndexedResource> = {},
-    private readonly onChanged?: (entries: Record<ResourceId, IndexedResource>) => void,
+    initialEntries: readonly IndexedResource[] = [],
+    onChanged: (entries: IndexedResource[]) => void = () => undefined,
     private readonly getNonMarkdownIdSeparator: () => NonMarkdownResourceIdSeparator =
       () => DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR,
     private readonly writeMindTreeDocumentId?: MindTreeDocumentIdWriter
   ) {
-    for (const entry of Object.values(initialEntries)) {
-      if (!entry.resourceId || !entry.path) continue;
-      this.byId.set(entry.resourceId, entry);
-      this.byPath.set(normalizePath(entry.path), entry);
-      this.trustedOwnerIds.add(entry.resourceId);
-    }
-    this.lastEmittedFingerprint = this.persistedFingerprint();
+    this.catalog = new ResourceCatalog({
+      files: () => this.app.vault.getFiles().filter((file) => !this.templateFileService.isPendingPath(file.path)),
+      file: (path) => this.app.vault.getFileByPath(path) ?? undefined,
+      read: (file) => this.app.vault.read(file),
+      changed: onChanged,
+      yield: () => new Promise((resolve) => setTimeout(resolve, 0))
+    }, initialEntries);
     this.templateFileService = new TemplateFileService<TFile>({
       exists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
       isCurrentFile: (file) => this.app.vault.getFileByPath(file.path) === file,
@@ -81,240 +78,222 @@ export class ResourceIndexService {
       copy: (source, path) => this.app.vault.copy(source, path),
       processFrontMatter: (file, update) => this.app.fileManager.processFrontMatter(file, update),
       createResourceId: (markdown) => markdown ? createId() : createShortResourceId(),
-      resourceIdExists: (id) => this.byId.has(id),
-      register: (reference) => {
-        this.registerIndexedEntry({
-          resourceId: reference.resourceId, path: reference.pathHint,
-          fileKind: reference.fileKind,
-          ...(reference.fileSubtype ? { fileSubtype: reference.fileSubtype } : {})
-        }, true);
-        this.emitChanged();
+      resourceIdExists: (id) => this.catalog.has(id),
+      register: async (reference) => {
+        const file = this.app.vault.getFileByPath(reference.pathHint);
+        if (!file || (await this.catalog.refresh(file))?.resourceId !== reference.resourceId) {
+          throw new Error(t("resourceIndex.identityChanged"));
+        }
       },
       trash: (file) => this.app.fileManager.trashFile(file),
-      removePath: (path, resourceId) => {
-        this.removePath(path);
-        // The service only supplies freshly allocated copy IDs. Unlike a user
-        // deletion, rolling back an unlinked copy does not need a tombstone.
-        if (this.byId.get(resourceId)?.path === normalizePath(path)) {
-          this.byId.delete(resourceId);
-          this.trustedOwnerIds.delete(resourceId);
-          this.emitChanged();
-        }
-      }
+      removePath: (path) => this.removePath(path)
     });
   }
 
-  rebuild(): void {
-    // Validate historical owners first. Their path is the only safe signal for
-    // deciding which later file is a copied duplicate rather than the original.
-    const historicalOwners = [...this.byId.values()];
-    const historicalTrustedIds = new Set(this.trustedOwnerIds);
-    this.byId.clear();
-    this.byPath.clear();
-    this.duplicatePathsById.clear();
-    this.trustedOwnerIds.clear();
-    for (const owner of historicalOwners) {
-      const file = this.app.vault.getFileByPath(normalizePath(owner.path));
-      if (!file || this.readStableId(file) !== owner.resourceId) continue;
-      this.registerIndexedEntry(this.createIndexedResource(owner.resourceId, file), historicalTrustedIds.has(owner.resourceId));
-    }
-    for (const file of this.app.vault.getFiles()) this.indexFile(file, false);
-    for (const historicalOwner of historicalOwners) {
-      if (!historicalTrustedIds.has(historicalOwner.resourceId)) continue;
-      const livePaths = this.livePathsForId(historicalOwner.resourceId);
-      const historicalPath = normalizePath(historicalOwner.path);
-      // A unique surviving path represents an offline rename. With multiple
-      // candidates, trust history only when its exact owner still exists.
-      const trustedPath = livePaths.length === 1
-        ? livePaths[0]
-        : livePaths.includes(historicalPath) ? historicalPath : undefined;
-      const trustedEntry = trustedPath ? this.byPath.get(trustedPath) : undefined;
-      if (trustedEntry) {
-        this.byId.set(historicalOwner.resourceId, trustedEntry);
-        this.trustedOwnerIds.add(historicalOwner.resourceId);
-      } else {
-        this.trustedOwnerIds.delete(historicalOwner.resourceId);
-      }
-    }
-    this.emitChanged();
+  rebuild(progress?: (value: ResourceIndexProgress) => void): Promise<ResourceIndexReport> {
+    return this.catalog.rebuild(true, progress);
   }
 
-  indexFile(file: TFile, notify = true): IndexedResource | undefined {
-    if (this.templateFileService.isPendingPath(normalizePath(file.path))) return undefined;
-    const resourceId = this.readStableId(file);
-    if (!resourceId) return undefined;
-    const entry = this.createIndexedResource(resourceId, file);
-    const previous = this.byPath.get(normalizePath(file.path));
-    this.registerIndexedEntry(entry);
-    if (notify && !sameIndexedResource(previous, entry)) this.emitChanged();
-    return entry;
+  /** Loading a tree may precede onLayoutReady's background scan. Share that work. */
+  verifyIndex(): Promise<ResourceIndexReport> { return this.catalog.rebuild(false); }
+
+  /** Identity repair never treats an old cache entry as proof of ownership. */
+  async prepareIdentityRestore(resourceId: string, targetPath: string): Promise<() => void> {
+    const report = await this.catalog.rebuild(true);
+    if (report.failures.length) throw new Error(t("resourceIndex.unverified"));
+    const otherPaths = this.catalog.paths(resourceId).filter((path) => normalizePath(path) !== normalizePath(targetPath));
+    if (otherPaths.length) throw new DuplicateResourceIdError(resourceId, otherPaths);
+    const generation = this.catalog.generation;
+    return () => {
+      if (generation !== this.catalog.generation || !this.catalog.isFullyVerified()) throw new Error(t("resourceIndex.unverified"));
+    };
   }
 
-  removePath(path: string): void {
-    const normalized = normalizePath(path);
-    const entry = this.byPath.get(normalized);
-    this.byPath.delete(normalized);
-    if (entry) this.removeDuplicatePath(entry.resourceId, normalized);
-    // Keep a canonical tombstone until a rebuild or rename establishes the new
-    // owner. Promoting a copied duplicate here would silently rebind old links.
-    if (entry) this.emitChanged();
+  entries(): IndexedResource[] { return this.catalog.entries(); }
+  destroy(): void { this.catalog.destroy(); }
+
+  async indexFile(file: TFile, event: "file" | "metadata" = "file"): Promise<IndexedResource | undefined> {
+    if (this.templateFileService.isPendingPath(file.path)) return undefined;
+    // MetadataCache reports a completed parse, not another write. It must still
+    // request fresh bytes, but cannot invalidate the foreground read merely by
+    // repeating the vault's notification.
+    if (event === "file") this.catalog.invalidate(file.path);
+    return this.catalog.refresh(file, event === "metadata");
   }
 
-  handleRename(file: TFile, oldPath: string): void {
-    const normalizedOldPath = normalizePath(oldPath);
-    const previous = this.byPath.get(normalizedOldPath);
-    const wasOwner = previous && normalizePath(this.byId.get(previous.resourceId)?.path ?? "") === normalizedOldPath;
-    const wasTrustedOwner = Boolean(previous && wasOwner && this.trustedOwnerIds.has(previous.resourceId));
+  removePath(path: string): void { this.catalog.invalidate(normalizePath(path)); }
+
+  async handleRename(file: TFile, oldPath: string): Promise<void> {
     this.removePath(oldPath);
-    const indexed = this.indexFile(file, false);
-    if (indexed) {
-      if (previous && indexed.resourceId === previous.resourceId && wasOwner) {
-        this.byId.set(indexed.resourceId, indexed);
-        if (wasTrustedOwner) this.trustedOwnerIds.add(indexed.resourceId);
-        this.removeDuplicatePath(indexed.resourceId, normalizedOldPath);
-      }
-      this.emitChanged();
-      return;
-    }
-    if (!previous) return;
-    // MetadataCache can briefly lag behind a Markdown rename. The old indexed
-    // identity still belongs to the same Vault file, so carry it to the new path
-    // instead of creating a window where open trees cannot resolve the resource.
-    const fallback: IndexedResource = {
-      ...previous,
-      path: file.path,
-      fileKind: classifyFile(file.path)
-    };
-    this.registerIndexedEntry(fallback, wasTrustedOwner);
-    if (wasOwner) this.byId.set(fallback.resourceId, fallback);
-    this.emitChanged();
+    await this.indexFile(file);
   }
 
-  resolve(reference: FileResourceRef): TFile | undefined {
-    // An exact live hint with the expected ID is stronger than a global map
-    // when copied files temporarily share identity.
-    const hinted = this.app.vault.getFileByPath(normalizePath(reference.pathHint));
-    if (hinted) {
-      const hintedId = this.readStableId(hinted)
-        ?? this.byPath.get(normalizePath(hinted.path))?.resourceId;
-      if (hintedId === reference.resourceId) {
-        return hinted;
-      }
-    }
-    const indexed = this.byId.get(reference.resourceId);
-    if (indexed) {
-      const hasUntrustedConflict = (this.duplicatePathsById.get(reference.resourceId)?.size ?? 0) > 1
-        && !this.trustedOwnerIds.has(reference.resourceId);
-      const file = this.app.vault.getFileByPath(indexed.path);
-      if (file && !hasUntrustedConflict) return file;
-    }
-    return undefined;
+  /** Rendering never reads disk or turns unverified persisted hints into identities. */
+  resolve(reference: FileResourceRef): TFile | undefined { return this.catalog.resolve(reference); }
+  resolveVerified(reference: FileResourceRef): Promise<TFile | undefined> {
+    return this.catalog.resolveVerified(reference);
   }
 
-  /**
-   * Resolve the live path plus external-format metadata used to repair a
-   * persisted file reference. If MetadataCache is not ready, retain the last
-   * indexed/reference value instead of incorrectly clearing a valid badge.
-   */
   describe(reference: FileResourceRef, preferredFile?: TFile): Omit<IndexedResource, "resourceId"> | undefined {
-    const file = preferredFile ?? this.resolve(reference);
-    if (!file) return undefined;
-    const indexed = this.byPath.get(normalizePath(file.path));
-    const cache = this.app.metadataCache.getFileCache(file);
-    const fileSubtype = cache
-      ? classifyFileSubtype(cache.frontmatter)
-      : indexed?.fileSubtype ?? reference.fileSubtype;
-    return {
-      path: file.path,
-      fileKind: classifyFile(file.path),
-      ...(fileSubtype ? { fileSubtype } : {})
-    };
+    // A rename event's preferred path is subject to the same identity check.
+    const file = preferredFile && this.catalog.entry(preferredFile)?.resourceId === reference.resourceId
+      ? preferredFile : this.resolve(reference);
+    const entry = file ? this.catalog.entry(file) : undefined;
+    if (!entry) return undefined;
+    return { path: entry.path, fileKind: entry.fileKind,
+      ...(entry.fileSubtype ? { fileSubtype: entry.fileSubtype } : {}) };
+  }
+
+  private async assertUnique(resourceId: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      const report = await this.catalog.rebuild(false);
+      this.assertKnownUnique(resourceId);
+      if (report.failures.length) throw new Error(t("resourceIndex.unverified"));
+      if (this.catalog.isFullyVerified()) return;
+    }
+    throw new Error(t("resourceIndex.unverified"));
+  }
+
+  private assertKnownUnique(resourceId: string): void {
+    const paths = this.catalog.paths(resourceId);
+    const decision = decideDuplicateIdentity(paths);
+    if (decision.action === "reject") throw new DuplicateResourceIdError(resourceId, decision.paths);
+  }
+
+  /** File side effects require uniqueness as well as a fresh matching identity. */
+  private async requireMutableFile(reference: FileResourceRef): Promise<TFile> {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await this.assertUnique(reference.resourceId);
+      const generation = this.catalog.generation;
+      const file = await this.resolveVerified(reference);
+      if (!file) throw new Error(t("resourceIndex.identityChanged"));
+      // A sync event can introduce a duplicate during the final asynchronous
+      // read. Repeat the uniqueness check rather than modifying that file.
+      if (generation !== this.catalog.generation || !this.catalog.isFullyVerified()) continue;
+      const paths = this.catalog.paths(reference.resourceId);
+      if (paths.length > 1) throw new DuplicateResourceIdError(reference.resourceId, paths);
+      return file;
+    }
+    throw new Error(t("resourceIndex.unverified"));
   }
 
   async ensureStableReference(file: TFile): Promise<FileResourceRef> {
+    const report = await this.catalog.rebuild(false);
+    if (report.failures.length) throw new Error(t("resourceIndex.unverified"));
+    const reference = await this.prepareStableReference(file);
+    await this.assertUnique(reference.resourceId);
+    if (!this.catalog.isFullyVerified()) throw new Error(t("resourceIndex.unverified"));
+    this.assertReferenceCurrent(file, reference);
+    return reference;
+  }
+
+  /** Share identity allocation, not the callers' final uniqueness decisions. */
+  private async prepareStableReference(file: TFile): Promise<FileResourceRef> {
     const path = normalizePath(file.path);
     const pending = this.pendingReferenceByPath.get(path);
     if (pending) return pending;
     const operation = this.ensureStableReferenceInternal(file);
     this.pendingReferenceByPath.set(path, operation);
-    try {
-      return await operation;
-    } finally {
+    try { return await operation; }
+    finally {
       if (this.pendingReferenceByPath.get(path) === operation) this.pendingReferenceByPath.delete(path);
     }
   }
 
   private async ensureStableReferenceInternal(file: TFile): Promise<FileResourceRef> {
+    // Inspect actual bytes, not a potentially lagging MetadataCache entry.
+    let current = await this.catalog.refresh(file);
     let managedFile = file;
-    let resourceId = this.readStableId(file);
-    let fileSubtype = this.readFileSubtype(file);
-    if (file.path.endsWith(".mtn.md")) {
-      if (resourceId) {
-        this.indexMatchingResourceId(resourceId);
-        this.reconcileHistoricalOwner(resourceId);
-        const livePaths = this.livePathsForId(resourceId);
-        const owner = this.byId.get(resourceId);
-        const decision = decideDuplicateIdentity(
-          normalizePath(file.path),
-          owner ? normalizePath(owner.path) : undefined,
-          this.trustedOwnerIds.has(resourceId),
-          livePaths
-        );
-        if (decision.action === "reject") {
-          throw new DuplicateResourceIdError(resourceId, decision.paths);
-        }
-        if (decision.action === "reassign") {
-          const assigned = await this.assignMindTreeDocumentId(file, createId(), resourceId);
-          resourceId = assigned.documentId;
-          managedFile = assigned.file;
-        }
-      } else {
-        const assigned = await this.assignMindTreeDocumentId(file, createId());
+    let resourceId = current?.resourceId;
+    if (resourceId) this.assertKnownUnique(resourceId);
+    else {
+      // Another actor may have assigned an ID while the first read was pending.
+      // In particular, never append a replacement ID to an already named binary.
+      current = await this.catalog.refresh(file);
+      if (current) {
+        resourceId = current.resourceId;
+        this.assertKnownUnique(resourceId);
+      } else if (/\.mtn\.md$/i.test(file.path)) {
+        const assigned = await this.assignMindTreeDocumentId(file, this.createUniqueResourceId());
         resourceId = assigned.documentId;
         managedFile = assigned.file;
-      }
-    } else if (isMarkdownPath(file.path)) {
-      if (resourceId) {
-        this.indexMatchingResourceId(resourceId);
-        this.reconcileHistoricalOwner(resourceId);
-        const owner = this.byId.get(resourceId);
-        const decision = decideDuplicateIdentity(
-          normalizePath(file.path),
-          owner ? normalizePath(owner.path) : undefined,
-          this.trustedOwnerIds.has(resourceId),
-          this.livePathsForId(resourceId)
-        );
-        if (decision.action === "reject") throw new DuplicateResourceIdError(resourceId, decision.paths);
-        if (decision.action === "reassign") {
-          resourceId = await this.assignMarkdownResourceId(file, this.createUniqueResourceId(), resourceId);
-          fileSubtype = this.readFileSubtype(file);
-        }
-      } else {
+      } else if (isMarkdownPath(file.path)) {
         resourceId = await this.assignMarkdownResourceId(file, this.createUniqueResourceId());
-        fileSubtype = this.readFileSubtype(file);
+      } else {
+        let shortId = createShortResourceId();
+        while (this.catalog.has(shortId)) shortId = createShortResourceId();
+        const oldPath = file.path;
+        const newPath = normalizePath(appendNonMarkdownResourceId(oldPath, shortId, this.getNonMarkdownIdSeparator()));
+        if (this.app.vault.getAbstractFileByPath(newPath)) throw new Error(`A file already exists at ${newPath}.`);
+        await this.app.fileManager.renameFile(file, newPath);
+        const renamed = this.app.vault.getFileByPath(newPath);
+        if (!renamed) throw new Error(t("resourceIndex.identityChanged"));
+        this.removePath(oldPath);
+        this.catalog.invalidate(renamed.path);
+        managedFile = renamed;
+        resourceId = shortId;
       }
-    } else if (!resourceId) {
-      let shortId = createShortResourceId();
-      while (this.byId.has(shortId)) shortId = createShortResourceId();
-      const newPath = normalizePath(appendNonMarkdownResourceId(file.path, shortId, this.getNonMarkdownIdSeparator()));
-      if (this.app.vault.getAbstractFileByPath(newPath)) throw new Error(`A file already exists at ${newPath}.`);
-      await this.app.fileManager.renameFile(file, newPath);
-      const renamed = this.app.vault.getFileByPath(newPath);
-      if (!renamed) throw new Error("The renamed resource could not be found.");
-      managedFile = renamed;
-      resourceId = shortId;
     }
-    if (!resourceId) throw new Error("Unable to assign a stable resource ID.");
-    const entry = this.createIndexedResource(resourceId, managedFile, fileSubtype);
-    this.registerIndexedEntry(entry, true);
-    this.emitChanged();
-    return {
-      type: "file",
-      resourceId,
-      pathHint: managedFile.path,
-      fileKind: entry.fileKind,
-      ...(entry.fileSubtype ? { fileSubtype: entry.fileSubtype } : {})
-    };
+    const entry = await this.catalog.refresh(managedFile);
+    if (!entry || entry.resourceId !== resourceId) throw new Error(t("resourceIndex.identityChanged"));
+    this.assertKnownUnique(resourceId);
+    return { type: "file", resourceId, pathHint: managedFile.path, fileKind: entry.fileKind,
+      ...(entry.fileSubtype ? { fileSubtype: entry.fileSubtype } : {}) };
+  }
+
+  private assertReferenceCurrent(file: TFile, reference: FileResourceRef): void {
+    if (this.app.vault.getFileByPath(reference.pathHint) !== file
+      || this.catalog.entry(file)?.resourceId !== reference.resourceId) {
+      throw new Error(t("resourceIndex.identityChanged"));
+    }
+    this.assertKnownUnique(reference.resourceId);
+  }
+
+  /**
+   * A collection is one transaction in the tree, not N full-vault scans. The
+   * opening scan proves the known inventory; the closing scan observes only
+   * changed/new paths before checking all results together. Allocated IDs are
+   * never rolled back or repeated when a read or the destination later fails.
+   */
+  async ensureStableReferences(
+    files: readonly TFile[],
+    progress: (value: FileAssociationProgress) => void = () => undefined,
+    isCurrent: () => boolean = () => true
+  ): Promise<FileAssociationBatch> {
+    const selected = [...new Map(files.map((file) => [file.path, file])).values()];
+    const linked: LinkedFileResult[] = [];
+    const failures: FileAssociationBatch["failures"] = [];
+    const cancelled = (): FileAssociationBatch => ({ linked: [], failures, cancelled: true,
+      assertCurrent: () => { throw new Error(t("notice.associationTargetChanged")); } });
+    progress({ phase: "verify", completed: 0, total: selected.length });
+    if (!isCurrent()) return cancelled();
+    const initial = await this.catalog.rebuild(false);
+    if (!isCurrent()) return cancelled();
+    if (initial.failures.length) throw new Error(t("resourceIndex.unverified"));
+    for (const [index, file] of selected.entries()) {
+      if (!isCurrent()) return cancelled();
+      try { linked.push({ file, reference: await this.prepareStableReference(file) }); }
+      catch (error) { failures.push({ path: file.path, error }); }
+      if (!isCurrent()) return cancelled();
+      progress({ phase: "associate", completed: index + 1, total: selected.length });
+      // Real Vault I/O naturally yields; a warm in-memory/WebView cache may not.
+      if ((index + 1) % 16 === 0) await new Promise<void>((resolve) => setTimeout(resolve, 0));
+    }
+    progress({ phase: "finish", completed: selected.length, total: selected.length });
+    const final = await this.catalog.rebuild(false);
+    if (!isCurrent()) return cancelled();
+    if (final.failures.length) throw new Error(t("resourceIndex.unverified"));
+    const verified = linked.filter(({ file, reference }) => {
+      try { this.assertReferenceCurrent(file, reference); return true; }
+      catch (error) { failures.push({ path: file.path, error }); return false; }
+    });
+    const generation = this.catalog.generation;
+    return { linked: verified, failures, cancelled: false, assertCurrent: () => {
+      if (!isCurrent() || generation !== this.catalog.generation || !this.catalog.isFullyVerified()) {
+        throw new Error(t("resourceIndex.unverified"));
+      }
+      for (const { file, reference } of verified) this.assertReferenceCurrent(file, reference);
+    } };
   }
 
   async createNote(
@@ -331,8 +310,12 @@ export class ResourceIndexService {
     // The title names the file only. The note body is the global default
     // content verbatim and intentionally never receives an implicit H1.
     const file = await this.app.vault.create(path, buildNewNoteBody(initialContent));
-    const reference = await this.ensureStableReference(file);
-    return { file, reference };
+    try {
+      const reference = await this.ensureStableReference(file);
+      return { file, reference };
+    } catch (error) {
+      throw new CreatedNoteAssociationError(file, error);
+    }
   }
 
   /**
@@ -355,6 +338,8 @@ export class ResourceIndexService {
     isTargetCurrent: () => boolean
   ): Promise<{ file: TFile; reference: FileResourceRef }> {
     const normalizedDirectory = normalizeDirectory(directory);
+    const report = await this.catalog.rebuild(false);
+    if (report.failures.length) throw new Error(t("resourceIndex.unverified"));
     return this.templateFileService.create(
       template, normalizedDirectory, title, this.getNonMarkdownIdSeparator(), isTargetCurrent
     );
@@ -400,15 +385,12 @@ export class ResourceIndexService {
         // frontmatter. Overwrite only the resource ID so the copy cannot alias
         // an existing note while all unrelated YAML remains intact.
         const resourceId = this.createUniqueResourceId();
-        let fileSubtype: FileResourceRef["fileSubtype"];
         await this.app.fileManager.processFrontMatter(copiedFile, (frontmatter) => {
-          fileSubtype = classifyFileSubtype(frontmatter);
           const current = asRecord(frontmatter["mind-tree-nature"]);
           frontmatter["mind-tree-nature"] = { ...(current ?? {}), resourceId };
         });
-        const entry = this.createIndexedResource(resourceId, copiedFile, fileSubtype);
-        this.registerIndexedEntry(entry, true);
-        this.emitChanged();
+        const entry = await this.catalog.refresh(copiedFile);
+        if (!entry || entry.resourceId !== resourceId) throw new Error(t("resourceIndex.identityChanged"));
         reference = {
           type: "file",
           resourceId,
@@ -478,8 +460,7 @@ export class ResourceIndexService {
   }
 
   private async renameLinkedFileInternal(reference: FileResourceRef, title: string): Promise<TFile> {
-    const file = this.resolve(reference);
-    if (!file) throw new Error("The linked file could not be found.");
+    const file = await this.requireMutableFile(reference);
     const newPath = normalizePath(buildLinkedResourcePath(
       file.path,
       title,
@@ -492,7 +473,7 @@ export class ResourceIndexService {
     await this.app.fileManager.renameFile(file, newPath);
     const renamed = this.app.vault.getFileByPath(newPath);
     if (!renamed) throw new Error("The renamed file could not be found.");
-    this.handleRename(renamed, oldPath);
+    await this.handleRename(renamed, oldPath);
     return renamed;
   }
 
@@ -505,8 +486,7 @@ export class ResourceIndexService {
   }
 
   private async moveLinkedFileInternal(reference: FileResourceRef, destinationDirectory: string): Promise<TFile> {
-    const file = this.resolve(reference);
-    if (!file) throw new Error("The linked file could not be found.");
+    const file = await this.requireMutableFile(reference);
     const directory = normalizeDirectory(destinationDirectory);
     const newPath = normalizePath(`${directory ? `${directory}/` : ""}${file.name}`);
     if (newPath === file.path) return file;
@@ -515,15 +495,14 @@ export class ResourceIndexService {
     await this.app.fileManager.renameFile(file, newPath);
     const moved = this.app.vault.getFileByPath(newPath);
     if (!moved) throw new Error("The moved file could not be found.");
-    this.handleRename(moved, oldPath);
+    await this.handleRename(moved, oldPath);
     return moved;
   }
 
   /** Move a linked vault file to Trash under the same per-resource lock. */
   async trashLinkedFile(reference: FileResourceRef): Promise<TFile> {
     return this.runResourceMutation(reference.resourceId, async () => {
-      const file = this.resolve(reference);
-      if (!file) throw new Error("The linked file could not be found.");
+      const file = await this.requireMutableFile(reference);
       const oldPath = file.path;
       await this.app.fileManager.trashFile(file);
       this.removePath(oldPath);
@@ -562,110 +541,9 @@ export class ResourceIndexService {
         ? (directory === "" || parentPath === directory || parentPath.startsWith(`${directory}/`))
         : parentPath === directory;
       if (!inScope) return false;
-      const id = this.readStableId(file);
+      const id = this.catalog.entry(file)?.resourceId;
       return !referencedPaths.has(normalizePath(file.path)) && (!id || !referencedIds.has(id));
     });
-  }
-
-  private readStableId(file: TFile): string | undefined {
-    if (!isMarkdownPath(file.path)) return extractNonMarkdownResourceId(file.path);
-    const frontmatter = this.app.metadataCache.getFileCache(file)?.frontmatter;
-    if (file.path.endsWith(".mtn.md")) {
-      const directDocumentId = stringValue(frontmatter?.["documentId"]);
-      if (directDocumentId) return directDocumentId;
-    }
-    const machine = asRecord(frontmatter?.["mind-tree-nature"]);
-    if (file.path.endsWith(".mtn.md")) return stringValue(machine?.["documentId"]);
-    return stringValue(machine?.["resourceId"]);
-  }
-
-  private readFileSubtype(file: TFile): FileResourceRef["fileSubtype"] {
-    const cache = this.app.metadataCache.getFileCache(file);
-    if (cache) return classifyFileSubtype(cache.frontmatter);
-    return this.byPath.get(normalizePath(file.path))?.fileSubtype;
-  }
-
-  /** Build one canonical index entry so every association path classifies alike. */
-  private createIndexedResource(
-    resourceId: ResourceId,
-    file: TFile,
-    fallbackSubtype?: FileResourceRef["fileSubtype"]
-  ): IndexedResource {
-    const fileSubtype = this.readFileSubtype(file) ?? fallbackSubtype;
-    return {
-      resourceId,
-      path: file.path,
-      fileKind: classifyFile(file.path),
-      ...(fileSubtype ? { fileSubtype } : {})
-    };
-  }
-
-  /** Register a path without allowing it to replace a different ID owner. */
-  private registerIndexedEntry(entry: IndexedResource, trustedOwner = false): void {
-    const path = normalizePath(entry.path);
-    const previousAtPath = this.byPath.get(path);
-    if (previousAtPath && previousAtPath.resourceId !== entry.resourceId) {
-      this.removeDuplicatePath(previousAtPath.resourceId, path);
-      if (normalizePath(this.byId.get(previousAtPath.resourceId)?.path ?? "") === path) {
-        this.byId.delete(previousAtPath.resourceId);
-        this.trustedOwnerIds.delete(previousAtPath.resourceId);
-      }
-    }
-    this.byPath.set(path, entry);
-    const owner = this.byId.get(entry.resourceId);
-    if (!owner) {
-      this.byId.set(entry.resourceId, entry);
-      if (trustedOwner) this.trustedOwnerIds.add(entry.resourceId);
-      return;
-    }
-    if (normalizePath(owner.path) === path) {
-      this.byId.set(entry.resourceId, entry);
-      if (trustedOwner) this.trustedOwnerIds.add(entry.resourceId);
-      return;
-    }
-    const duplicates = this.duplicatePathsById.get(entry.resourceId) ?? new Set<string>();
-    duplicates.add(normalizePath(owner.path));
-    duplicates.add(path);
-    this.duplicatePathsById.set(entry.resourceId, duplicates);
-  }
-
-  private removeDuplicatePath(resourceId: ResourceId, path: string): void {
-    const duplicates = this.duplicatePathsById.get(resourceId);
-    if (!duplicates) return;
-    duplicates.delete(normalizePath(path));
-    if (duplicates.size <= 1) this.duplicatePathsById.delete(resourceId);
-  }
-
-  /** Discover every current candidate before deciding whether an ID is safe. */
-  private indexMatchingResourceId(resourceId: ResourceId): void {
-    for (const candidate of this.app.vault.getFiles()) {
-      if (this.readStableId(candidate) === resourceId) this.indexFile(candidate, false);
-    }
-  }
-
-  private livePathsForId(resourceId: ResourceId): string[] {
-    const paths = new Set<string>();
-    const owner = this.byId.get(resourceId);
-    if (owner) {
-      const file = this.app.vault.getFileByPath(normalizePath(owner.path));
-      if (file && this.readStableId(file) === resourceId) paths.add(normalizePath(file.path));
-    }
-    for (const path of this.duplicatePathsById.get(resourceId) ?? []) {
-      const file = this.app.vault.getFileByPath(path);
-      if (file && this.readStableId(file) === resourceId) paths.add(normalizePath(file.path));
-    }
-    return [...paths].sort((left, right) => left.localeCompare(right));
-  }
-
-  /** Move a trusted owner after an offline rename only when exactly one file remains. */
-  private reconcileHistoricalOwner(resourceId: ResourceId): void {
-    if (!this.trustedOwnerIds.has(resourceId)) return;
-    const livePaths = this.livePathsForId(resourceId);
-    if (livePaths.length !== 1) return;
-    const onlyPath = livePaths[0];
-    if (!onlyPath) return;
-    const entry = this.byPath.get(onlyPath);
-    if (entry) this.byId.set(resourceId, entry);
   }
 
   /** Persist a lazy or replacement identity without touching the tree payload. */
@@ -690,19 +568,9 @@ export class ResourceIndexService {
       });
     }
     const updated = this.app.vault.getFileByPath(path) ?? file;
-    const previous = this.byPath.get(path);
-    if (previous) {
-      this.byPath.delete(path);
-      this.removeDuplicatePath(previous.resourceId, path);
-      if (normalizePath(this.byId.get(previous.resourceId)?.path ?? "") === path) {
-        this.byId.delete(previous.resourceId);
-        this.trustedOwnerIds.delete(previous.resourceId);
-      }
-    }
-    const entry = this.createIndexedResource(persistedDocumentId, updated);
-    this.registerIndexedEntry(entry, true);
-    this.byId.set(persistedDocumentId, entry);
-    this.trustedOwnerIds.add(persistedDocumentId);
+    this.catalog.invalidate(updated.path);
+    const entry = await this.catalog.refresh(updated);
+    if (entry?.resourceId !== persistedDocumentId) throw new Error(t("resourceIndex.identityChanged"));
     return { file: updated, documentId: persistedDocumentId };
   }
 
@@ -729,6 +597,7 @@ export class ResourceIndexService {
         };
       }
     });
+    this.catalog.invalidate(file.path);
     return persistedResourceId;
   }
 
@@ -744,7 +613,7 @@ export class ResourceIndexService {
 
   private createUniqueResourceId(): ResourceId {
     let resourceId = createId();
-    while (this.byId.has(resourceId)) resourceId = createId();
+    while (this.catalog.has(resourceId)) resourceId = createId();
     return resourceId;
   }
 
@@ -757,18 +626,7 @@ export class ResourceIndexService {
     }
   }
 
-  private emitChanged(): void {
-    if (!this.onChanged) return;
-    const fingerprint = this.persistedFingerprint();
-    if (fingerprint === this.lastEmittedFingerprint) return;
-    this.lastEmittedFingerprint = fingerprint;
-    this.onChanged(Object.fromEntries(this.byId.entries()));
-  }
 
-  private persistedFingerprint(): string {
-    return JSON.stringify([...this.byId.entries()]
-      .sort(([left], [right]) => left.localeCompare(right)));
-  }
 }
 
 function sanitizeFileName(value: string): string {
@@ -789,12 +647,4 @@ function asRecord(value: unknown): Record<string, unknown> | undefined {
 
 function stringValue(value: unknown): string | undefined {
   return typeof value === "string" && value.length > 0 ? value : undefined;
-}
-
-function sameIndexedResource(left: IndexedResource | undefined, right: IndexedResource): boolean {
-  return Boolean(left
-    && left.resourceId === right.resourceId
-    && normalizePath(left.path) === normalizePath(right.path)
-    && left.fileKind === right.fileKind
-    && left.fileSubtype === right.fileSubtype);
 }

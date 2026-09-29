@@ -3,7 +3,6 @@ import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import {
   createDefaultDocumentSettings,
   DOCUMENT_SETTING_YAML_KEYS,
-  documentSettingsToYaml,
   documentSettingsUsedDefaults,
   normalizeDocumentSettings
 } from "../document-settings";
@@ -33,6 +32,7 @@ import {
   mindTreeMigrationFactory
 } from "./migrations";
 import { OUTLINE_END, OUTLINE_START, renderOutline } from "./outline";
+import { desiredTreeSettings, extractTreeSettings, initializeSettingsState, settingsForSerialization } from "../document-settings-state";
 
 const FRONTMATTER_PATTERN = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
 const CURRENT_DATA_PATTERN = /<!-- mtn:data:start -->\s*\r?\n```mtn-data-gzip\s*\r?\n([A-Za-z0-9+/=\r\n]+?)\r?\n```\s*\r?\n<!-- mtn:data:end -->/i;
@@ -94,9 +94,7 @@ export function parseMindTreeFile(source: string, options: Readonly<ParseMindTre
       }
       const migratedRoot = migrated.frontmatter;
       const normalizedSettings = normalizeDocumentSettings(migratedRoot, defaultSettings);
-      // This comparison covers both an absent property and a hand-edited value
-      // that is not valid. The view will save once so the repaired value becomes
-      // explicit YAML instead of being re-inferred on every open.
+      // Defaults are runtime fallbacks, not permission to recreate deleted YAML.
       defaultedDocumentSettings = documentSettingsUsedDefaults(migratedRoot, normalizedSettings);
       if (headerDocumentId
         && typeof migrated.machineData["documentId"] === "string"
@@ -119,6 +117,7 @@ export function parseMindTreeFile(source: string, options: Readonly<ParseMindTre
   }
 
   const document = normalizeDocument(rawDocument);
+  initializeSettingsState(document, extractTreeSettings(readFrontmatter(source)));
   const validation = validateDocument(document);
   if (!validation.valid) {
     throw new MindTreeFormatError("Mind Tree data failed structural validation.", validation.issues.map((issue) => issue.message));
@@ -154,11 +153,11 @@ export function serializeMindTreeFile(document: MindTreeDocument, previousSource
       && key !== "mindTree"
       && key !== "mind-tree-nature"
       && key !== "mtn-data"
-      && !RESERVED_VERSION_KEYS.has(key)));
+      && key !== MIND_TREE_SCHEMA_VERSION_YAML_KEY));
   const yaml = stringifyYaml({
     ...(document.documentId ? { documentId: document.documentId } : {}),
     [MIND_TREE_SCHEMA_VERSION_YAML_KEY]: CURRENT_MIND_TREE_SCHEMA_VERSION,
-    ...documentSettingsToYaml(document.settings),
+    ...(previousSource ? settingsForSerialization(document, extractTreeSettings(previousFrontmatter)) : desiredTreeSettings(document)),
     ...preservedFrontmatter
   }, {
     indent: 2,

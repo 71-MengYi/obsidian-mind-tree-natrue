@@ -2,219 +2,87 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addNode, cloneDocument, createEmptyDocument } from "../src/domain/tree";
 import { serializeMindTreeFile } from "../src/format/document";
-import {
-  createManagedMindTreeSnapshot,
-  externalMergeWouldReplaceLocal,
-  mergeMindTreeExternalChange,
-  rebaseMindTreeDocument,
-  sameManagedMindTreeSnapshot
-} from "../src/services/document-conflict";
-import { DocumentSession } from "../src/services/document-session";
+import { assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot } from "../src/services/document-conflict";
 
-test("generated text, prose, unknown Frontmatter and Base64 wrapping do not conflict", () => {
+test("generated heading, outline, prose, unknown YAML and Base64 wrapping are not version changes", () => {
   const document = createEmptyDocument("Root");
   const baseline = serializeMindTreeFile(document);
-  const externalText = baseline
-    .replace("schemaVersion: 2", "schemaVersion: 2\nexternalProperty: retained")
-    .replace("# Root", "# Renamed by another plugin\n\nExternal prose")
-    .replace("- Root", "- Disposable outline text");
-
-  const result = mergeMindTreeExternalChange(baseline, document, externalText);
-  assert.equal(result.kind, "merged");
-  if (result.kind !== "merged") return;
-  assert.equal(
-    sameManagedMindTreeSnapshot(
-      createManagedMindTreeSnapshot(baseline),
-      createManagedMindTreeSnapshot(externalText)
-    ),
-    true
-  );
-  const saved = serializeMindTreeFile(result.document, externalText);
-  assert.match(saved, /externalProperty: retained/);
-  assert.match(saved, /External prose/);
-
-  const rewrapped = baseline.replace(
-    /(```mtn-data-gzip\r?\n)([A-Za-z0-9+/=\r\n]+?)(\r?\n```)/,
-    (_whole, opening: string, payload: string, closing: string) =>
-      `${opening}${payload.replace(/\s+/g, "").replace(/.{1,37}/g, "$&\n").trimEnd()}${closing}`
-  );
-  assert.equal(
-    sameManagedMindTreeSnapshot(
-      createManagedMindTreeSnapshot(baseline),
-      createManagedMindTreeSnapshot(rewrapped)
-    ),
-    true
-  );
+  const external = baseline.replace("schemaVersion: 2", "schemaVersion: 2\ncustom: retained")
+    .replace("# Root", "# Renamed externally\n\nKeep this prose").replace("- Root", "- Changed outline");
+  const result = assessExternalVersion(baseline, document, external);
+  assert.equal(result.kind, "unchanged");
+  if (result.kind === "unchanged") {
+    assert.match(serializeMindTreeFile(result.document, external), /Keep this prose/);
+    assert.match(serializeMindTreeFile(result.document, external), /custom: retained/);
+  }
+  const wrapped = baseline.replace(/(\x60\x60\x60mtn-data-gzip\r?\n)([A-Za-z0-9+/=\r\n]+?)(\r?\n\x60\x60\x60)/,
+    (_all, start: string, data: string, end: string) => start + data.replace(/\s+/g, "").replace(/.{1,37}/g, "$&\n").trimEnd() + end);
+  assert.ok(sameManagedMindTreeSnapshot(createManagedMindTreeSnapshot(baseline), createManagedMindTreeSnapshot(wrapped)));
 });
 
-test("external managed replacement is distinguished from an already-identical result", () => {
-  const baselineDocument = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(baselineDocument);
-  const external = cloneDocument(baselineDocument);
-  addNode(external, external.rootId, "Remote");
-  const result = mergeMindTreeExternalChange(
-    baseline,
-    baselineDocument,
-    serializeMindTreeFile(external, baseline)
-  );
-  assert.equal(result.kind, "merged");
-  if (result.kind !== "merged") return;
-
-  assert.equal(externalMergeWouldReplaceLocal(result, baselineDocument), true);
-  assert.equal(externalMergeWouldReplaceLocal(result, external), false);
+test("pure filename/heading change and supported format normalization do not require choice", () => {
+  const original = createEmptyDocument("Old");
+  const baseline = serializeMindTreeFile(original);
+  const renamed = cloneDocument(original);
+  renamed.title = renamed.nodes[renamed.rootId]!.title = "New";
+  assert.equal(assessExternalVersion(baseline, renamed, baseline.replace("# Old", "# New")).kind, "unchanged");
+  assert.equal(assessExternalVersion(baseline, original, baseline.replace("schemaVersion: 2", "schemaVersion: 1")).kind, "unchanged");
 });
 
-test("an external generated heading update does not conflict with a local filename-title sync", () => {
-  const baselineDocument = createEmptyDocument("Old name");
-  const baseline = serializeMindTreeFile(baselineDocument);
-  const local = cloneDocument(baselineDocument);
-  local.title = "New name";
-  local.nodes[local.rootId]!.title = "New name";
-  const externalHeading = baseline.replace("# Old name", "# New name");
-
-  const result = mergeMindTreeExternalChange(baseline, local, externalHeading);
-  assert.equal(result.kind, "merged");
-  if (result.kind !== "merged") return;
-  assert.equal(result.document.title, "New name");
-  assert.match(serializeMindTreeFile(result.document, externalHeading), /# New name/);
-});
-
-test("a supported schema normalization is validation, not a content conflict", () => {
-  const document = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(document);
-  const supportedOlderHeader = baseline.replace("schemaVersion: 2", "schemaVersion: 1");
-  assert.equal(mergeMindTreeExternalChange(baseline, document, supportedOlderHeader).kind, "merged");
-});
-
-test("machine data uses a three-way merge and conflicts only on divergent edits", () => {
-  const baselineDocument = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(baselineDocument);
-  const local = cloneDocument(baselineDocument);
+test("remote-only and divergent machine data require explicit choice; identical results do not", () => {
+  const original = createEmptyDocument("Root");
+  const baseline = serializeMindTreeFile(original);
+  const local = cloneDocument(original);
+  const external = cloneDocument(original);
   addNode(local, local.rootId, "Local");
-
-  const externalOnly = cloneDocument(baselineDocument);
-  addNode(externalOnly, externalOnly.rootId, "External");
-  const externalSource = serializeMindTreeFile(externalOnly, baseline);
-  assert.equal(mergeMindTreeExternalChange(baseline, baselineDocument, externalSource).kind, "merged");
-
-  const divergent = mergeMindTreeExternalChange(baseline, local, externalSource);
-  assert.equal(divergent.kind, "conflict");
-  if (divergent.kind === "conflict") {
-    assert.ok(divergent.reasons.some((reason) => reason.kind === "machine-data"));
-  }
-
-  const sameSource = serializeMindTreeFile(local, baseline);
-  const same = mergeMindTreeExternalChange(baseline, local, sameSource);
-  assert.equal(same.kind, "merged");
+  addNode(external, external.rootId, "External");
+  const remote = serializeMindTreeFile(external);
+  assert.equal(assessExternalVersion(baseline, original, remote).kind, "choose");
+  assert.equal(assessExternalVersion(baseline, local, remote).kind, "choose");
+  assert.equal(assessExternalVersion(baseline, external, remote).kind, "unchanged");
 });
 
-test("six YAML settings merge independently and same-field divergence conflicts", () => {
-  const baselineDocument = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(baselineDocument);
-  const local = cloneDocument(baselineDocument);
+test("all six settings are metadata updates rather than version choices", () => {
+  const original = createEmptyDocument("Root");
+  const baseline = serializeMindTreeFile(original);
+  const local = cloneDocument(original);
   local.settings.layoutMode = "tree";
-  const external = cloneDocument(baselineDocument);
-  external.settings.theme = "ocean";
-
-  const merged = mergeMindTreeExternalChange(
-    baseline,
-    local,
-    serializeMindTreeFile(external, baseline)
-  );
-  assert.equal(merged.kind, "merged");
-  if (merged.kind === "merged") {
-    assert.equal(merged.document.settings.layoutMode, "tree");
-    assert.equal(merged.document.settings.theme, "ocean");
-  }
-
-  const conflictingExternal = cloneDocument(baselineDocument);
-  conflictingExternal.settings.layoutMode = "left";
-  const conflict = mergeMindTreeExternalChange(
-    baseline,
-    local,
-    serializeMindTreeFile(conflictingExternal, baseline)
-  );
-  assert.equal(conflict.kind, "conflict");
-  if (conflict.kind === "conflict") {
-    assert.ok(conflict.reasons.some((reason) =>
-      reason.kind === "document-setting" && reason.property === "layoutMode"));
-  }
-});
-
-test("document identity is protected independently from machine data", () => {
-  const baselineDocument = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(baselineDocument);
-  const local = cloneDocument(baselineDocument);
-  local.documentId = "local-id";
-  const external = cloneDocument(baselineDocument);
-  external.documentId = "external-id";
-
-  const conflict = mergeMindTreeExternalChange(
-    baseline,
-    local,
-    serializeMindTreeFile(external, baseline)
-  );
-  assert.equal(conflict.kind, "conflict");
-  if (conflict.kind === "conflict") {
-    assert.ok(conflict.reasons.some((reason) => reason.kind === "document-id"));
-  }
-
-  const adopted = mergeMindTreeExternalChange(
-    baseline,
-    baselineDocument,
-    serializeMindTreeFile(external, baseline)
-  );
-  assert.equal(adopted.kind, "merged");
-  if (adopted.kind === "merged") assert.equal(adopted.document.documentId, "external-id");
-
-  const established = cloneDocument(baselineDocument);
-  established.documentId = "established-id";
-  const establishedSource = serializeMindTreeFile(established, baseline);
-  const replaced = cloneDocument(established);
-  replaced.documentId = "unexpected-id";
-  const dangerousReplacement = mergeMindTreeExternalChange(
-    establishedSource,
-    established,
-    serializeMindTreeFile(replaced, establishedSource)
-  );
-  assert.equal(dangerousReplacement.kind, "conflict");
-  if (dangerousReplacement.kind === "conflict") {
-    assert.ok(dangerousReplacement.reasons.some((reason) => reason.kind === "document-id"));
-  }
-});
-
-test("invalid schema or compressed data blocks automatic overwrite", () => {
-  const document = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(document);
-  const future = baseline.replace("schemaVersion: 2", "schemaVersion: 99");
-  const damaged = baseline.replace(
-    /(```mtn-data-gzip\r?\n)[A-Za-z0-9+/=]/,
-    "$1!"
-  );
-
-  for (const source of [future, damaged]) {
-    const result = mergeMindTreeExternalChange(baseline, document, source);
-    assert.equal(result.kind, "conflict");
-    if (result.kind === "conflict") {
-      assert.ok(result.reasons.some((reason) => reason.kind === "invalid-external"));
+  const changes = { theme: "flat", layoutMode: "left", nodeShape: "square", connectionStyle: "straight", recursiveScan: true, collectionMode: "collect" } as const;
+  for (const [key, value] of Object.entries(changes)) {
+    const external = cloneDocument(original);
+    Object.assign(external.settings, { [key]: value });
+    const result = assessExternalVersion(baseline, local, serializeMindTreeFile(external));
+    assert.equal(result.kind, "unchanged", key);
+    if (result.kind === "unchanged") {
+      assert.equal(result.document.settings[key as keyof typeof changes], value);
+      if (key !== "layoutMode") assert.equal(result.document.settings.layoutMode, "tree");
     }
   }
 });
 
-test("history rebase keeps local setting undo while retaining accepted external machine data", () => {
-  const baselineDocument = createEmptyDocument("Root");
-  const baseline = serializeMindTreeFile(baselineDocument);
-  const session = new DocumentSession();
-  session.load(baseline);
-  const local = session.execute(baselineDocument, (draft) => { draft.settings.layoutMode = "tree"; });
-  const external = cloneDocument(baselineDocument);
-  const externalNode = addNode(external, external.rootId, "External");
-  const result = mergeMindTreeExternalChange(baseline, local, serializeMindTreeFile(external, baseline));
-  assert.equal(result.kind, "merged");
-  if (result.kind !== "merged") return;
+test("identity is protected while a first assignment is accepted without version choice", () => {
+  const original = createEmptyDocument("Root");
+  const baseline = serializeMindTreeFile(original);
+  const identified = cloneDocument(original);
+  identified.documentId = "stable";
+  const first = assessExternalVersion(baseline, original, serializeMindTreeFile(identified));
+  assert.equal(first.kind, "unchanged");
+  if (first.kind === "unchanged") assert.equal(first.document.documentId, "stable");
+  const different = cloneDocument(identified);
+  different.documentId = "other";
+  assert.equal(assessExternalVersion(baseline, identified, serializeMindTreeFile(different)).kind, "blocked");
+  const established = serializeMindTreeFile(identified);
+  for (const doc of [original, different]) {
+    assert.equal(assessExternalVersion(established, identified, serializeMindTreeFile(doc)).kind, "blocked");
+  }
+});
 
-  session.rebaseHistory((snapshot) => rebaseMindTreeDocument(snapshot, result.rebase));
-  const undone = session.undo(result.document);
-  assert.ok(undone?.nodes[externalNode.id]);
-  assert.equal(undone?.settings.layoutMode, "balanced");
+test("future version, missing or damaged machine data and invalid baseline prevent any overwrite", () => {
+  const document = createEmptyDocument("Root");
+  const baseline = serializeMindTreeFile(document);
+  for (const text of ["", baseline.replace("schemaVersion: 2", "schemaVersion: 99"),
+    baseline.replace(/(\x60\x60\x60mtn-data-gzip\r?\n)[A-Za-z0-9+/=]/, "$1!")]) {
+    assert.equal(assessExternalVersion(baseline, document, text).kind, "blocked");
+    assert.equal(assessExternalVersion(text, document, baseline).kind, "blocked");
+  }
 });

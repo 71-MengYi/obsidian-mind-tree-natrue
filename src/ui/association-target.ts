@@ -1,4 +1,24 @@
-import type { MindTreeDocument, MindTreeNode, NodeId, ResourceRef } from "../types";
+import type { FileResourceRef, MindTreeDocument, MindTreeNode, NodeId, ResourceRef } from "../types";
+
+/** Recheck the live document after asynchronous collection, preserving order. */
+export function uncollectedReferences<T extends { reference: FileResourceRef }>(
+  document: Readonly<MindTreeDocument>, candidates: readonly T[]
+): T[] {
+  const ids = new Set<string>();
+  const paths = new Set<string>();
+  for (const node of Object.values(document.nodes)) {
+    if (node.resource?.type !== "file") continue;
+    ids.add(node.resource.resourceId);
+    paths.add(node.resource.pathHint.replace(/\\/g, "/"));
+  }
+  return candidates.filter(({ reference }) => {
+    const path = reference.pathHint.replace(/\\/g, "/");
+    if (ids.has(reference.resourceId) || paths.has(path)) return false;
+    ids.add(reference.resourceId);
+    paths.add(path);
+    return true;
+  });
+}
 
 /** Capture before opening any dialog or starting asynchronous file operations. */
 export interface AssociationTarget {

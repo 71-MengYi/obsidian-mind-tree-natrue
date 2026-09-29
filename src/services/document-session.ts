@@ -1,5 +1,6 @@
 import { cloneDocument } from "../domain/tree";
 import type { MindTreeDocument } from "../types";
+import { rebaseTreeSettings, restoreTreeSettingsHistory, type TreeSettingKey } from "../document-settings-state";
 
 export class SaveConflictError extends Error {
   constructor() {
@@ -92,7 +93,7 @@ export class DocumentSession {
     const previous = this.undoStack.pop();
     if (!previous) return undefined;
     this.redoStack.push(document);
-    return previous;
+    return restoreTreeSettingsHistory(previous, document);
   }
 
   redo(document: MindTreeDocument): MindTreeDocument | undefined {
@@ -100,7 +101,7 @@ export class DocumentSession {
     const next = this.redoStack.pop();
     if (!next) return undefined;
     this.undoStack.push(document);
-    return next;
+    return restoreTreeSettingsHistory(next, document);
   }
 
   clearHistory(): void {
@@ -108,20 +109,17 @@ export class DocumentSession {
     this.redoStack = [];
   }
 
+  /** External YAML must not be resurrected by an unrelated node undo. */
+  rebaseSettings(external: MindTreeDocument, keys: readonly TreeSettingKey[]): void {
+    if (!keys.length) return;
+    this.undoStack = this.undoStack.map((document) => rebaseTreeSettings(document, external, keys));
+    this.redoStack = this.redoStack.map((document) => rebaseTreeSettings(document, external, keys));
+  }
+
   /** A lazily assigned tree identity must survive undo/redo snapshots. */
   adoptDocumentIdentity(documentId: string): void {
     for (const snapshot of this.undoStack) snapshot.documentId = documentId;
     for (const snapshot of this.redoStack) snapshot.documentId = documentId;
-  }
-
-  /**
-   * Apply accepted external state to every history snapshot. This prevents an
-   * undo from resurrecting an obsolete external identity, setting or machine
-   * tree while retaining the user's still-valid local undo transitions.
-   */
-  rebaseHistory(transform: (snapshot: MindTreeDocument) => MindTreeDocument): void {
-    this.undoStack = this.undoStack.map(transform);
-    this.redoStack = this.redoStack.map(transform);
   }
 
   /**

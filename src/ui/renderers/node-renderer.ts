@@ -26,6 +26,8 @@ export interface NodeRenderState {
   readonly selectedIds: ReadonlySet<NodeId>;
   readonly editingNodeId?: NodeId;
   readonly editingDraftValue?: string;
+  /** A resumed draft in a background leaf must not steal keyboard focus. */
+  readonly focusEditor?: boolean;
   readonly editingSelectionMode: "all" | "end";
   readonly branchColorSlots: ReadonlyMap<NodeId, number>;
   readonly foldDirections: ReadonlyMap<NodeId, FoldDirection>;
@@ -210,6 +212,7 @@ export class NodeRenderer {
     });
     input.addEventListener("blur", () => actions.finishEdit(node.id, input.value));
     this.focusEditor = () => {
+      if (state.focusEditor === false) return;
       actions.editorReady?.(input);
       input.focus({ preventScroll: true });
       if (state.editingSelectionMode === "end") {

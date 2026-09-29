@@ -1,5 +1,4 @@
 import type { TFile } from "obsidian";
-import { cloneDocument } from "../../domain/tree";
 import type { MindTreeDocument, MindTreeNode, MindTreeNodeAlignment } from "../../types";
 import { t } from "../../i18n";
 import { BrowserImageNodePresentation } from "../image-nodes";
@@ -13,6 +12,7 @@ import { centerViewportOnRect, pinchViewport, viewportToCssPresentation, wheelDe
   type ViewportState, type ViewportPoint } from "../viewport";
 import { DisposableUiObject } from "./ui-object";
 import { createCanvasLabelId } from "./canvas-shell";
+import { previewDocument } from "./version-preview-model";
 
 export interface TreePreviewOptions extends FileBadgeRules {
   readonly nodeWrapWidth: number;
@@ -102,8 +102,15 @@ export class ReadOnlyTreePreview extends DisposableUiObject {
       event.stopPropagation();
       if (this.canvas.hasPointerCapture(event.pointerId)) this.canvas.releasePointerCapture(event.pointerId);
     }) as EventListener);
-    this.listen(owner, "blur", () => this.pointers.clear());
-    this.own(() => { for (const id of this.pointers.keys()) if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id); this.pointers.clear(); });
+    const releasePointers = (): void => {
+      for (const id of [...this.pointers.keys()]) if (this.canvas.hasPointerCapture(id)) this.canvas.releasePointerCapture(id);
+      this.pointers.clear();
+    };
+    this.listen(owner, "blur", releasePointers);
+    this.listen(this.element.ownerDocument, "visibilitychange", () => {
+      if (this.element.ownerDocument.hidden) releasePointers();
+    });
+    this.own(releasePointers);
     // Touch isolation is local to this pane. Native button clicks remain live;
     // canvas gestures never reach Obsidian's sidebar/down-swipe handlers.
     for (const name of ["touchstart", "touchmove", "touchend", "touchcancel"]) this.listen(this.canvas, name, (event) => {
@@ -139,8 +146,7 @@ export class ReadOnlyTreePreview extends DisposableUiObject {
 
   private render(): void {
     if (!this.document || this.cleanup.isDisposed) return;
-    const document = cloneDocument(this.document);
-    for (const [id, collapsed] of this.folds) if (document.nodes[id]) document.nodes[id]!.collapsed = collapsed;
+    const document = previewDocument(this.document, this.folds);
     const settings = document.settings;
     this.element.dataset.mtnTheme = settings.theme;
     this.element.dataset.mtnNodeShape = settings.nodeShape;

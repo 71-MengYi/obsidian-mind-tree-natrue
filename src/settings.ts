@@ -1,6 +1,7 @@
 import { App, PluginSettingTab } from "obsidian";
 import { t, type TranslationKey } from "./i18n";
 import type MindTreeNaturePlugin from "./main";
+import type { ResourceIndexProgress } from "./services/resource-catalog";
 import { BasicSettingsPage, MindMapSettingsPage, TopicNoteSettingsPage } from "./ui/settings-pages";
 export { DEFAULT_SETTINGS } from "./settings-model";
 export type { MindTreeSettings } from "./settings-model";
@@ -19,6 +20,8 @@ const SETTINGS_PAGES: ReadonlyArray<{ id: SettingsPage; label: TranslationKey }>
 
 export class MindTreeSettingTab extends PluginSettingTab {
   private activePage: SettingsPage = "basic";
+  private externalRefreshPending = false;
+  private deferredRefreshCleanup?: () => void;
 
   constructor(app: App, private readonly plugin: MindTreeNaturePlugin) {
     super(app, plugin);
@@ -35,11 +38,39 @@ export class MindTreeSettingTab extends PluginSettingTab {
     const port = {
       settings: this.plugin.settings,
       save: () => this.plugin.saveSettings(),
-      refreshOpenLayouts: () => this.plugin.refreshOpenMindTreeLayouts()
+      refreshOpenLayouts: () => this.plugin.refreshOpenMindTreeLayouts(),
+      rebuildResourceIndex: (progress?: (value: ResourceIndexProgress) => void) => this.plugin.rebuildResourceIndex(progress)
     };
     if (this.activePage === "basic") new BasicSettingsPage(panel, port);
     else if (this.activePage === "mind-map") new MindMapSettingsPage(panel, port);
     else new TopicNoteSettingsPage(panel, port);
+  }
+
+  /** Do not replace an input (or its IME composition) while a user is typing. */
+  refreshFromExternal(): void {
+    if (!this.containerEl.isShown()) return;
+    const active = this.containerEl.ownerDocument.activeElement;
+    if (active && this.containerEl.contains(active) && active.matches("input, textarea, [contenteditable]")) {
+      this.externalRefreshPending = true;
+      if (this.deferredRefreshCleanup) return;
+      const refresh = (): void => {
+        this.deferredRefreshCleanup?.();
+        if (this.externalRefreshPending && this.containerEl.isShown()) this.display();
+        this.externalRefreshPending = false;
+      };
+      active.addEventListener("blur", refresh, { once: true });
+      this.deferredRefreshCleanup = () => {
+        active.removeEventListener("blur", refresh);
+        this.deferredRefreshCleanup = undefined;
+      };
+      return;
+    }
+    this.display();
+  }
+
+  hide(): void {
+    this.deferredRefreshCleanup?.();
+    this.externalRefreshPending = false;
   }
 
   private renderPageTabs(container: HTMLElement): void {

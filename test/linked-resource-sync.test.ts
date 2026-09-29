@@ -4,6 +4,17 @@ import { addNode, createEmptyDocument } from "../src/domain/tree";
 import { parseMindTreeFile, serializeMindTreeFile } from "../src/format/document";
 import { reconcileLinkedFileReferences } from "../src/services/linked-resource-sync";
 
+test("pending title-to-file rename keeps the new title while still correcting cached metadata", () => {
+  const document = createEmptyDocument("Tree");
+  const node = addNode(document, document.rootId, "New title");
+  node.titleSync = "bidirectional";
+  node.resource = { type: "file", resourceId: "id", pathHint: "Old.md", fileKind: "note" };
+  reconcileLinkedFileReferences(document, () => ({ path: "Folder/Old.md", fileSubtype: "excalidraw" }), new Set([node.id]));
+  assert.equal(node.title, "New title");
+  assert.equal(node.resource.pathHint, "Folder/Old.md");
+  assert.equal(node.resource.fileSubtype, "excalidraw");
+});
+
 test("repairs a stale compressed title after an external rename and persists it", () => {
   const document = createEmptyDocument("Rename race");
   const longTitle = `12312312${"2".repeat(110)}3`;

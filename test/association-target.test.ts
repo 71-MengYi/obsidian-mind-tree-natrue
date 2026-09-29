@@ -153,5 +153,9 @@ test("view wiring shares guards for all association paths and keeps default open
   assert.doesNotMatch(method("openResourceWithDefaultApp"), /this\.commit\(|this\.selectOnly\(|this\.viewport|\.openFile\(/);
   assert.match(method("openResource"), /resourceOpenMode/);
   assert.match(method("openResource"), /window\.open\(/);
-  assert.match(method("openResource"), /leaf\.openFile\(/);
+  assert.match(method("openResource"), /this\.plugin\.openLinkedFile\(/);
+  const plugin = readFileSync(new URL("../src/main.ts", import.meta.url), "utf8");
+  const open = plugin.split("  async openLinkedFile(")[1]!.split("  async activateMindTree(")[0]!;
+  assert.match(open, /if \(isMindTreePath\(file.path\)\)/);
+  assert.match(open, /leaf\.openFile\(/);
 });

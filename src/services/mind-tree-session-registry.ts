@@ -1,6 +1,8 @@
 import type { MindTreeDocument } from "../types";
 import type { VersionConflictCoordinator, VersionChoiceResult } from "./version-conflict-coordinator";
 import { DocumentSession } from "./document-session";
+import type { TreeSettingKey } from "../document-settings-state";
+import { TREE_SETTING_KEYS } from "../document-settings-state";
 
 export type SharedSessionChangeReason =
   | "document"
@@ -8,6 +10,7 @@ export type SharedSessionChangeReason =
   | "system"
   | "source"
   | "identity"
+  | "metadata"
   | "status";
 
 export interface SharedSessionSnapshot {
@@ -59,6 +62,8 @@ export class SharedMindTreeSession {
   restoreTask?: Promise<void>;
   pendingRestoreChecked = false;
   private resolvedDraft?: VersionChoiceResult["draft"];
+  private resumedDraft?: VersionChoiceResult["resumeDraft"];
+  private resolvedTitleRenames?: VersionChoiceResult["titleRenames"];
   private fileOperationTail: Promise<void> = Promise.resolve();
 
   private _path: string;
@@ -115,6 +120,15 @@ export class SharedMindTreeSession {
   replaceSource(source: string, originId: string): void {
     this._source = source;
     this.notify("source", originId);
+  }
+
+  /** YAML updates are not commands and must not commit an active textarea. */
+  acceptMetadata(document: MindTreeDocument, source: string, keys: readonly TreeSettingKey[]): void {
+    this._document = document;
+    this._source = source;
+    this.history.rebaseSettings(document, keys);
+    this.history.replaceBaseline(source);
+    this.notify("metadata");
   }
 
   notifyStatus(originId?: string): void {
@@ -209,7 +223,8 @@ export class SharedMindTreeSession {
   acceptVersion(result: VersionChoiceResult): void {
     const previous = this._document;
     if (result.choice === "external") this.history.load(result.source);
-    else if (previous && result.draft) {
+    else if (previous && result.draft
+      && previous.nodes[result.draft.nodeId]?.title !== result.document.nodes[result.draft.nodeId]?.title) {
       // Add the confirmed draft to the existing linear history exactly once.
       this.history.retainConfirmedSnapshot(previous);
       this.history.markChanged();
@@ -219,9 +234,13 @@ export class SharedMindTreeSession {
     this._parseError = undefined;
     this._initialized = true;
     this.history.markSaved(this.history.currentRevision, result.source);
+    if (result.document.documentId) this.history.adoptDocumentIdentity(result.document.documentId);
+    this.history.rebaseSettings(result.document, TREE_SETTING_KEYS);
     this.titleDraft = undefined;
     this.activeEditorId = undefined;
     this.resolvedDraft = result.draft;
+    this.resumedDraft = result.resumeDraft;
+    this.resolvedTitleRenames = result.titleRenames;
     this.notify("source");
   }
 
@@ -229,6 +248,21 @@ export class SharedMindTreeSession {
     const draft = this.resolvedDraft;
     this.resolvedDraft = undefined;
     return draft;
+  }
+
+  takeResumedDraft(): VersionChoiceResult["resumeDraft"] {
+    const draft = this.resumedDraft;
+    this.resumedDraft = undefined;
+    return draft;
+  }
+
+  /** One winner owns deferred renames; the latest raw draft wins per node. */
+  takeResolvedTitleRenames(): NonNullable<VersionChoiceResult["titleRenames"]> {
+    const jobs = new Map((this.resolvedTitleRenames ?? []).map((job) => [job.nodeId, job]));
+    const draft = this.takeResolvedDraft();
+    if (draft) jobs.set(draft.nodeId, draft);
+    this.resolvedTitleRenames = undefined;
+    return [...jobs.values()];
   }
 
   /** Serialize root-file rename/identity side effects for every attached leaf. */

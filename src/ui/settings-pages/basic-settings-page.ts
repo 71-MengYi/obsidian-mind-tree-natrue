@@ -29,6 +29,44 @@ export class BasicSettingsPage implements SettingsPageObject {
     parent.createEl("p", { cls: "setting-item-description", text: t("settings.fileBadges.desc") });
     this.renderIgnoredExtensions(parent, port);
     this.renderExtensionAliases(parent, port);
+    this.renderResourceIndex(parent, port);
+  }
+
+  private renderResourceIndex(parent: HTMLElement, port: SettingsPagePort): void {
+    parent.createEl("h3", { text: t("resourceIndex.heading") });
+    const setting = new Setting(parent)
+      .setName(t("resourceIndex.rebuild"))
+      .setDesc(t("resourceIndex.desc"));
+    const status = parent.createDiv({ cls: "setting-item-description", attr: { role: "status", "aria-live": "polite" } });
+    setting.addButton((button) => button.setButtonText(t("resourceIndex.rebuild")).onClick(async () => {
+      button.setDisabled(true);
+      status.setText(t("resourceIndex.running"));
+      try {
+        const report = await port.rebuildResourceIndex(({ completed, total }) => {
+          status.setText(t("resourceIndex.progress", { completed, total }));
+        });
+        status.setText(t("resourceIndex.result", {
+          files: report.indexedFiles, conflicts: report.conflicts.length, failures: report.failures.length
+        }));
+        if (report.persisted === false) status.createDiv({ text: t("resourceIndex.cacheUnavailable") });
+        if (report.conflicts.length || report.failures.length) {
+          const details = status.createEl("details");
+          details.createEl("summary", { text: t("resourceIndex.details") });
+          const list = details.createEl("ul");
+          for (const conflict of report.conflicts) {
+            const row = list.createEl("li", { text: t("resourceIndex.conflictId", { id: conflict.resourceId }) });
+            const paths = row.createEl("ul");
+            for (const path of conflict.paths) paths.createEl("li", { text: path });
+          }
+          for (const failure of report.failures) list.createEl("li", {
+            text: t("resourceIndex.readFailure", { path: failure.path })
+          });
+        }
+      } catch (error) {
+        console.error("Mind Tree Nature: manual rebuild failed", error);
+        status.setText(t("resourceIndex.failed"));
+      } finally { button.setDisabled(false); }
+    }));
   }
 
   private renderIgnoredExtensions(parent: HTMLElement, port: SettingsPagePort): void {

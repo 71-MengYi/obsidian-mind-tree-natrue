@@ -53,11 +53,13 @@ import {
   type ExportThemeColors
 } from "../services/export";
 import { reconcileLinkedFileReferences } from "../services/linked-resource-sync";
-import { DuplicateResourceIdError } from "../services/resource-index";
+import { CreatedNoteAssociationError, DuplicateResourceIdError, type FileAssociationProgress } from "../services/resource-index";
+import { ResourceVerificationChangedError } from "../services/resource-catalog";
 import {
   assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot
 } from "../services/document-conflict";
 import { VersionComparison } from "./components/version-comparison";
+import type { PendingTitleDraft } from "../services/pending-conflict-store";
 import {
   DocumentSession,
   SaveConflictError
@@ -87,6 +89,7 @@ import type {
   PositionedNode
 } from "../types";
 import { MIND_TREE_VIEW_TYPE } from "../view-routing";
+import { acceptSettingsWrite, markSettingsEdited, mergeTreeSettings, type TreeSettingKey } from "../document-settings-state";
 import type MindTreeNaturePlugin from "../main";
 import {
   resolveDropPlacement,
@@ -97,7 +100,7 @@ import { extractVaultPathCandidates } from "./file-drop";
 import { linkableVaultFiles } from "./file-selection";
 import {
   AssociationTargetChangedError, isAssociationTargetAvailable, isResourceTargetCurrent,
-  requireAssociationTarget, type AssociationTarget, type ResourceTarget
+  requireAssociationTarget, uncollectedReferences, type AssociationTarget, type ResourceTarget
 } from "./association-target";
 import { DefaultAppOpener, DefaultAppOpenError, loadDesktopShell } from "../services/default-app-opener";
 import { TemplateCopyRollbackError, TemplateTargetChangedError, type TemplateFileResult } from "../services/template-files";
@@ -108,11 +111,12 @@ import {
 } from "./keyboard-navigation";
 import { openMarkerPopover, type MarkerPopoverHandle } from "./marker-popover";
 import { shouldHandleMindTreePaste } from "./paste-routing";
-import { createBottomStatusBarState, MindTreeViewShell } from "./components";
+import { createBottomStatusBarState, MindTreeViewShell, type StatusMessageState } from "./components";
 import {
   CanvasInteractionController,
   ClipboardController,
   DragDropController,
+  FileAssociationController,
   ImageResizeController,
   KeyboardController,
   NodeDragController,
@@ -206,8 +210,10 @@ export class MindTreeView extends TextFileView {
   private externalCheckTask?: Promise<void>;
   private versionChoicePending = false;
   private readonly titleRenameNodeIds = new Set<NodeId>();
+  private readonly pendingTitleRenames = new Map<NodeId, PendingTitleDraft>();
   /** Guards delayed load work after this view has been detached. */
   private viewClosed = false;
+  private acceptingAssociations = true;
   private parseError?: string;
   private readonly selectedIds = new Set<NodeId>();
   private primarySelectedId?: NodeId;
@@ -229,6 +235,9 @@ export class MindTreeView extends TextFileView {
   private saveState: "saved" | "dirty" | "error" = "saved";
   private saveButtonBusy = false;
   private scanButtonBusy = false;
+  private readonly fileAssociations = new FileAssociationController();
+  private collectionProgress?: FileAssociationProgress;
+  private statusMessage: StatusMessageState = { message: "", kind: "normal" };
   private canvasEl!: HTMLElement;
   private panLayerEl!: HTMLElement;
   private worldEl!: HTMLElement;
@@ -331,6 +340,8 @@ export class MindTreeView extends TextFileView {
   }
 
   async onClose(): Promise<void> {
+    this.acceptingAssociations = false;
+    this.fileAssociations.destroy();
     this.cancelCanvasGestures();
     // The title textarea is intentionally not part of the document while the
     // user types. Capture it before destroying DOM and wait for the shared save
@@ -371,6 +382,8 @@ export class MindTreeView extends TextFileView {
   }
 
   async onLoadFile(file: TFile): Promise<void> {
+    this.acceptingAssociations = false;
+    this.fileAssociations.cancelCollection();
     this.cancelCanvasGestures();
     this.keyboardAvoidanceController?.reset();
     if (this.sharedSession && this.sharedSessionPath !== normalizePath(file.path)) {
@@ -387,8 +400,14 @@ export class MindTreeView extends TextFileView {
     this.editingNodeId = undefined;
     this.editingDraftValue = "";
     this.attachSharedSession(file.path);
+    const loadingSession = this.sharedSession;
+    try { await this.plugin.resources.verifyIndex(); }
+    catch (error) { console.warn("Mind Tree Nature: opening without a complete resource index", error); }
+    if (this.viewClosed || this.sharedSession !== loadingSession) return;
     await super.onLoadFile(file);
     await this.restorePendingVersion();
+    if (this.viewClosed || this.sharedSession !== loadingSession) return;
+    this.acceptingAssociations = true;
     // Keep the cache current even if the host replaced the TFile instance while
     // loading. Once attached, this.file remains the authoritative rename source.
     this.displayFilePath = this.file?.path ?? file.path;
@@ -405,10 +424,19 @@ export class MindTreeView extends TextFileView {
   }
 
   async onUnloadFile(file: TFile): Promise<void> {
+    this.acceptingAssociations = false;
+    this.fileAssociations.cancelCollection();
     this.cancelCanvasGestures();
     await this.flushViewBeforeDetach(file.path);
     await super.onUnloadFile(file);
     this.detachSharedSession();
+  }
+
+  /** Keep resource verification alive until the normal close/save boundary. */
+  async prepareForPluginUnload(): Promise<void> {
+    this.acceptingAssociations = false;
+    this.fileAssociations.cancelCollection();
+    await this.flushViewBeforeDetach();
   }
 
   /** Attach this leaf to the single live document/history for a vault path. */
@@ -473,6 +501,7 @@ export class MindTreeView extends TextFileView {
     if (!expectedPath || !this.sharedSession || this.sharedSessionPath !== normalizePath(expectedPath)) return;
     await this.externalCheckTask;
     if (this.mutationLocked()) {
+      await this.sharedSession.history.runExclusiveWrite(async () => undefined);
       await this.sharedSession.conflict?.settle();
       return;
     }
@@ -494,6 +523,7 @@ export class MindTreeView extends TextFileView {
   }
 
   private detachSharedSession(): void {
+    this.fileAssociations.cancelCollection();
     const session = this.sharedSession;
     if (!session) return;
     session.releaseEditor(this.sharedParticipantId);
@@ -508,9 +538,11 @@ export class MindTreeView extends TextFileView {
   /** Receive immutable shared state while preserving this leaf's own canvas. */
   private applySharedSessionSnapshot(snapshot: Readonly<SharedSessionSnapshot>): void {
     if (this.viewClosed || !snapshot.initialized) return;
+    if (this.mutationLocked()) this.fileAssociations.cancelCollection();
     const needsRender = this.document !== snapshot.document
       || this.parseError !== snapshot.parseError;
-    if (needsRender) this.cancelCanvasGestures();
+    const deferMetadataRender = snapshot.reason === "metadata" && Boolean(this.editingNodeId);
+    if (needsRender && !deferMetadataRender) this.cancelCanvasGestures();
     const layoutAnchor = needsRender ? this.captureLayoutViewportAnchor() : undefined;
     this.applyingSharedSessionUpdate = true;
     try {
@@ -524,11 +556,15 @@ export class MindTreeView extends TextFileView {
         this.editingNodeId = undefined;
         this.editingDraftValue = "";
       }
-      if (needsRender || snapshot.hasConflict || this.versionComparison) {
+      if ((!deferMetadataRender && needsRender) || snapshot.hasConflict || this.versionComparison) {
         this.pruneSelection();
         this.render(this.versionComparison ? undefined : layoutAnchor);
       }
-      if (!this.mutationLocked()) this.resumeChosenDraftSideEffects();
+      if (!this.mutationLocked()) {
+        this.resumeChosenDraftSideEffects();
+        const draft = this.sharedSession?.takeResumedDraft();
+        if (draft && this.document?.nodes[draft.nodeId]) this.beginEdit(draft.nodeId, "end", draft.value);
+      }
       if (snapshot.parseError) this.setStatus(snapshot.parseError, "error");
       else if (snapshot.hasConflict) this.setStatus(t("status.saveConflict"), "warning");
       else this.setStatus(
@@ -582,11 +618,13 @@ export class MindTreeView extends TextFileView {
     const revision = this.documentSession.currentRevision;
     const baseline = this.documentSession.sourceBaseline || this.sourceData;
     let serialized: string | undefined;
+    let racedSettings: TreeSettingKey[] = [];
     try {
       await this.app.vault.process(file, (disk) => {
         if (this.mutationLocked() || this.sharedSession !== session || this.documentSessionToken !== token) return disk;
         const assessment = assessExternalVersion(baseline, document, disk, this.parseOptions());
         if (assessment.kind !== "unchanged") return disk;
+        racedSettings = assessment.changedSettings;
         serialized = serializeMindTreeFile(assessment.document, disk);
         this.pendingSerializedSource = serialized;
         session?.beginWrite(serialized);
@@ -610,10 +648,13 @@ export class MindTreeView extends TextFileView {
       }
       const written = createManagedMindTreeSnapshot(serialized, this.parseOptions());
       if (written.documentId && !this.document?.documentId) this.adoptDocumentIdentity(file.path, written.documentId);
+      const actual = createManagedMindTreeSnapshot(latest, this.parseOptions());
+      const accepted = acceptSettingsWrite(this.document!, document, written.document, actual.document, racedSettings);
       this.sourceData = latest;
       this.data = latest;
       this.documentSession.markSaved(revision, latest);
-      session?.replaceSource(latest, this.sharedParticipantId);
+      if (session) session.acceptMetadata(accepted.document, latest, accepted.changedSettings);
+      else this.document = accepted.document;
       this.setStatus(this.hasUnsavedState() ? t("status.unsaved") : t("status.saved"), this.hasUnsavedState() ? "dirty" : "saved");
       return this.documentSession.dirty;
     } finally {
@@ -659,12 +700,19 @@ export class MindTreeView extends TextFileView {
     if (assessment.document.documentId && !document.documentId && this.file) {
       this.adoptDocumentIdentity(this.file.path, assessment.document.documentId);
     }
-    // Only the serialization template and a safe first identity are accepted
-    // silently. Active drafts and local undo history remain unchanged.
+    // Rebase YAML on the confirmed document, NOT on the draft-overlay candidate.
+    // The textarea and any linked-file rename stay untouched by property edits.
+    const accepted = mergeTreeSettings(document,
+      createManagedMindTreeSnapshot(this.documentSession.sourceBaseline || this.sourceData, this.parseOptions()).document,
+      assessment.external.document);
     this.sourceData = source;
     this.data = source;
     this.documentSession.replaceBaseline(source);
-    this.sharedSession?.replaceSource(source, this.sharedParticipantId);
+    if (this.sharedSession) this.sharedSession.acceptMetadata(accepted.document, source, accepted.changedSettings);
+    else {
+      this.document = accepted.document;
+      this.documentSession.rebaseSettings(accepted.document, accepted.changedSettings);
+    }
   }
 
   private async enterVersionPreview(): Promise<void> {
@@ -673,12 +721,16 @@ export class MindTreeView extends TextFileView {
     const current = this.documentWithPendingDraft();
     const draft = session.draft;
     await this.plugin.ensureConflictCoordinator(session).enter(current,
-      this.documentSession.sourceBaseline || this.sourceData, draft);
+      this.documentSession.sourceBaseline || this.sourceData, draft,
+      [...this.pendingTitleRenames.values()].filter((job) => Boolean(current.nodes[job.nodeId])), this.document);
   }
 
   /** Keep the original canvas mounted and preserve its own viewport. */
   private syncVersionPreview(): boolean {
-    const state = this.sharedSession?.conflict?.state;
+    const session = this.sharedSession;
+    const state = session?.conflict?.state ?? (session?.restoreError && this.document
+      ? { current: this.document, mode: "invalid" as const, canRestoreIdentity: false, ready: false, busy: false, changedAgain: false,
+        error: t("conflict.storageError", { message: session.restoreError }) } : undefined);
     if (!state) {
       if (this.versionComparison) {
         this.versionComparison.destroy();
@@ -707,7 +759,20 @@ export class MindTreeView extends TextFileView {
         resourcePath: (file) => this.app.vault.getResourcePath(file)
       }, {
         choose: (side) => void this.chooseVersion(side),
-        retry: () => void this.sharedSession?.conflict?.retry()
+        restoreIdentity: () => {
+          const session = this.sharedSession;
+          const expected = session?.conflict?.state?.currentId;
+          if (session?.conflict) void session.history.runExclusiveWrite(() => session.conflict!.restoreIdentity(expected))
+            .catch((error: unknown) => this.reportSaveFailure(error));
+        },
+        retry: () => {
+          if (this.sharedSession?.restoreError) void this.restorePendingVersion();
+          else {
+            const session = this.sharedSession;
+            if (session?.conflict) void session.history.runExclusiveWrite(() => session.conflict!.retry())
+              .catch((error: unknown) => this.reportSaveFailure(error));
+          }
+        }
       });
     }
     this.versionComparison.update(state);
@@ -717,29 +782,31 @@ export class MindTreeView extends TextFileView {
   private async chooseVersion(side: "current" | "external"): Promise<void> {
     const session = this.sharedSession;
     if (!session?.conflict || this.versionChoicePending) return;
+    const displayed = session.conflict.captureDisplayedVersion();
+    if (!displayed) return;
     this.versionChoicePending = true;
-    try { await session.history.runExclusiveWrite(() => session.conflict!.choose(side)); }
+    try { await session.history.runExclusiveWrite(() => session.conflict!.choose(side, displayed)); }
     catch (error) { this.reportSaveFailure(error); }
-    finally { this.versionChoicePending = false; }
+    finally {
+      this.versionChoicePending = false;
+      if (this.sharedSession === session) this.checkExternalVersion();
+    }
   }
 
   /** Filename side effects run only after the current draft version won. */
   private resumeChosenDraftSideEffects(): void {
     const session = this.sharedSession;
     if (!session || this.mutationLocked() || this.file?.path !== session.path) return;
-    const draft = session.takeResolvedDraft();
-    if (!draft) return;
-    const node = this.document?.nodes[draft.nodeId];
-    if (!node || node.title === draft.originalTitle) return;
-    this.titleRenameNodeIds.add(node.id);
-    this.trackTitleFileOperation(async () => {
-      try {
+    for (const draft of session.takeResolvedTitleRenames()) {
+      const node = this.document?.nodes[draft.nodeId];
+      if (!node || node.title === draft.originalTitle) continue;
+      this.queueTitleRename({ ...draft, value: node.title }, async () => {
         if (node.id === this.document?.rootId) await this.renameTreeFileForEditedRoot(node.title, draft.originalTitle);
         else if (node.resource?.type === "file" && node.titleSync === "bidirectional") {
           await this.renameFileForEditedNode(node.id, node.title, draft.originalTitle, node.resource);
         }
-      } finally { this.titleRenameNodeIds.delete(node.id); }
-    });
+      });
+    }
   }
 
   setViewData(data: string, clear: boolean): void {
@@ -782,8 +849,7 @@ export class MindTreeView extends TextFileView {
         : false;
       const repairedState = repairedResourceState
         || repairedDocumentTitle
-        || parsed.migratedFromSchemaVersion !== undefined
-        || parsed.defaultedDocumentSettings === true;
+        || parsed.migratedFromSchemaVersion !== undefined;
       if (repairedState) this.markDocumentDirty(false);
       else this.setStatus(t("status.saved"), "saved");
       if (repairedState) this.scheduleSave();
@@ -813,6 +879,8 @@ export class MindTreeView extends TextFileView {
   }
 
   clear(): void {
+    this.fileAssociations.cancelCollection();
+    this.statusMessage = { message: "", kind: "normal" };
     this.cancelCanvasGestures();
     this.keyboardAvoidanceController?.reset();
     this.sharedSession?.releaseEditor(this.sharedParticipantId);
@@ -887,16 +955,20 @@ export class MindTreeView extends TextFileView {
 
   /** Commands change only the tree displayed by this view. */
   setLayoutMode(layoutMode: MindTreeLayoutMode): void {
-    if (!this.document || this.document.settings.layoutMode === layoutMode) return;
-    this.updateDocumentSettings((settings) => { settings.layoutMode = layoutMode; });
+    if (!this.document) return;
+    this.updateDocumentSettings((settings) => { settings.layoutMode = layoutMode; }, false, "layoutMode");
   }
 
   /** Recalculate the view after a global appearance preference changes. */
   refreshLayoutFromSettings(): void {
+    // Recreating a live textarea would disrupt its caret/IME and could blur-
+    // commit the draft. Confirmation/cancellation already renders latest state.
+    if (this.editingNodeId) return;
     this.render(this.captureLayoutViewportAnchor());
   }
 
   addChildNode(): void {
+    if (this.mutationLocked()) return;
     const document = this.document;
     if (!document) return;
     const parentId = this.primarySelectedId && document.nodes[this.primarySelectedId]
@@ -983,6 +1055,7 @@ export class MindTreeView extends TextFileView {
   }
 
   undo(): void {
+    if (this.mutationLocked()) return;
     this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
     if (!this.document || !this.documentSession.canUndo) return;
     const layoutAnchor = this.captureLayoutViewportAnchor();
@@ -995,6 +1068,7 @@ export class MindTreeView extends TextFileView {
   }
 
   redo(): void {
+    if (this.mutationLocked()) return;
     this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
     if (!this.document || !this.documentSession.canRedo) return;
     const layoutAnchor = this.captureLayoutViewportAnchor();
@@ -1007,6 +1081,7 @@ export class MindTreeView extends TextFileView {
   }
 
   fitCanvas(): void {
+    if (this.mutationLocked()) return;
     this.keyboardAvoidanceController?.userNavigated();
     const document = this.document;
     const layout = this.currentLayout;
@@ -1064,7 +1139,7 @@ export class MindTreeView extends TextFileView {
       let changed = reconcileLinkedFileReferences(draft, (reference) => {
         const preferredFile = normalizePath(reference.pathHint) === normalizedOldPath ? file : undefined;
         return this.plugin.resources.describe(reference, preferredFile);
-      });
+      }, this.titleRenameNodeIds);
       // A rename of this view's own file must update the root immediately. This
       // also repairs copied trees whose compressed data still contains the source
       // file's title when another plugin renames the copy before it is opened.
@@ -1316,7 +1391,7 @@ export class MindTreeView extends TextFileView {
       depth: statistics.depth,
       saveState: this.saveState,
       saveBusy: this.saveButtonBusy,
-      scanBusy: this.scanButtonBusy,
+      scanBusy: this.scanButtonBusy || this.fileAssociations.collecting,
       scanEnabled: Boolean(document && !this.parseError && this.file),
       canUndo: this.documentSession.canUndo,
       canRedo: this.documentSession.canRedo,
@@ -1364,6 +1439,7 @@ export class MindTreeView extends TextFileView {
    * user intent, so `off` falls back to the candidate picker for this one scan.
    */
   private async scanFolderFromStatusBar(): Promise<void> {
+    if (this.fileAssociations.collecting) return;
     const file = this.file;
     if (!file || !this.document || this.parseError) return;
     this.scanButtonBusy = true;
@@ -1378,20 +1454,20 @@ export class MindTreeView extends TextFileView {
 
   /** Theme changes belong to this document and are persisted in YAML. */
   private setTheme(theme: MindTreeTheme): void {
-    if (!this.document || this.document.settings.theme === theme) return;
-    this.updateDocumentSettings((settings) => { settings.theme = theme; });
+    if (!this.document) return;
+    this.updateDocumentSettings((settings) => { settings.theme = theme; }, false, "theme");
   }
 
   /** Connection geometry is stored per tree; the plugin setting only initializes it. */
   private setConnectionStyle(connectionStyle: MindTreeConnectionStyle): void {
-    if (!this.document || this.document.settings.connectionStyle === connectionStyle) return;
-    this.updateDocumentSettings((settings) => { settings.connectionStyle = connectionStyle; });
+    if (!this.document) return;
+    this.updateDocumentSettings((settings) => { settings.connectionStyle = connectionStyle; }, false, "connectionStyle");
   }
 
   /** Node shape is tree-specific; the plugin setting only initializes new trees. */
   private setNodeShape(nodeShape: MindTreeNodeShape): void {
-    if (!this.document || this.document.settings.nodeShape === nodeShape) return;
-    this.updateDocumentSettings((settings) => { settings.nodeShape = nodeShape; });
+    if (!this.document) return;
+    this.updateDocumentSettings((settings) => { settings.nodeShape = nodeShape; }, false, "nodeShape");
   }
 
   /**
@@ -1417,8 +1493,8 @@ export class MindTreeView extends TextFileView {
       setTheme: (value) => this.setTheme(value),
       setConnectionStyle: (value) => this.setConnectionStyle(value),
       setNodeShape: (value) => this.setNodeShape(value),
-      setCollectionMode: (value) => this.updateDocumentSettings((draft) => { draft.collectionMode = value; }, true),
-      toggleRecursiveScan: () => this.updateDocumentSettings((draft) => { draft.recursiveScan = !draft.recursiveScan; }, true)
+      setCollectionMode: (value) => this.updateDocumentSettings((draft) => { draft.collectionMode = value; }, true, "collectionMode"),
+      toggleRecursiveScan: () => this.updateDocumentSettings((draft) => { draft.recursiveScan = !draft.recursiveScan; }, true, "recursiveScan")
     }).show(event);
   }
 
@@ -1430,10 +1506,12 @@ export class MindTreeView extends TextFileView {
   /** Commit YAML-backed settings through the same undo/save path as tree edits. */
   private updateDocumentSettings(
     mutator: (settings: MindTreeDocumentSettings) => void,
-    rescan = false
+    rescan = false,
+    property?: TreeSettingKey
   ): void {
     this.commit((draft) => {
       mutator(draft.settings);
+      if (property) markSettingsEdited(draft, [property]);
     });
     if (!rescan) return;
     this.scannedFilePath = undefined;
@@ -1535,6 +1613,7 @@ export class MindTreeView extends TextFileView {
       selectedIds: this.selectedIds,
       editingNodeId: this.editingNodeId,
       editingDraftValue: this.editingNodeId ? this.editingDraftValue : undefined,
+      focusEditor: this.app.workspace.activeLeaf === this.leaf,
       editingSelectionMode: this.editingSelectionMode,
       branchColorSlots: this.branchColorSlotByNodeId,
       foldDirections: this.foldDirectionByNodeId,
@@ -2296,7 +2375,7 @@ export class MindTreeView extends TextFileView {
         this.getResourceBadgePresentation(),
         async (node) => {
           if (node.resource?.type !== "file" || node.resource.fileKind !== "image") return undefined;
-          const file = this.plugin.resources.resolve(node.resource);
+          const file = await this.plugin.resources.resolveVerified(node.resource);
           if (!file) return undefined;
           return prepareImageExportSource(await this.app.vault.readBinary(file), file.path);
         }
@@ -2317,7 +2396,7 @@ export class MindTreeView extends TextFileView {
     const target = this.captureAssociationTarget(nodeId);
     if (!target) return;
     const node = this.document!.nodes[nodeId]!;
-    const create = async (title: string): Promise<void> => {
+    const create = (title: string): Promise<void> => this.fileAssociations.createOnce(`${target.documentSessionToken}:${nodeId}`, async () => {
       let created: { file: TFile; reference: FileResourceRef } | undefined;
       try {
         // The optional title dialog may outlive the file or its unlinked node.
@@ -2331,13 +2410,14 @@ export class MindTreeView extends TextFileView {
         );
         this.associateFileWithTarget(target, created.file, created.reference, created.file.basename);
       } catch (error) {
-        const message = this.describeResourceError(error);
-        if (created) {
+        const message = this.describeResourceError(error instanceof CreatedNoteAssociationError ? error.originalError : error);
+        const retainedFile = created?.file ?? (error instanceof CreatedNoteAssociationError ? error.file : undefined);
+        if (retainedFile) {
           // Unlike an uncommitted template copy, a normal new note is retained.
           // Report its actual path instead of deleting it or linking a new tree.
-          const linked = this.isResourceTargetCurrent({ ...target, resource: created.reference });
+          const linked = created && this.isResourceTargetCurrent({ ...target, resource: created.reference });
           new Notice(t(linked ? "notice.createdFileUpdateFailed" : "notice.createdNoteNotLinked", {
-            path: created.file.path, message
+            path: retainedFile.path, message
           }));
         } else new Notice(t("notice.createNoteFailed", { message }));
         return;
@@ -2349,7 +2429,7 @@ export class MindTreeView extends TextFileView {
         // the navigation failure instead of incorrectly claiming creation failed.
         new Notice(t("notice.openCreatedFileFailed", { message: error instanceof Error ? error.message : String(error) }));
       }
-    };
+    });
     if (node.title.trim()) await create(node.title);
     else new TextPromptModal(this.app, t("modal.createNote.title"), "", t("modal.createNote.placeholder"), t("action.create"), (value) => void create(value)).open();
   }
@@ -2384,16 +2464,16 @@ export class MindTreeView extends TextFileView {
 
   private isAssociationTargetCurrent(target: AssociationTarget): boolean {
     return isAssociationTargetAvailable(
-      target, this.documentSessionToken, this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document
+      target, this.documentSessionToken, !this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document
     );
   }
 
   private requireAssociationTarget(target: AssociationTarget, draft = this.document): MindTreeNode {
-    return requireAssociationTarget(target, this.documentSessionToken, this.viewClosed || this.parseError || this.mutationLocked() ? undefined : draft);
+    return requireAssociationTarget(target, this.documentSessionToken, !this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked() ? undefined : draft);
   }
 
   private isResourceTargetCurrent(target: ResourceTarget): boolean {
-    return isResourceTargetCurrent(target, this.documentSessionToken, this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document);
+    return isResourceTargetCurrent(target, this.documentSessionToken, !this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document);
   }
 
   /** A single guarded mutation boundary for every existing/new file association. */
@@ -2479,13 +2559,11 @@ export class MindTreeView extends TextFileView {
   /** Open a newly created note or template file using the existing preference. */
   private async openCreatedFile(file: TFile): Promise<void> {
     const mode = this.plugin.settings.newNoteOpenMode;
-    const leaf = mode === "current"
+    await this.plugin.openLinkedFile(file, () => mode === "current"
       ? this.leaf
       : mode === "split-right"
         ? this.app.workspace.getLeaf("split", "vertical")
-        : this.app.workspace.getLeaf(mode === "window" ? "window" : "tab");
-    await leaf.openFile(file, { active: true });
-    await this.app.workspace.revealLeaf(leaf);
+        : this.app.workspace.getLeaf(mode === "window" ? "window" : "tab"));
   }
 
   /** Associate any existing vault file except this view's own mind-tree file. */
@@ -2525,6 +2603,8 @@ export class MindTreeView extends TextFileView {
 
   /** Open a searchable vault-folder picker for the current file or its branch. */
   private showMoveFilesModal(nodeId: NodeId): void {
+    if (this.mutationLocked()) return;
+    const token = this.documentSessionToken;
     const document = this.document;
     if (!document?.nodes[nodeId]) return;
     const branchNodeIds = collectBranchIds(document, nodeId);
@@ -2544,6 +2624,7 @@ export class MindTreeView extends TextFileView {
       currentReference !== undefined,
       branchReferences.length > 0,
       (folderPath, mode) => {
+        if (this.mutationLocked() || this.documentSessionToken !== token) return;
         const references = mode === "current" && currentReference
           ? [currentReference]
           : branchReferences;
@@ -2571,6 +2652,7 @@ export class MindTreeView extends TextFileView {
       }
     }
 
+    if (this.mutationLocked() || token !== this.documentSessionToken) return;
     this.applySystemMutation((draft) => updateFileReferencePaths(draft, movedPaths));
     if (movedPaths.size > 0) {
       new Notice(t("notice.filesMoved", {
@@ -2610,7 +2692,7 @@ export class MindTreeView extends TextFileView {
     const opener = new DefaultAppOpener<TFile>({
       isDesktopApp: () => Platform.isDesktopApp,
       loadShell: loadDesktopShell,
-      resolveFile: (reference) => this.plugin.resources.resolve(reference),
+      resolveFile: (reference) => this.plugin.resources.resolveVerified(reference),
       getFullPath: (file) => {
         const adapter = this.app.vault.adapter;
         return adapter instanceof FileSystemAdapter ? adapter.getFullPath(file.path) : undefined;
@@ -2646,16 +2728,21 @@ export class MindTreeView extends TextFileView {
       window.open(parsed.toString(), "_blank", "noopener,noreferrer");
       return;
     }
-    const file = this.plugin.resources.resolve(resource);
-    if (!file) {
-      new Notice(t("notice.fileNotFound", { path: resource.pathHint }));
-      return;
+    const target: ResourceTarget = { documentSessionToken: this.documentSessionToken, nodeId, resource: structuredClone(resource) };
+    try {
+      const file = await this.plugin.resources.resolveVerified(resource);
+      if (!this.isResourceTargetCurrent(target)) return;
+      if (!file) {
+        new Notice(t("notice.fileNotFound", { path: resource.pathHint }));
+        return;
+      }
+      await this.plugin.openLinkedFile(file, () => this.plugin.settings.resourceOpenMode === "split-right"
+        ? this.app.workspace.getLeaf("split", "vertical")
+        : this.app.workspace.getLeaf("tab"));
+    } catch (error) {
+      console.warn("Mind Tree Nature: linked-file verification failed", error);
+      new Notice(t("resourceIndex.unverified"));
     }
-    const leaf = this.plugin.settings.resourceOpenMode === "split-right"
-      ? this.app.workspace.getLeaf("split", "vertical")
-      : this.app.workspace.getLeaf("tab");
-    await leaf.openFile(file, { active: true });
-    await this.app.workspace.revealLeaf(leaf);
   }
 
   private requestDeleteBranch(nodeId: NodeId): void {
@@ -2829,7 +2916,7 @@ export class MindTreeView extends TextFileView {
     if (finalSelectionId) this.selectOnly(finalSelectionId);
   }
 
-  private beginEdit(nodeId: NodeId, selectionMode: "all" | "end" = "all"): void {
+  private beginEdit(nodeId: NodeId, selectionMode: "all" | "end" = "all", restoredDraft?: string): void {
     if (this.mutationLocked()) return;
     if (this.editingNodeId === nodeId) return;
     if (this.editingNodeId) {
@@ -2847,13 +2934,13 @@ export class MindTreeView extends TextFileView {
     const layoutAnchor = this.captureLayoutViewportAnchor(nodeId);
     this.editingNodeId = nodeId;
     this.editingOriginalTitle = node.title;
-    this.editingDraftValue = node.title;
+    this.editingDraftValue = restoredDraft ?? node.title;
     this.editingSelectionMode = selectionMode;
     this.sharedSession?.updateTitleDraft(
       this.sharedParticipantId,
       nodeId,
       node.title,
-      node.title
+      this.editingDraftValue
     );
     this.render(layoutAnchor);
   }
@@ -2907,11 +2994,28 @@ export class MindTreeView extends TextFileView {
     this.commit((draft) => renameNode(draft, nodeId, title));
     const updated = this.document?.nodes[nodeId];
     if (nodeId === this.document?.rootId && this.file) {
-      this.trackTitleFileOperation(() => this.renameTreeFileForEditedRoot(title, previousTitle).finally(() => this.titleRenameNodeIds.delete(nodeId)));
+      this.queueTitleRename({ nodeId, value: title, originalTitle: previousTitle }, () => this.renameTreeFileForEditedRoot(title, previousTitle));
     } else if (updated?.resource?.type === "file" && updated.titleSync === "bidirectional") {
       const reference = updated.resource;
-      this.trackTitleFileOperation(() => this.renameFileForEditedNode(nodeId, title, previousTitle, reference).finally(() => this.titleRenameNodeIds.delete(nodeId)));
+      this.queueTitleRename({ nodeId, value: title, originalTitle: previousTitle }, () => this.renameFileForEditedNode(nodeId, title, previousTitle, reference));
     } else this.titleRenameNodeIds.delete(nodeId);
+  }
+
+  /** Retain unfinished side effects in the frozen journal, never apply them to a new view session. */
+  private queueTitleRename(job: PendingTitleDraft, operation: () => Promise<void>): void {
+    const token = this.documentSessionToken;
+    this.pendingTitleRenames.set(job.nodeId, job);
+    this.titleRenameNodeIds.add(job.nodeId);
+    this.trackTitleFileOperation(async () => {
+      try {
+        if (this.documentSessionToken === token && !this.mutationLocked()) await operation();
+      } finally {
+        if (this.pendingTitleRenames.get(job.nodeId) === job) {
+          this.pendingTitleRenames.delete(job.nodeId);
+          this.titleRenameNodeIds.delete(job.nodeId);
+        }
+      }
+    });
   }
 
   private trackTitleFileOperation(operation: () => Promise<void>): void {
@@ -2960,10 +3064,12 @@ export class MindTreeView extends TextFileView {
     const file = this.file;
     const document = this.document;
     if (!file || !document) return;
+    const token = this.documentSessionToken;
     try {
       // Save the new root title and generated H1 before Obsidian broadcasts the
       // rename; a reload during that event must not restore the old title.
       await this.flushPendingSave();
+      if (this.documentSessionToken !== token || this.mutationLocked()) return;
       const newPath = buildLinkedResourcePath(file.path, title, document.documentId ?? document.rootId);
       if (newPath !== file.path) await this.app.fileManager.renameFile(file, newPath);
     } catch (error) {
@@ -2986,6 +3092,7 @@ export class MindTreeView extends TextFileView {
     previousTitle: string,
     reference: FileResourceRef
   ): Promise<void> {
+    const token = this.documentSessionToken;
     try {
       // Obsidian may rewrite links in the open .mtn.md file during rename and reload this view.
       // Persist the new node title first so that reload cannot restore the old compressed data.
@@ -2996,6 +3103,7 @@ export class MindTreeView extends TextFileView {
       return;
     }
 
+    if (this.documentSessionToken !== token || this.mutationLocked()) return;
     try {
       const file = await this.plugin.resources.renameLinkedFile(reference, title);
       const current = this.document?.nodes[nodeId];
@@ -3058,7 +3166,8 @@ export class MindTreeView extends TextFileView {
     options: Readonly<{ force?: boolean; notifyWhenEmpty?: boolean }> = {}
   ): Promise<void> {
     const document = this.document;
-    if (!document || this.mutationLocked() || this.file?.path !== file.path) return;
+    if (!document || !this.acceptingAssociations || this.viewClosed || this.mutationLocked()
+      || this.fileAssociations.collecting || this.file?.path !== file.path) return;
     if (!options.force && (this.scannedFilePath === file.path || document.settings.collectionMode === "off")) return;
     this.scannedFilePath = file.path;
     const candidates = this.plugin.resources.sameDirectoryCandidates(
@@ -3076,41 +3185,58 @@ export class MindTreeView extends TextFileView {
     } else if (document.settings.collectionMode === "collect") {
       await this.collectCandidates(candidates, "collect");
     } else {
-      new SameFolderCandidatesModal(this.app, candidates, (selected, action) => void this.collectCandidates(selected, action)).open();
+      const token = this.documentSessionToken;
+      new SameFolderCandidatesModal(this.app, candidates, (selected, action) => {
+        if (this.documentSessionToken === token && !this.mutationLocked()) void this.collectCandidates(selected, action);
+      }).open();
     }
   }
 
   private async collectCandidates(files: TFile[], action: CandidateAction): Promise<void> {
-    if (this.mutationLocked()) return;
-    if (!this.document) return;
+    if (this.mutationLocked() || !this.document || this.viewClosed) return;
     const token = this.documentSessionToken;
-    const references: Array<{ file: TFile; reference: FileResourceRef }> = [];
-    for (const file of files) {
-      if (this.mutationLocked() || token !== this.documentSessionToken) return;
-      try {
-        references.push({ file, reference: await this.plugin.resources.ensureStableReference(file) });
-      } catch (error) {
-        new Notice(t("notice.skippedFile", { path: file.path, message: this.describeResourceError(error) }));
-      }
-    }
-    if (references.length === 0 || this.mutationLocked() || token !== this.documentSessionToken) return;
-    this.commit((draft) => {
-      let parentId = draft.rootId;
-      if (action === "collect") {
-        const root = getNode(draft, draft.rootId);
-        const existing = root.childIds.find((id) => ["收集", "Collection"].includes(draft.nodes[id]?.title ?? ""));
-        parentId = existing ?? addNode(draft, draft.rootId, t("collection.title")).id;
-      }
-      for (const { file, reference } of references) {
-        const node = addNode(draft, parentId, linkedFileTitle(file.path));
-        node.resource = reference;
-        node.titleSync = this.plugin.settings.titleSync ? "bidirectional" : "off";
+    await this.fileAssociations.collect({
+      total: files.length,
+      isCurrent: () => this.acceptingAssociations && !this.viewClosed && !this.parseError && !this.mutationLocked()
+        && token === this.documentSessionToken && Boolean(this.document),
+      progress: (value) => {
+        this.collectionProgress = value;
+        this.renderStatusMessage();
+        this.refreshBottomStatusBar();
+      },
+      yield: () => new Promise<void>((resolve) => this.ownerWindow().setTimeout(resolve, 0)),
+      collect: (progress, current) => this.plugin.resources.ensureStableReferences(files, progress, current),
+      accept: (batch) => {
+        const references = uncollectedReferences(this.document!, batch.linked);
+        if (references.length) this.commit((draft) => {
+          batch.assertCurrent();
+          let parentId = draft.rootId;
+          if (action === "collect") {
+            const root = getNode(draft, draft.rootId);
+            const existing = root.childIds.find((id) => ["收集", "Collection"].includes(draft.nodes[id]?.title ?? ""));
+            parentId = existing ?? addNode(draft, draft.rootId, t("collection.title")).id;
+          }
+          for (const { file, reference } of references) {
+            const node = addNode(draft, parentId, linkedFileTitle(file.path));
+            node.resource = reference;
+            node.titleSync = this.plugin.settings.titleSync ? "bidirectional" : "off";
+          }
+        });
+        if (batch.failures.length) new Notice(t("notice.collectionPartial", {
+          count: batch.failures.length,
+          details: batch.failures.map(({ path, error }) => `${path}: ${this.describeResourceError(error)}`).join("\n")
+        }));
+      },
+      failed: (error) => {
+        this.scannedFilePath = undefined;
+        new Notice(t("notice.collectionFailed", { message: this.describeResourceError(error) }));
       }
     });
   }
 
   /** Translate association/identity failures while preserving ordinary error details. */
   private describeResourceError(error: unknown): string {
+    if (error instanceof ResourceVerificationChangedError) return t("resourceIndex.changing");
     if (error instanceof AssociationTargetChangedError) return t("notice.associationTargetChanged");
     if (error instanceof DuplicateResourceIdError) {
       return t("notice.duplicateResourceId", { paths: error.paths.join(", ") });
@@ -3316,11 +3442,22 @@ export class MindTreeView extends TextFileView {
     // Routine saved/dirty state belongs on the save button. The free-floating
     // message is reserved for warnings and errors that need explanatory text.
     const showMessage = kind === "warning" || kind === "error";
-    this.shell?.status.update({
+    this.statusMessage = {
       message: showMessage ? message : "",
       kind: kind === "warning" ? "warning" : kind === "error" ? "error" : "normal"
-    });
+    };
+    this.renderStatusMessage();
     this.refreshBottomStatusBar();
+  }
+
+  /** Progress is neutral and independent of the persistent save-button state. */
+  private renderStatusMessage(): void {
+    const progress = this.collectionProgress;
+    const message = progress?.phase === "verify" ? t("collection.verifying")
+      : progress?.phase === "finish" ? t("collection.finishing")
+      : progress ? t("collection.progress", { completed: progress.completed, total: progress.total }) : "";
+    this.shell?.status.update(this.statusMessage.kind !== "normal" ? this.statusMessage
+      : { message, kind: "normal" });
   }
 }
 

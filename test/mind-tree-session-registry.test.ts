@@ -14,8 +14,8 @@ test("all leaves of one path share document, history, and change broadcasts", ()
   assert.equal(first, second);
 
   const updates: SharedSessionSnapshot[] = [];
-  first.attach("first", { onSessionChange: () => undefined, commitActiveDraft: () => undefined, refreshConflictRecovery: async () => undefined, adoptSaveConflict: () => undefined });
-  first.attach("second", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => undefined, refreshConflictRecovery: async () => undefined, adoptSaveConflict: () => undefined });
+  first.attach("first", { onSessionChange: () => undefined, commitActiveDraft: () => undefined });
+  first.attach("second", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => undefined });
   const document = createEmptyDocument("Tree");
   first.initialize(document, "source");
   first.history.markChanged();
@@ -31,15 +31,11 @@ test("a shared session commits the old editor before another leaf claims it", ()
   const commits: string[] = [];
   session.attach("left", {
     onSessionChange: () => undefined,
-    commitActiveDraft: () => commits.push("left"),
-    refreshConflictRecovery: async () => undefined,
-    adoptSaveConflict: () => undefined
+    commitActiveDraft: () => commits.push("left")
   });
   session.attach("right", {
     onSessionChange: () => undefined,
-    commitActiveDraft: () => commits.push("right"),
-    refreshConflictRecovery: async () => undefined,
-    adoptSaveConflict: () => undefined
+    commitActiveDraft: () => commits.push("right")
   });
   session.claimEditor("left");
   session.updateTitleDraft("left", "node", "before", "after");
@@ -52,7 +48,7 @@ test("a shared session commits the old editor before another leaf claims it", ()
 test("registry rekeys a live session when its file is renamed", () => {
   const registry = new MindTreeSessionRegistry();
   const session = registry.acquire("Old.mtn.md");
-  session.attach("view", { onSessionChange: () => undefined, commitActiveDraft: () => undefined, refreshConflictRecovery: async () => undefined, adoptSaveConflict: () => undefined });
+  session.attach("view", { onSessionChange: () => undefined, commitActiveDraft: () => undefined });
   registry.rename("Old.mtn.md", "Folder/New.mtn.md");
 
   assert.equal(registry.get("Old.mtn.md"), undefined);
@@ -60,51 +56,30 @@ test("registry rekeys a live session when its file is renamed", () => {
   assert.equal(session.path, "Folder/New.mtn.md");
 });
 
-test("external events and Recovery creation are de-duplicated per shared session", async () => {
+test("external notifications are de-duplicated per shared session", () => {
   const session = new SharedMindTreeSession("Tree.mtn.md");
   assert.equal(session.claimExternalSource("external"), true);
   assert.equal(session.claimExternalSource("external"), false);
   session.releaseExternalSource("external");
   assert.equal(session.claimExternalSource("external"), true);
 
-  let creates = 0;
-  const [left, right] = await Promise.all([
-    session.recoveryForTransition("a>b", async () => { creates += 1; return "Recovery.mtn.md"; }),
-    session.recoveryForTransition("a>b", async () => { creates += 1; return "Other.mtn.md"; })
-  ]);
-  assert.equal(creates, 1);
-  assert.equal(left, "Recovery.mtn.md");
-  assert.equal(right, "Recovery.mtn.md");
 });
 
-test("closing the conflict owner transfers the verified conflict to one remaining leaf", () => {
-  const session = new SharedMindTreeSession("Tree.mtn.md");
-  const adopted: string[] = [];
-  const participant = (name: string) => ({
-    onSessionChange: () => undefined,
-    commitActiveDraft: () => undefined,
-    refreshConflictRecovery: async () => undefined,
-    adoptSaveConflict: (conflict: { recoveryPath: string }) => adopted.push(`${name}:${conflict.recoveryPath}`)
-  });
-  session.attach("left", participant("left"));
-  session.attach("right", participant("right"));
-  const conflict = {
-    externalSource: "external",
-    recoveryPath: "_Mind Tree Recovery/now/Tree.mtn.md",
-    recoveredLocalFingerprint: "local"
-  };
-
-  assert.equal(session.claimConflict("left", conflict), true);
-  assert.equal(session.hasConflict, true);
-  session.detach("left");
-
-  assert.deepEqual(adopted, ["right:_Mind Tree Recovery/now/Tree.mtn.md"]);
-  assert.equal(session.hasConflict, true);
-  session.clearConflict("right");
-  assert.equal(session.hasConflict, false);
+test("a locked session survives its last view closing without selecting a version", () => {
+  const registry = new MindTreeSessionRegistry();
+  const session = registry.acquire("Tree.mtn.md");
+  session.initialize(createEmptyDocument("Local"), "baseline");
+  session.restoring = true;
+  registry.releaseSession(session, "view");
+  assert.equal(registry.acquire("Tree.mtn.md"), session);
+  assert.equal(session.document?.title, "Local");
+  assert.equal(session.history.isMutationBlocked(), true);
+  session.restoring = false;
+  registry.releaseSession(session, "view");
+  assert.equal(registry.get("Tree.mtn.md"), undefined);
 });
 
-test("file side effects serialize and a failed Recovery can be retried", async () => {
+test("file side effects serialize and a failed operation does not poison the queue", async () => {
   const session = new SharedMindTreeSession("Tree.mtn.md");
   const order: string[] = [];
   let releaseFirst!: () => void;
@@ -119,17 +94,37 @@ test("file side effects serialize and a failed Recovery can be retried", async (
   await Promise.all([first, second]);
   assert.deepEqual(order, ["first-start", "first-end", "second"]);
 
-  let attempts = 0;
-  await assert.rejects(session.recoveryForTransition("transition", async () => {
-    attempts += 1;
-    throw new Error("disk full");
-  }), /disk full/);
-  const recovered = await session.recoveryForTransition("transition", async () => {
-    attempts += 1;
-    return "verified.mtn.md";
-  });
-  assert.equal(recovered, "verified.mtn.md");
-  assert.equal(attempts, 2);
+  await assert.rejects(session.runFileOperation(async () => { throw new Error("disk full"); }), /disk full/);
+  assert.equal(await session.runFileOperation(async () => "retried"), "retried");
+});
+
+test("current choice retains history and confirms a draft exactly once; external choice clears it", () => {
+  const session = new SharedMindTreeSession("Tree.mtn.md");
+  const before = createEmptyDocument("Before");
+  session.initialize(before, "baseline");
+  const edited = session.history.execute(before, (document) => { document.title = "Edited"; });
+  session.replaceDocument(edited, "view");
+  const current = structuredClone(edited);
+  current.title = "Draft";
+  current.nodes[current.rootId]!.title = "Draft";
+  session.acceptVersion({ choice: "current", source: "written", document: current,
+    draft: { nodeId: current.rootId, originalTitle: "Edited", value: "Draft" } });
+  assert.equal(session.history.undo(current), edited);
+  assert.ok(session.takeResolvedDraft());
+  assert.equal(session.takeResolvedDraft(), undefined);
+  session.acceptVersion({ choice: "external", source: "remote", document: before });
+  assert.equal(session.history.canUndo, false);
+  assert.equal(session.history.canRedo, false);
+  assert.equal(session.history.dirty, false);
+});
+
+test("unchanged title drafts do not add duplicate undo entries when current version is chosen", () => {
+  const session = new SharedMindTreeSession("Tree.mtn.md");
+  const document = createEmptyDocument("Tree");
+  session.initialize(document, "baseline");
+  session.acceptVersion({ choice: "current", source: "written", document,
+    draft: { nodeId: document.rootId, originalTitle: "Tree", value: " Tree " } });
+  assert.equal(session.history.canUndo, false);
 });
 
 test("a write receipt remains recognizable until verification completes", () => {

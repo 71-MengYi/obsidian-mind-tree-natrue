@@ -1,6 +1,5 @@
 export type DuplicateIdentityDecision =
   | { action: "keep" }
-  | { action: "reassign" }
   | { action: "reject"; paths: string[] };
 
 export interface DocumentIdentityWriteDecision {
@@ -10,18 +9,14 @@ export interface DocumentIdentityWriteDecision {
 
 /**
  * Decide duplicate ownership without depending on Obsidian runtime objects.
- * Only a path recorded before the current scan is trusted as the original.
+ * Historical paths cannot prove original ownership across devices.
  */
 export function decideDuplicateIdentity(
-  requestedPath: string,
-  ownerPath: string | undefined,
-  ownerTrusted: boolean,
   livePaths: readonly string[]
 ): DuplicateIdentityDecision {
   const paths = [...new Set(livePaths)].sort((left, right) => left.localeCompare(right));
   if (paths.length <= 1) return { action: "keep" };
-  if (!ownerTrusted || !ownerPath) return { action: "reject", paths };
-  return ownerPath === requestedPath ? { action: "keep" } : { action: "reassign" };
+  return { action: "reject", paths };
 }
 
 /**
