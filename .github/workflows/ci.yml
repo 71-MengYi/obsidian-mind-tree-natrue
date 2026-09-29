@@ -1,0 +1,53 @@
+name: CI
+
+# 每次推送（分支或标签）和 PR 都跑一遍，用来确认代码本身是好的。
+#
+# 它同时也是发布流程的"对照组"：如果推标签时 release.yml 起不来（startup_failure）
+# 而本工作流正常，说明问题在工作流文件；如果连本工作流都起不来，
+# 说明问题在仓库的 Actions 设置（Settings → Actions → General）。
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # 不用任何第三方 action，只靠 runner 自身能力。
+  # 用来区分"Actions 本身能不能跑"和"某个工作流文件/某个 action 有问题"。
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Runner 可用性
+        run: |
+          uname -a
+          node --version
+          python3 --version
+
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Type check
+        run: npm run check
+
+      - name: Build
+        run: npm run build
+
+      - name: Check build output
+        run: |
+          set -euo pipefail
+          for file in main.js manifest.json styles.css; do
+            test -s "$file" || { echo "::error::$file 缺失或为空"; exit 1; }
+            printf '%-14s %9s bytes\n' "$file" "$(stat -c%s "$file")"
+          done
