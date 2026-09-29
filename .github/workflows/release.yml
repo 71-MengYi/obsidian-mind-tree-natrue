@@ -7,7 +7,13 @@ name: Release
 #
 # 也可以在仓库的 Actions 页面手动触发（workflow_dispatch），为已存在的标签补发 Release。
 #
-# 为什么规则这么严：插件内置更新器（src/services/updates/release-client.ts）和 BRAT 都固定
+# 本工作流刻意不使用任何外部 action，只用 runner 预装的 git / node / npm / gh / curl。
+# 原因：本仓库的 Actions 策略是「只允许 71-MengYi 自己仓库里的 action」，
+# 连 GitHub 官方的 actions/checkout、actions/setup-node 都会被拒，表现为
+# startup_failure（run 里没有任何 job）。如果你把设置放宽为允许 GitHub 官方 action，
+# 本工作流也照常工作。
+#
+# 为什么校验规则这么严：插件内置更新器（src/services/updates/release-client.ts）和 BRAT 都固定
 # 读取 releases/latest，并要求
 #   1. 该 release 不是草稿、不是预发布（否则 releases/latest 会跳过它）；
 #   2. tag 名严格是 X.Y.Z，且与 manifest.json 里的 version 完全一致（不接受 v 前缀、后缀）；
@@ -43,24 +49,28 @@ jobs:
       # push 事件用推送的标签名；手动触发用输入的标签名。
       RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+      - name: Checkout（手动 git，不依赖 actions/checkout）
+        env:
+          # 公开仓库匿名也能读；带上 token 是为了仓库将来转私有后仍可用。
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin "+refs/tags/${RELEASE_TAG}:refs/tags/${RELEASE_TAG}"
+          # ^{commit} 显式 peel：注解标签和轻量标签都能稳定落到提交上。
+          git checkout -q --detach "refs/tags/${RELEASE_TAG}^{commit}"
+          echo "已签出 refs/tags/${RELEASE_TAG} → $(git rev-parse --short HEAD)"
 
-      # 发布用的代码取自标签本身；但自检脚本要取默认分支上的最新版，
-      # 否则补发旧标签时会因为当时的提交里还没有这个脚本而失败。
-      - name: Checkout release tooling
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.repository.default_branch }}
-          path: .release-tools
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
+      - name: Check runner toolchain
+        run: |
+          set -euo pipefail
+          git --version
+          node --version
+          npm --version
+          gh --version | head -n 1
+          node -e 'const major = Number(process.versions.node.split(".")[0]);
+            if (major < 20) { console.error(`::error::runner 预装的 Node.js 是 ${process.versions.node}，本工作流需要 20 以上`); process.exit(1); }'
 
       - name: Preflight（标签与 manifest.json 必须一致）
         run: |
@@ -109,6 +119,19 @@ jobs:
           test "$(stat -c%s main.js)" -le 10485760
           test "$(stat -c%s styles.css)" -le 2097152
 
+      # 自检脚本从默认分支取最新版，而不是从标签里取：
+      # 补发旧标签时那个提交里还没有这个脚本。
+      - name: Fetch verify script
+        env:
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          mkdir -p .release-tools
+          curl -sSL --fail --retry 3 -o .release-tools/verify-release.mjs \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/${DEFAULT_BRANCH}/.github/scripts/verify-release.mjs"
+          test -s .release-tools/verify-release.mjs
+          echo "已取到自检脚本 $(stat -c%s .release-tools/verify-release.mjs) 字节"
+
       - name: Publish release（先草稿，后发布）
         env:
           GH_TOKEN: ${{ github.token }}
@@ -134,4 +157,4 @@ jobs:
       - name: Verify published release（按插件更新器的规则自检）
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .release-tools/.github/scripts/verify-release.mjs "$RELEASE_TAG"
+        run: node .release-tools/verify-release.mjs "$RELEASE_TAG"

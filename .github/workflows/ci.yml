@@ -2,8 +2,11 @@ name: CI
 
 # 每次推送（分支或标签）和 PR 都跑一遍，用来确认代码本身是好的。
 #
-# 它同时也是发布流程的"对照组"：如果推标签时 release.yml 起不来（startup_failure）
-# 而本工作流正常，说明问题在工作流文件；如果连本工作流都起不来，
+# 和 release.yml 一样，不使用任何外部 action（只用 runner 预装的 git / node / npm），
+# 因为本仓库的 Actions 策略只允许 71-MengYi 自己仓库里的 action。
+#
+# 它同时也是发布流程的"对照组"：如果推标签时 Release 起不来而 CI 正常，
+# 说明问题在某个工作流文件；如果两个都是 startup_failure，
 # 说明问题在仓库的 Actions 设置（Settings → Actions → General）。
 
 on:
@@ -14,26 +17,32 @@ permissions:
   contents: read
 
 jobs:
-  # 不用任何第三方 action，只靠 runner 自身能力。
-  # 用来区分"Actions 本身能不能跑"和"某个工作流文件/某个 action 有问题"。
+  # 连代码都不取，只验证 runner 能跑起来。
   smoke:
     runs-on: ubuntu-latest
     steps:
       - name: Runner 可用性
         run: |
           uname -a
+          git --version
           node --version
-          python3 --version
+          npm --version
+          gh --version | head -n 1
 
   verify:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "24"
-          cache: npm
+      - name: Checkout（手动 git，不依赖 actions/checkout）
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          git init -q .
+          git remote add origin "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin "+${GITHUB_REF}:refs/remotes/ci"
+          # ^{commit} 显式 peel：分支、标签、PR 合并引用都能稳定落到提交上。
+          git checkout -q --detach "refs/remotes/ci^{commit}"
+          git log --oneline -1
 
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
