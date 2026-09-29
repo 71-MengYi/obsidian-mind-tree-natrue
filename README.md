@@ -1,36 +1,134 @@
+![Mind Tree Nature](assets/mind-tree-nature-header.png)
+
+[中文](README.md) | [English](README.en.md)
+
 # Mind Tree Nature
 
-Mind Tree Nature is an offline-first Obsidian plugin for organizing notes, attachments, and web links as an ordered mind tree.
+> 让你的笔记结构随思维自然成型。
 
-## Use
+Mind Tree Nature 是一款**离线优先**的 Obsidian 思维导图插件。它以 `.mtn.md` 文件为载体，在自定义视图里组织笔记、文本、图片、附件和网页链接，同时始终保留一份普通 Markdown 编辑器和 AI 都能直接读取的无序列表大纲。
 
-1. Run **Mind Tree Nature: Create new mind tree** from the command palette.
-2. Add and edit nodes from the centered toolbar or a node's context menu. The vertical menu at the view's top-left contains per-tree settings and shortcut help.
-3. Drag from empty canvas space with the left mouse button to select nodes. Drag empty space with the right mouse button to pan.
-4. Drag a node before, after, or inside another node to reorganize the tree.
-5. Use `Enter`, `Shift+Enter`, `Tab`, `Shift+Tab`, and `Ctrl/Cmd+E` for fast node and note creation.
+- **五种布局**：均衡、向右、向左、树形、放射
+- **十套主题**：明暗自适应，十二色按一级分支循环
+- **桌面端与移动端**均可使用，触屏手势完整支持
+- **界面双语**：简体中文 / English，跟随 Obsidian 界面语言
 
-`.mtn.md` files open in the Mind Tree view automatically. The plugin intentionally does not add an action for opening their Markdown source.
+## 设计理念
 
-## Development
+**结构归导图，内容归文件。** 插件不试图替代 Markdown，而是给已有的库加一层可视化组织：导图负责层级与顺序，`.md` 文件依旧负责内容本身。即使以后停用插件，你的笔记仍然完整可读。
+
+**一份文件，三种读法。** `.mtn.md` 的可读部分是标准无序列表大纲；AI 工具读到明确提示后无需继续解析压缩区；插件自身则用文件末尾的 gzip + Base64 数据块作为权威数据源。保存时由机器数据重新生成大纲，两者不会各说各话。
+
+**引用要稳，重命名不慌。** 关联文件依靠稳定资源 ID，而不是易碎的路径字符串；重命名或移动文件后引用能够被修复。节点标题与文件名默认双向同步——改标题就是改文件名。
+
+**离线优先，数据自有。** 不发送遥测，不上传库内容，不依赖任何第三方服务。网页链接只保存标题、地址和可选图标，绝不在后台抓取正文。
+
+**只做好有序树。** 首个版本刻意不做自由画布、流程图和任意图结构，也不做多人协作与服务端同步——同步交给你已经在用的方案。
+
+## 安装
+
+**环境要求**：Obsidian **1.8.7** 或更高版本。
+
+### 手动安装（推荐）
+
+1. 打开 [Releases](https://github.com/71-MengYi/obsidian-mind-tree-natrue/releases/latest) 页面，从最新版本的 **Assets** 中下载三个文件：
+   - `main.js`
+   - `manifest.json`
+   - `styles.css`
+
+   > 注意：不要下载 `Source code (zip)` / `Source code (tar.gz)`，那不是插件本体。
+
+2. 在你的库中创建目录 `<vault>/.obsidian/plugins/mind-tree-nature/`。目录名必须与插件 ID 一致，即 `mind-tree-nature`。`.obsidian` 是隐藏目录，需要先开启显示隐藏文件。
+3. 把刚下载的三个文件放进该目录，三者必须同级。
+4. 重启 Obsidian，或在「设置 → 第三方插件」中点击刷新按钮重新加载插件列表。
+5. 关闭**受限模式**，在第三方插件列表中找到并启用 **Mind Tree Nature**。
+
+**移动端**：把三个文件放进库内同一路径即可，可借助系统文件管理器或你正在使用的同步方案。
+
+### 通过 BRAT 安装
+
+已安装 [BRAT](https://github.com/TfTHacker/obsidian42-brat) 时，可以直接添加本仓库，由 BRAT 负责安装与后续更新：
+
+```
+71-MengYi/obsidian-mind-tree-natrue
+```
+
+### 更新
+
+插件内置更新器，位于「设置 → Mind Tree Nature → 基础设置 → 插件更新」：可以手动检查，也可以开启启动时自动检查。
+
+更新流程只替换 `main.js`、`manifest.json`、`styles.css` 三个程序文件，并在替换前做大小与 SHA-256 校验；**不会改动你的笔记和 `data.json`**。校验不通过时不会有任何文件被替换。
+
+## 快速上手
+
+### 1. 新建一棵思维树
+
+命令面板（`Ctrl/Cmd + P`）运行 **Mind Tree Nature: 新建思维树**，填写标题与保存目录。
+
+文件以 `.mtn.md` 扩展名保存，之后**打开这个文件就会自动进入导图视图**——插件有意不提供打开其 Markdown 源码的操作，因为大纲只是机器数据的投影。
+
+新建或打开导图的第一个画面，会以 100% 缩放把根节点精确居中并选中，不需要你手动寻找位置。
+
+### 2. 长节点
+
+选中节点后直接按键，不用去找按钮：
+
+| 按键 | 作用 |
+| --- | --- |
+| `Enter` | 在下方添加同级节点 |
+| `Shift + Enter` | 在上方添加同级节点 |
+| `Tab` | 添加子节点 |
+| `Shift + Tab` | 插入父节点 |
+| `空格` | 编辑节点标题 |
+| `↑` `↓` | 在兄弟节点间移动 |
+| `←` `→` | 在父节点与第一个子节点间移动 |
+| `Delete` / `Backspace` | 删除所选分支 |
+| `Ctrl/Cmd + ↑` / `↓` | 在同级中上移 / 下移 |
+| `Ctrl/Cmd + C` / `X` / `V` | 复制 / 剪切 / 粘贴分支 |
+| `Ctrl/Cmd + A` | 选择所有可见节点 |
+| `Ctrl/Cmd + Z` / `Ctrl/Cmd + Shift + Z` | 撤销 / 重做 |
+| `Ctrl/Cmd + E` | 为当前节点创建 Markdown 笔记并关联 |
+| `Ctrl/Cmd + S` | 立即保存并更新 Markdown 大纲 |
+| `Escape` | 取消编辑或拖拽 |
+
+macOS 上把 `Ctrl` 换成 `Cmd`。视图左上角的圆形问号按钮内有同一份完整列表。
+
+### 3. 把笔记挂到树上
+
+- `Ctrl/Cmd + E`：为未关联的节点创建一篇 Markdown 笔记并自动关联。新笔记的打开位置可在设置中选择右侧拆分、新标签页、当前标签页或新窗口。
+- 节点右键菜单 →**关联已有文件**：检索库内除当前思维树自身外的全部文件。
+- **文件收集**：视图左上角菜单里的「文件收集」决定如何处理思维树旁尚未关联的文件，可选「关闭 / 每次询问 / 添加到一级末尾 / 添加到收集节点」；左下角状态栏的扫描按钮可随时手动扫描当前文件夹中的新增文件。
+- 也可以直接把文件从库中或系统里**拖进画布**，剪贴板图片同样支持。
+
+关联之后，节点标题与文件名默认双向同步；不需要同步时，在右键菜单第一项取消**名称关联**即可。解除关联（而不是取消名称同步）后，创建 / 关联入口才会重新出现。
+
+### 4. 导入与导出
+
+- 工具栏**导入文本**：粘贴列表 / 缩进文本还原层级，也可切换到兼容嵌套列表的「多级标题」规则；统一识别 Wiki 链接、Markdown 笔记 / 附件链接和 HTTP/HTTPS URL，每行单链接保留别名，多个链接按顺序拆为独立节点。
+- 工具栏**导出**：把所选分支或整棵树导出为 PNG。
+
+## 文档格式与隐私
+
+- 思维树使用顶层 YAML 属性 `documentId`、`schemaVersion`、`layoutMode`、`recursiveScan`、`collectionMode`、`theme` 和 `nodeShape`，其后是一段 Markdown 大纲。大纲之后存放无损 gzip 压缩的 JSON，并附有一条明确要求 AI 工具忽略它的说明；设置项不会在该载荷中重复保存。
+- 插件不发送遥测数据，也不上传库内容。
+- 网页链接只做存储，绝不在后台抓取。
+- 所有界面文案由 i18n 提供简体中文与英语两套资源，并跟随 Obsidian 界面语言。
+
+产品与技术基线见[设计文档](docs/requirements.md)。
+
+## 开发
 
 ```bash
 npm install
-npm run check
-npm test
-npm run build
+npm run check   # 类型检查
+npm test        # 单元测试
+npm run build   # 生产构建，产出 main.js
 ```
 
-Copy `main.js`, `manifest.json`, and `styles.css` into `<vault>/.obsidian/plugins/mind-tree-nature/` to test the plugin.
+把 `main.js`、`manifest.json` 和 `styles.css` 复制到 `<vault>/.obsidian/plugins/mind-tree-nature/` 即可测试插件。
 
-## Data and privacy
+## 许可与致谢
 
-- Mind trees use top-level YAML `documentId`, `schemaVersion`, `layoutMode`, `recursiveScan`, `collectionMode`, `theme`, and `nodeShape` properties followed by a Markdown outline. Lossless gzip-compressed JSON is stored after the outline and an explicit instruction telling AI tools to ignore it; settings are not duplicated in that payload.
-- The plugin does not send telemetry or upload vault content.
-- Web links are stored but never fetched in the background.
+本项目以 [MIT 许可](LICENSE)发布，Copyright (c) 2026 Dayiy。
 
-See [the design document](docs/requirements.md) for the product and technical baseline.
-
-Theme palettes and parts of the layout/connection behavior are adapted from the
-MIT-licensed [Light Mindmap](https://github.com/ninglg/light-mindmap). See
-[third-party notices](THIRD_PARTY_NOTICES.md).
+主题配色以及部分布局与连线行为改编自 MIT 许可的 [Light Mindmap](https://github.com/ninglg/light-mindmap)。参见[第三方声明](THIRD_PARTY_NOTICES.md)。
