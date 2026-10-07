@@ -17,7 +17,6 @@ export class BasicSettingsPage implements SettingsPageObject {
     parent.createEl("h3", { text: t("settings.tabs.basic") });
     new Setting(parent)
       .setName(t("settings.autosave.name"))
-      .setDesc(t("settings.autosave.desc"))
       .addSlider((slider) => slider
         .setLimits(250, 2_000, 250)
         .setDynamicTooltip()
@@ -40,7 +39,6 @@ export class BasicSettingsPage implements SettingsPageObject {
   private renderResourceIndex(parent: HTMLElement, port: SettingsPagePort): void {
     parent.createEl("h3", { text: t("resourceIndex.heading") });
     const setting = new Setting(parent)
-      .setName(t("resourceIndex.rebuild"))
       .setDesc(t("resourceIndex.desc"));
     const status = parent.createDiv({ cls: "setting-item-description", attr: { role: "status", "aria-live": "polite" } });
     setting.addButton((button) => button.setButtonText(t("resourceIndex.rebuild")).onClick(async () => {

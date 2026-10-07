@@ -38,7 +38,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
           await port.save();
         });
       });
-    new Setting(parent).setName(t("settings.nodeAlignment.name")).setDesc(t("settings.nodeAlignment.desc"))
+    new Setting(parent).setName(t("settings.nodeAlignment.name"))
       .addDropdown((dropdown) => dropdown
         .addOption("level", t("settings.nodeAlignment.level"))
         .addOption("compact", t("settings.nodeAlignment.compact"))
@@ -47,7 +47,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
           port.refreshOpenLayouts();
           await port.save();
         }));
-    new Setting(parent).setName(t("settings.newNoteOpenMode.name")).setDesc(t("settings.newNoteOpenMode.desc"))
+    new Setting(parent).setName(t("settings.newNoteOpenMode.name"))
       .addDropdown((dropdown) => dropdown
         .addOption("split-right", t("settings.newNoteOpenMode.splitRight"))
         .addOption("tab", t("settings.newNoteOpenMode.tab"))

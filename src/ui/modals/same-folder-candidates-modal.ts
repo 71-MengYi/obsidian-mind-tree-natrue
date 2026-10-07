@@ -11,7 +11,6 @@ export class SameFolderCandidatesModal extends Modal {
   }
   onOpen(): void {
     this.titleEl.setText(t("modal.collect.title"));
-    this.contentEl.createEl("p", { text: t("modal.collect.desc") });
     const list = this.contentEl.createDiv("mtn-candidate-list");
     for (const file of this.files) new Setting(list).setName(file.name).setDesc(file.path).addToggle((toggle) => toggle
       .setValue(true).onChange((value) => value ? this.selected.add(file.path) : this.selected.delete(file.path)));

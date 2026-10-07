@@ -45,7 +45,7 @@ export class TopicNoteSettingsPage implements SettingsPageObject {
           port.settings.nonMarkdownIdSeparator = value === "%" ? "%" : "@";
           await port.save();
         }));
-    new Setting(parent).setName(t("settings.openMode.name")).setDesc(t("settings.openMode.desc"))
+    new Setting(parent).setName(t("settings.openMode.name"))
       .addDropdown((dropdown) => dropdown.addOption("tab", t("settings.openMode.tab"))
         .addOption("split-right", t("settings.openMode.splitRight"))
         .setValue(port.settings.resourceOpenMode).onChange(async (value) => {

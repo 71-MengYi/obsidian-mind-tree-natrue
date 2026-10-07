@@ -10,7 +10,7 @@ export class KeyboardHelpMenu {
     const menu = new Menu();
     if (Platform.isMobile || this.ownerDocument.defaultView?.navigator.maxTouchPoints) {
       menu.addItem((item) => item.setTitle(t("touch.help")).setIsLabel(true));
-      for (const key of ["touch.pan", "touch.tap", "touch.menu", "touch.drag", "touch.pinch", "touch.controls", "touch.keyboard"] as const) {
+      for (const key of ["touch.pan", "touch.tap", "touch.menu", "touch.drag", "touch.pinch", "touch.controls"] as const) {
         menu.addItem((item) => item.setTitle(t(key)).setIsLabel(true));
       }
       menu.addSeparator();

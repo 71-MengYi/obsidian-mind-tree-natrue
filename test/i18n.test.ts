@@ -1,11 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { translate } from "../src/i18n/catalog";
+import { EN, translate, type TranslationKey } from "../src/i18n/catalog";
 
 test("provides English and Chinese interface translations", () => {
-  assert.equal(translate("menu.disableTitleSync", "en"), "Cancel association");
-  assert.equal(translate("menu.disableTitleSync", "zh-cn"), "取消关联");
-  assert.equal(translate("settings.openMode.splitRight", "zh"), "右侧竖向拆分");
+  assert.equal(translate("menu.disableTitleSync", "en"), "Stop syncing file name");
+  assert.equal(translate("menu.disableTitleSync", "zh-cn"), "停止同步文件名");
+  assert.equal(translate("settings.openMode.splitRight", "zh"), "右侧拆分");
   assert.match(translate("notice.duplicateResourceId", "zh", { paths: "A.mtn.md, B.mtn.md" }), /A\.mtn\.md, B\.mtn\.md/);
   assert.match(translate("notice.clipboardReadFailed", "zh"), /剪贴板/);
   assert.equal(translate("conflict.current", "zh"), "当前版本");
@@ -18,15 +18,33 @@ test("provides English and Chinese interface translations", () => {
   assert.equal(translate("statusBar.files", "zh", { count: 3 }), "3 个文件");
   assert.equal(translate("node.openLinkedResource", "zh"), "打开关联资源");
   assert.equal(translate("node.openLinkedResource", "en"), "Open linked resource");
-  assert.match(translate("modal.import.ruleDesc", "zh"), /Wiki、Markdown 文件链接及 HTTP\/HTTPS 网址均自动关联/);
-  assert.match(translate("modal.import.ruleDesc", "zh"), /多个链接拆为兄弟节点/);
-  assert.match(translate("modal.import.ruleDesc", "en"), /Wiki, Markdown file links and HTTP\/HTTPS URLs/);
-  assert.match(translate("modal.import.ruleDesc", "en"), /Multiple links become siblings/);
+  assert.match(translate("modal.import.ruleDesc", "zh"), /自动关联文件链接和网址/);
+  assert.match(translate("modal.import.ruleDesc", "zh"), /同一行的多个链接拆为同级节点/);
+  assert.match(translate("modal.import.ruleDesc", "zh"), /其他文字放在首个节点，子项归入首个节点/);
+  assert.match(translate("modal.import.ruleDesc", "en"), /File links and web addresses are linked automatically/);
+  assert.match(translate("modal.import.ruleDesc", "en"), /Multiple links on one line become sibling nodes/);
+  assert.match(translate("modal.import.ruleDesc", "en"), /other text becomes the first node\. Nested items go under that first node/);
 });
 
 test("interpolates translated message variables", () => {
   assert.equal(translate("menu.deleteBranch", "en", { count: 3 }), "Delete branch (3)");
   assert.equal(translate("menu.deleteBranch", "zh-cn", { count: 3 }), "删除分支（3）");
+});
+
+test("all translations are nonempty and preserve the same variables in both languages", () => {
+  const placeholders = (value: string) => [...value.matchAll(/\{(\w+)\}/g)].map((match) => match[1]!).sort();
+  for (const key of Object.keys(EN) as TranslationKey[]) {
+    const names = placeholders(EN[key]);
+    const variables = Object.fromEntries(names.map((name) => [name, "value-" + name]));
+    for (const language of ["en", "zh"]) {
+      const template = translate(key, language);
+      assert.ok(template.trim(), language + ": " + key);
+      assert.deepEqual(placeholders(template), names, language + ": " + key);
+      const rendered = translate(key, language, variables);
+      assert.doesNotMatch(rendered, /\{\w+\}/, language + ": " + key);
+      for (const name of names) assert.ok(rendered.includes("value-" + name), language + ": " + key);
+    }
+  }
 });
 
 test("file badge descriptions explain opt-in Markdown aliases in both languages", () => {
@@ -36,8 +54,8 @@ test("file badge descriptions explain opt-in Markdown aliases in both languages"
   }
   assert.match(translate("settings.fileBadges.desc", "en"), /only when an alias matches/);
   assert.match(translate("settings.fileBadges.desc", "zh"), /仅在匹配到别名时显示/);
-  assert.match(translate("settings.fileBadges.ignore.desc", "en"), /do not affect dedicated labels/);
-  assert.match(translate("settings.fileBadges.ignore.desc", "zh"), /不影响专用标签/);
+  assert.match(translate("settings.fileBadges.ignore.desc", "en"), /Mind Tree and Drawing labels are unaffected/);
+  assert.match(translate("settings.fileBadges.ignore.desc", "zh"), /不影响“思维树”和“绘图”标签/);
 });
 
 test("template actions consistently describe files in both languages", () => {
@@ -63,6 +81,9 @@ test("default-app opening and stale association failures provide Chinese and Eng
     assert.match(translate("notice.defaultAppOpenFailed", language, { message: "Test failure" }), /Test failure/);
     assert.match(translate("notice.createdNoteNotLinked", language, { path: "Notes/A.md", message: "Changed" }), /Notes\/A\.md/);
   }
-  assert.equal(translate("menu.disableTitleSync", "zh"), "取消关联");
+  assert.equal(translate("menu.disableTitleSync", "zh"), "停止同步文件名");
+  assert.equal(translate("menu.enableTitleSync", "zh"), "同步文件名");
+  assert.equal(translate("menu.enableTitleSync", "en"), "Sync file name");
   assert.equal(translate("menu.unlinkResource", "zh"), "移除关联");
+  assert.equal(translate("menu.unlinkResource", "en"), "Remove link");
 });

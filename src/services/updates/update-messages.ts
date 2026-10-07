@@ -5,7 +5,8 @@ import type { UpdateState } from "./update-coordinator";
 export function updateMessage(state: UpdateState): string {
   if (state.error) return t(`update.error.${state.error.code}`, {
     detail: state.error.detail, path: state.backupPath ?? state.error.detail
-  });
+  }).trim();
+  if (state.phase === "idle") return "";
   return t(`update.state.${state.phase}`, {
     current: state.currentVersion, version: state.latestVersion ?? state.currentVersion
   });

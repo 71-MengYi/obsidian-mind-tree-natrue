@@ -9,13 +9,12 @@ export class PluginUpdateSection {
   private readonly unsubscribe: () => void;
   constructor(parent: HTMLElement, port: SettingsPagePort) {
     new Setting(parent).setName(t("update.heading")).setHeading();
-    const current = parent.createDiv({ cls: "setting-item-description" });
-    new Setting(parent).setName(t("update.auto.name")).setDesc(t("update.auto.desc"))
+    new Setting(parent).setName(t("update.auto.name"))
       .addToggle((toggle) => toggle.setValue(port.settings.autoCheckUpdates).onChange(async (value) => {
         port.settings.autoCheckUpdates = value;
         await port.save();
       }));
-    const actions = new Setting(parent).setName(t("update.check")).setDesc(t("update.desc"));
+    const actions = new Setting(parent);
     const status = parent.createDiv({ cls: "setting-item-description", attr: { role: "status", "aria-live": "polite" } });
     let check!: HTMLButtonElement, install!: HTMLButtonElement;
     actions.addButton((button) => {
@@ -26,8 +25,10 @@ export class PluginUpdateSection {
       button.setButtonText(t("update.install")).onClick(() => void port.updates.install());
     });
     this.unsubscribe = port.updates.subscribe((state) => {
-      current.setText(t("update.currentVersion", { version: state.currentVersion }));
-      status.setText(updateMessage(state));
+      actions.setName(t("update.currentVersion", { version: state.currentVersion }));
+      const message = updateMessage(state);
+      status.hidden = !message;
+      status.setText(message);
       check.disabled = updateBusy(state);
       install.hidden = state.phase !== "available";
       install.disabled = updateBusy(state);
