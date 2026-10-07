@@ -16,13 +16,13 @@ export class PluginUpdateSection {
       }));
     const actions = new Setting(parent);
     const status = parent.createDiv({ cls: "setting-item-description", attr: { role: "status", "aria-live": "polite" } });
-    let check!: HTMLButtonElement, install!: HTMLButtonElement;
+    let check!: HTMLButtonElement, view!: HTMLButtonElement;
     actions.addButton((button) => {
       check = button.buttonEl;
       button.setButtonText(t("update.check")).onClick(() => void port.updates.check());
     }).addButton((button) => {
-      install = button.buttonEl;
-      button.setButtonText(t("update.install")).onClick(() => void port.updates.install());
+      view = button.buttonEl;
+      button.setButtonText(t("update.view")).onClick(() => port.updates.showAvailable());
     });
     this.unsubscribe = port.updates.subscribe((state) => {
       actions.setName(t("update.currentVersion", { version: state.currentVersion }));
@@ -30,8 +30,8 @@ export class PluginUpdateSection {
       status.hidden = !message;
       status.setText(message);
       check.disabled = updateBusy(state);
-      install.hidden = state.phase !== "available";
-      install.disabled = updateBusy(state);
+      view.hidden = state.phase !== "available" || !state.availableRelease;
+      view.disabled = updateBusy(state);
     });
   }
   destroy(): void { this.unsubscribe(); }

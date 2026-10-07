@@ -3,7 +3,7 @@ import { t, type TranslationKey } from "./i18n";
 import type MindTreeNaturePlugin from "./main";
 import type { ResourceIndexProgress } from "./services/resource-catalog";
 import { BasicSettingsPage, MindMapSettingsPage, TopicNoteSettingsPage } from "./ui/settings-pages";
-import type { SettingsPageObject } from "./ui/settings-pages/ports";
+import type { SettingsPageObject, SettingsPagePort } from "./ui/settings-pages/ports";
 export { DEFAULT_SETTINGS } from "./settings-model";
 export type { MindTreeSettings } from "./settings-model";
 
@@ -38,12 +38,16 @@ export class MindTreeSettingTab extends PluginSettingTab {
 
     this.renderPageTabs(containerEl);
     const panel = containerEl.createDiv({ cls: "mtn-settings-panel", attr: { role: "tabpanel" } });
-    const port = {
+    const port: SettingsPagePort = {
       settings: this.plugin.settings,
       save: () => this.plugin.saveSettings(),
       refreshOpenLayouts: () => this.plugin.refreshOpenMindTreeLayouts(),
       rebuildResourceIndex: (progress?: (value: ResourceIndexProgress) => void) => this.plugin.rebuildResourceIndex(progress),
-      updates: this.plugin.updates
+      updates: {
+        check: () => this.plugin.updates.check(),
+        showAvailable: () => this.plugin.showAvailableUpdate(),
+        subscribe: (listener) => this.plugin.updates.subscribe(listener)
+      }
     };
     if (this.activePage === "basic") this.page = new BasicSettingsPage(panel, port);
     else if (this.activePage === "mind-map") this.page = new MindMapSettingsPage(panel, port);

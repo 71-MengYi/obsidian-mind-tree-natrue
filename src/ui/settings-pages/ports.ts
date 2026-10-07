@@ -10,7 +10,7 @@ export interface SettingsPagePort {
   readonly rebuildResourceIndex: (progress?: (value: ResourceIndexProgress) => void) => Promise<ResourceIndexReport>;
   readonly updates: {
     check(): Promise<void>;
-    install(): Promise<void>;
+    showAvailable(): void;
     subscribe(listener: (state: UpdateState) => void): () => void;
   };
 }

@@ -1382,6 +1382,60 @@
   gap: 8px;
 }
 
+.mtn-plugin-update-modal {
+  display: flex;
+  flex-direction: column;
+  width: min(720px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+}
+
+.mtn-plugin-update-modal .modal-content {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.mtn-plugin-update-versions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-bottom: 12px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-small);
+}
+
+.mtn-plugin-update-versions strong {
+  color: var(--text-normal);
+}
+
+.mtn-plugin-update-notes {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  overflow-wrap: anywhere;
+}
+
+.mtn-plugin-update-notes img {
+  max-width: 100%;
+}
+
+.mtn-plugin-update-notes-raw {
+  white-space: pre-wrap;
+}
+
+.mtn-plugin-update-actions {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 16px;
+}
+
 /* Branch deletion uses a purpose-built hierarchy: warning, inspectable counts,
    then four explicit choices. No action is hidden in a dropdown. */
 .mtn-delete-modal {

@@ -5,6 +5,7 @@ export type UpdatePhase = "idle" | "checking" | "current" | "available" | "downl
   | "installing" | "reloading" | "updated" | "error";
 export interface UpdateState {
   readonly phase: UpdatePhase; readonly currentVersion: string; readonly latestVersion?: string;
+  readonly availableRelease?: PluginRelease;
   readonly error?: UpdateError; readonly backupPath?: string;
 }
 export interface PreparedPluginUpdate {
@@ -38,7 +39,6 @@ export function updateBusy(state: UpdateState): boolean {
 /** Owns one check/install at a time, independently of settings-page lifetimes. */
 export class UpdateCoordinator {
   private listeners = new Set<(state: UpdateState) => void>();
-  private release?: PluginRelease;
   private operation?: Promise<void>;
   private disposed = false;
   private blocked?: UpdateError;
@@ -65,34 +65,38 @@ export class UpdateCoordinator {
   startup(enabled: boolean): void {
     if (this.runtime.startupChecked) return;
     this.runtime.startupChecked = true;
-    if (enabled && !this.runtime.installing) void this.check(true);
+    if (enabled && !this.runtime.installing) void this.check();
   }
-  check(automatic = false): Promise<void> {
+  check(): Promise<void> {
     if (this.disposed || this.blocked || this.runtime.installing) return Promise.resolve();
     if (this.operation) return this.operation;
-    this.publish({ phase: "checking", currentVersion: this.state.currentVersion });
-    this.release = undefined;
-    this.operation = (async () => {
+    const currentVersion = this.state.currentVersion;
+    const operation = Promise.resolve().then(async () => {
+      let state: UpdateState;
       try {
         const release = await this.client.latest();
-        if (this.disposed) return;
-        const newer = compareVersions(release.version, this.state.currentVersion) > 0;
-        if (newer) this.release = release;
-        this.publish({ phase: newer ? "available" : "current", currentVersion: this.state.currentVersion,
-          latestVersion: release.version });
-        if (automatic && newer) this.notify(this.state);
+        const newer = compareVersions(release.version, currentVersion) > 0;
+        state = { phase: newer ? "available" : "current", currentVersion,
+          latestVersion: release.version, availableRelease: newer ? release : undefined };
       } catch (error) {
-        if (!this.disposed) this.publish({ phase: "error", currentVersion: this.state.currentVersion,
-          error: this.asError(error) });
+        state = { phase: "error", currentVersion, error: this.asError(error) };
       }
-    })().finally(() => { this.operation = undefined; });
-    return this.operation;
+      // Release the check before exposing its result: confirmation may install immediately.
+      this.operation = undefined;
+      if (this.disposed || this.blocked) return;
+      this.publish(state);
+      if (this.state === state && state.availableRelease) this.notify(state);
+    });
+    this.operation = operation;
+    this.publish({ phase: "checking", currentVersion });
+    return operation;
   }
 
-  install(): Promise<void> {
+  install(expectedRelease?: PluginRelease): Promise<void> {
     if (this.operation) return this.operation;
-    if (this.disposed || this.blocked || !this.release || this.runtime.installing) return Promise.resolve();
-    const release = this.release;
+    const release = this.state.availableRelease;
+    if (this.disposed || this.blocked || !release || this.state.phase !== "available" || this.runtime.installing
+      || (expectedRelease && expectedRelease !== release)) return Promise.resolve();
     this.runtime.installing = true;
     const originalVersion = this.state.currentVersion;
     const phase = (phase: UpdatePhase): void => this.publish({ phase, currentVersion: originalVersion, latestVersion: release.version });

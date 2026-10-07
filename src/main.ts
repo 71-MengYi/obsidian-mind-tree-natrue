@@ -20,7 +20,7 @@ import {
   SHARE_SQUARE_ICON_SVG,
 } from "./ui/icons";
 import { MindTreeView } from "./ui/mind-tree-view";
-import { CreateMindTreeModal, TextPromptModal } from "./ui/modals";
+import { CreateMindTreeModal, PluginUpdateModal, TextPromptModal } from "./ui/modals";
 import { LAYOUT_OPTIONS } from "./ui/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
 import { ReleaseClient, UpdateError } from "./services/updates/release-client";
@@ -43,6 +43,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   private cacheSaveTimer?: number;
   private settingsPersistence!: SettingsPersistence<MindTreeSettings>;
   private settingTab?: MindTreeSettingTab;
+  private updateModal?: PluginUpdateModal;
   private unloading = false;
   readonly updateRuntime = updateRuntime(this.app);
   updates!: UpdateCoordinator;
@@ -256,6 +257,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   onunload(): void {
     this.unloading = true;
     this.updateReady = false;
+    this.updateModal?.close();
     this.updates?.dispose();
     if (!this.coreInitialized) return;
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
@@ -282,6 +284,19 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   waitForUpdateUnload(): Promise<void> { return this.updateUnloadTask; }
+
+  /** Both check notifications and settings reopen this same release window. */
+  showAvailableUpdate(): void {
+    const release = this.updates.state.availableRelease;
+    if (this.unloading || this.updates.state.phase !== "available" || !release) return;
+    if (this.updateModal?.release === release) return;
+    this.updateModal?.close();
+    const modal = new PluginUpdateModal(this.app, this.manifest.name, release, this.updates, () => {
+      if (this.updateModal === modal) this.updateModal = undefined;
+    });
+    this.updateModal = modal;
+    modal.open();
+  }
 
   /** Initialize update recovery before any document sessions or async writers. */
   private async initializeUpdater(): Promise<boolean> {
@@ -324,7 +339,10 @@ export default class MindTreeNaturePlugin extends Plugin {
     });
     this.updates = new UpdateCoordinator(new ReleaseClient((url) => requestUrl({ url,
       headers: { Accept: "application/vnd.github+json" }, throw: false }), requireApiVersion, Platform.isMobile),
-      store, host, this.updateRuntime, this.manifest.version, (state) => new Notice(updateMessage(state), 10_000));
+      store, host, this.updateRuntime, this.manifest.version, (state) => {
+        if (state.phase === "available") this.showAvailableUpdate();
+        else new Notice(updateMessage(state), 10_000);
+      });
     if (storageError) { this.updates.block(storageError); return true; }
     if (!this.updateRuntime.installing) {
       try {

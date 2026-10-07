@@ -27,7 +27,7 @@ const deferred = <T = void>() => {
 
 async function channel(version = "1.0.2", files = payload(version)) {
   const root = `https://github.com/${UPDATE_REPOSITORY}/releases/download/${version}/`;
-  const metadata = { id: 42, tag_name: version, draft: false, prerelease: false,
+  const metadata = { id: 42, tag_name: version, draft: false, prerelease: false, body: undefined as unknown,
     assets: await Promise.all(UPDATE_FILES.map(async (name) => ({ name, state: "uploaded",
       browser_download_url: root + name, size: buffer(files[name]).byteLength, digest: `sha256:${await sha256(files[name])}` }))) };
   const calls: string[] = [];
@@ -104,6 +104,18 @@ test("official three assets are verified before installation and preserve exact 
   assert.equal(remote.calls.length, 5);
   remote.files["main.js"] += "tampered";
   await assert.rejects(remote.client.download(release), code("integrity"));
+});
+
+test("release notes preserve author Markdown and use the existing metadata request", async () => {
+  for (const body of ["\n## 更新\n\n- **Fix**\n\n", "", " \t\r\n", undefined, null, 42, false, {}, ["notes"]]) {
+    const remote = await channel();
+    remote.metadata.body = body;
+    const release = await remote.client.latest();
+    assert.equal(release.notes, typeof body === "string" && body.trim() ? body : "");
+    assert.equal(remote.calls.length, 2);
+    assert.equal(remote.calls.filter((url) => url.endsWith("/latest")).length, 1);
+    assert.ok(remote.calls[1]!.endsWith("/manifest.json"));
+  }
 });
 
 test("drafts, prereleases, incomplete, oversized, untrusted and duplicate assets fail closed", async () => {
@@ -207,7 +219,7 @@ test("corrupt journal, backup, unsafe paths and storage capacity failures stop s
   await assert.rejects(store.stage(payload("1.0.2"), "1.0.1")); disk.assertVersion("1.0.1"); disk.assertProtected();
 });
 
-async function coordinatorFixture(fail?: "save" | "load" | "restore") {
+async function coordinatorFixture(fail?: "save" | "load" | "restore", notify?: (state: UpdateState) => void) {
   const remote = await channel(); const disk = new MemoryUpdateDisk(); const phases: string[] = [];
   const notices: UpdateState[] = [];
   let failed = false;
@@ -221,7 +233,9 @@ async function coordinatorFixture(fail?: "save" | "load" | "restore") {
     };
   } };
   const runtime = updateRuntime({});
-  const coordinator = new UpdateCoordinator(remote.client, disk.store(), host, runtime, "1.0.1", (state) => notices.push(state));
+  const coordinator = new UpdateCoordinator(remote.client, disk.store(), host, runtime, "1.0.1", (state) => {
+    notices.push(state); notify?.(state);
+  });
   return { remote, disk, phases, notices, runtime, coordinator };
 }
 
@@ -248,7 +262,7 @@ test("save, load and restore failures retain or reload the old program, never di
   }
 });
 
-test("startup checks once per application, without downloads or automatic installation", async () => {
+test("startup checks once per application, without downloading the program or installing", async () => {
   const f = await coordinatorFixture();
   f.coordinator.startup(false); f.coordinator.startup(true);
   assert.equal(f.remote.calls.length, 0);
@@ -260,16 +274,81 @@ test("startup checks once per application, without downloads or automatic instal
   const later = new UpdateCoordinator(enabled.remote.client, enabled.disk.store(), {} as UpdateHost,
     enabled.runtime, "1.0.1", () => assert.fail());
   later.startup(true); assert.equal(enabled.remote.calls.length, 2);
+  const restarted = new UpdateCoordinator(enabled.remote.client, enabled.disk.store(), {} as UpdateHost,
+    updateRuntime({}), "1.0.1", (state) => enabled.notices.push(state));
+  restarted.startup(true); await restarted.check();
+  assert.equal(enabled.notices.length, 2); enabled.disk.assertVersion("1.0.1");
 });
 
-test("same and older releases never install, and failed automatic checks do not notify", async () => {
+test("automatic and manual checks share one notification and can remind again", async () => {
+  const f = await coordinatorFixture();
+  f.remote.metadata.body = "## Latest release";
+  f.coordinator.startup(true);
+  const first = f.coordinator.check();
+  assert.equal(first, f.coordinator.check());
+  await first;
+  assert.equal(f.notices.length, 1);
+  assert.equal(f.notices[0]!.availableRelease, f.coordinator.state.availableRelease);
+  assert.equal(f.notices[0]!.availableRelease!.notes, "## Latest release");
+  assert.equal(f.notices[0]!.availableRelease!.version, f.coordinator.state.latestVersion);
+  const previous = f.coordinator.state.availableRelease;
+  await f.coordinator.check();
+  assert.equal(f.notices.length, 2);
+  assert.notEqual(f.coordinator.state.availableRelease, previous);
+  f.disk.assertVersion("1.0.1"); assert.equal(f.disk.calls.length, 0);
+});
+
+test("the notification can install immediately after the check releases its task", async () => {
+  let install: Promise<void> | undefined;
+  const f = await coordinatorFixture(undefined, (state) => {
+    if (state.availableRelease) install = f.coordinator.install(state.availableRelease);
+  });
+  const check = f.coordinator.check();
+  await check;
+  assert.ok(install);
+  assert.notEqual(install, check);
+  await install;
+  assert.equal(f.coordinator.state.phase, "updated");
+  f.disk.assertVersion("1.0.2"); f.disk.assertProtected();
+});
+
+test("rechecking invalidates the previous release, even for another result with the same version", async () => {
+  const f = await coordinatorFixture();
+  await f.coordinator.check();
+  const previous = f.coordinator.state.availableRelease!;
+  const check = f.coordinator.check();
+  assert.equal(f.coordinator.state.availableRelease, undefined);
+  assert.equal(f.coordinator.state.phase, "checking");
+  await f.coordinator.install(previous); await check;
+  const fresh = f.coordinator.state.availableRelease!;
+  assert.notEqual(fresh, previous);
+  await f.coordinator.install(previous);
+  f.disk.assertVersion("1.0.1"); assert.equal(f.disk.calls.length, 0);
+  assert.equal(f.coordinator.state.phase, "available");
+  await f.coordinator.install(fresh);
+  f.disk.assertVersion("1.0.2");
+});
+
+test("a disposed updater ignores a late check result", async () => {
+  const remote = await channel(); const disk = new MemoryUpdateDisk(); const gate = deferred();
+  const client = new ReleaseClient(async (url) => { await gate.promise; return remote.request(url); }, () => true, false);
+  const updater = new UpdateCoordinator(client, disk.store(), {} as UpdateHost, updateRuntime({}), "1.0.1", () => assert.fail());
+  const check = updater.check();
+  updater.dispose(); gate.resolve(); await check;
+  assert.equal(updater.state.availableRelease, undefined);
+  await updater.install(); assert.equal(disk.calls.length, 0);
+});
+
+test("same and older releases never install, and failed checks do not notify", async () => {
   for (const installed of ["1.0.2", "2.0.0"]) {
     const remote = await channel(); const disk = new MemoryUpdateDisk(installed);
     const updater = new UpdateCoordinator(remote.client, disk.store(), {} as UpdateHost, updateRuntime({}), installed, () => assert.fail());
-    await updater.check(true); await updater.install(); assert.equal(updater.state.phase, "current"); assert.equal(disk.calls.length, 0);
+    await updater.check(); await updater.install(); assert.equal(updater.state.phase, "current"); assert.equal(disk.calls.length, 0);
+    assert.equal(updater.state.availableRelease, undefined);
   }
   const f = await coordinatorFixture(); f.remote.setStatus(429);
-  await f.coordinator.check(true); assert.equal(f.notices.length, 0); assert.equal(f.coordinator.state.phase, "error");
+  await f.coordinator.check(); assert.equal(f.notices.length, 0); assert.equal(f.coordinator.state.phase, "error");
+  assert.equal(f.coordinator.state.availableRelease, undefined);
 });
 
 test("activity barrier waits for nested continuations and releases instrumentation", async () => {

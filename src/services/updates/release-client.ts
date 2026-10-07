@@ -21,6 +21,7 @@ export interface ReleaseAsset {
 }
 export interface PluginRelease {
   readonly id: number; readonly version: string;
+  readonly notes: string;
   readonly assets: Readonly<Record<UpdateFile, ReleaseAsset>>;
   readonly manifest: Readonly<UpdateManifest>;
 }
@@ -113,7 +114,8 @@ export class ReleaseClient {
     }
     const manifest = readUpdateManifest(await this.downloadAsset(assets["manifest.json"]));
     this.validateManifest(manifest, version);
-    return { id: Number(raw.id), version, assets, manifest };
+    const notes = typeof raw.body === "string" && raw.body.trim() ? raw.body : "";
+    return { id: Number(raw.id), version, notes, assets, manifest };
   }
 
   private validateManifest(manifest: UpdateManifest, version: string): void {
