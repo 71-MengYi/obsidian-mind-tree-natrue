@@ -6,6 +6,7 @@ import { ReadOnlyTreePreview, type TreePreviewOptions } from "./read-only-tree-p
 import { DisposableUiObject } from "./ui-object";
 import { changedVersionSettings } from "./version-preview-model";
 import { DocumentSafetyPanel } from "./document-safety-panel";
+import { AdaptiveTooltipController } from "../adaptive-tooltip";
 
 function settingDescription(key: keyof MindTreeDocumentSettings, settings: MindTreeDocumentSettings): string {
   const catalogs = { layoutMode: LAYOUT_OPTIONS, theme: THEME_OPTIONS, nodeShape: NODE_SHAPE_OPTIONS,
@@ -63,6 +64,8 @@ export class VersionComparison extends DisposableUiObject {
       attr: { type: "button", "aria-label": t("conflict.keepExternal") } });
     this.listen(this.currentButton, "click", () => actions.choose("current"));
     this.listen(this.externalButton, "click", () => actions.choose("external"));
+    const tooltips = new AdaptiveTooltipController(this.element);
+    this.own(() => tooltips.destroy());
     // No default action and no forced focus: a background tab stays background.
   }
 

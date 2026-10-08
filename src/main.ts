@@ -30,6 +30,7 @@ import { PluginReloadBridge } from "./services/updates/plugin-reload-bridge";
 import { WorkspaceUpdateHost, type UpdateViewParticipant } from "./services/updates/workspace-update-host";
 import { UpdateActivity } from "./services/updates/update-activity";
 import { updateMessage } from "./services/updates/update-messages";
+import { AdaptiveTooltipController } from "./ui/adaptive-tooltip";
 
 export default class MindTreeNaturePlugin extends Plugin {
   settings: MindTreeSettings = structuredClone(DEFAULT_SETTINGS);
@@ -121,7 +122,9 @@ export default class MindTreeNaturePlugin extends Plugin {
     this.settingTab = new MindTreeSettingTab(this.app, this);
     this.addSettingTab(this.settingTab);
 
-    this.addRibbonIcon("git-fork", t("tree.create"), () => this.promptCreateMindTreeInFolder());
+    const ribbon = this.addRibbonIcon("git-fork", t("tree.create"), () => this.promptCreateMindTreeInFolder());
+    const ribbonTooltips = new AdaptiveTooltipController(ribbon, true);
+    this.register(() => ribbonTooltips.destroy());
     this.addCommand({
       id: "create-mind-tree",
       name: t("command.createTree"),

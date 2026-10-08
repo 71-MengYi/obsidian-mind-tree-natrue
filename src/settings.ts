@@ -4,6 +4,7 @@ import type MindTreeNaturePlugin from "./main";
 import type { ResourceIndexProgress } from "./services/resource-catalog";
 import { BasicSettingsPage, MindMapSettingsPage, TopicNoteSettingsPage } from "./ui/settings-pages";
 import type { SettingsPageObject, SettingsPagePort } from "./ui/settings-pages/ports";
+import { AdaptiveTooltipController } from "./ui/adaptive-tooltip";
 export { DEFAULT_SETTINGS } from "./settings-model";
 export type { MindTreeSettings } from "./settings-model";
 
@@ -24,12 +25,14 @@ export class MindTreeSettingTab extends PluginSettingTab {
   private externalRefreshPending = false;
   private deferredRefreshCleanup?: () => void;
   private page?: SettingsPageObject;
+  private tooltips?: AdaptiveTooltipController;
 
   constructor(app: App, private readonly plugin: MindTreeNaturePlugin) {
     super(app, plugin);
   }
 
   display(): void {
+    this.tooltips?.destroy();
     this.page?.destroy?.();
     const { containerEl } = this;
     containerEl.empty();
@@ -52,6 +55,7 @@ export class MindTreeSettingTab extends PluginSettingTab {
     if (this.activePage === "basic") this.page = new BasicSettingsPage(panel, port);
     else if (this.activePage === "mind-map") this.page = new MindMapSettingsPage(panel, port);
     else this.page = new TopicNoteSettingsPage(panel, port);
+    this.tooltips = new AdaptiveTooltipController(containerEl);
   }
 
   /** Do not replace an input (or its IME composition) while a user is typing. */
@@ -77,6 +81,8 @@ export class MindTreeSettingTab extends PluginSettingTab {
   }
 
   hide(): void {
+    this.tooltips?.destroy();
+    this.tooltips = undefined;
     this.page?.destroy?.();
     this.page = undefined;
     this.deferredRefreshCleanup?.();

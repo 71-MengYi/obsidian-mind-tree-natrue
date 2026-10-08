@@ -8,6 +8,7 @@ import {
 } from "../domain/markers";
 import { t, type TranslationKey } from "../i18n";
 import type { MindTreeNode, NodeMarker } from "../types";
+import { AdaptiveTooltipController } from "./adaptive-tooltip";
 
 interface MarkerChoice {
   marker: NodeMarker;
@@ -57,10 +58,12 @@ export function openMarkerPopover(options: MarkerPopoverOptions): MarkerPopoverH
   panel.setAttribute("role", "dialog");
   panel.setAttribute("aria-label", t("menu.markers"));
   let closed = false;
+  let tooltips: AdaptiveTooltipController | undefined;
 
   const close = (): void => {
     if (closed) return;
     closed = true;
+    tooltips?.destroy();
     options.ownerDocument.removeEventListener("pointerdown", onOutsidePointer, true);
     options.ownerDocument.removeEventListener("keydown", onKeyDown, true);
     panel.remove();
@@ -138,6 +141,7 @@ export function openMarkerPopover(options: MarkerPopoverOptions): MarkerPopoverH
   };
 
   render();
+  if (!closed) tooltips = new AdaptiveTooltipController(panel);
   panel.style.left = `${options.position.x}px`;
   panel.style.top = `${options.position.y}px`;
   const view = options.ownerDocument.defaultView;

@@ -25,6 +25,40 @@
   pointer-events: none !important;
 }
 
+/* Suppress only native copies explicitly adopted by our tooltip controller. */
+.mtn-native-tooltip-hidden { display: none !important; }
+.mtn-adaptive-tooltip {
+  position: fixed;
+  z-index: var(--layer-tooltip, 1000);
+  width: max-content;
+  max-width: 320px;
+  border-radius: var(--radius-s, 4px);
+  background: var(--background-modifier-message);
+  color: var(--text-on-accent);
+  box-shadow: var(--shadow-s);
+  font-family: var(--font-interface);
+  font-size: var(--font-ui-smaller);
+  font-weight: normal;
+  line-height: 1.4;
+  text-align: start;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  pointer-events: none;
+}
+.mtn-adaptive-tooltip-text { box-sizing: border-box; padding: 6px 10px; overflow: hidden; }
+.mtn-adaptive-tooltip::after {
+  content: "";
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: inherit;
+  transform: rotate(45deg);
+}
+.mtn-adaptive-tooltip[data-side="bottom"]::after { top: -4px; left: calc(var(--mtn-tooltip-arrow) - 4px); }
+.mtn-adaptive-tooltip[data-side="top"]::after { bottom: -4px; left: calc(var(--mtn-tooltip-arrow) - 4px); }
+.mtn-adaptive-tooltip[data-side="right"]::after { left: -4px; top: calc(var(--mtn-tooltip-arrow) - 4px); }
+.mtn-adaptive-tooltip[data-side="left"]::after { right: -4px; top: calc(var(--mtn-tooltip-arrow) - 4px); }
+
 .mtn-version-comparison {
   height: 100%; display: flex; flex-direction: column; min-width: 0;
   color: var(--text-normal); background: var(--background-primary);

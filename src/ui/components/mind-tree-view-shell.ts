@@ -8,6 +8,7 @@ import { TopToolbar } from "./top-toolbar";
 import { DisposerBag } from "./ui-object";
 import type { ViewMenuBarActions, ViewMenuBarLabels } from "./view-menu-bar";
 import { ViewMenuBar } from "./view-menu-bar";
+import { AdaptiveTooltipController } from "../adaptive-tooltip";
 
 export interface MindTreeViewShellLabels {
   readonly menu: ViewMenuBarLabels;
@@ -52,6 +53,8 @@ export class MindTreeViewShell {
     this.cleanup.add(() => this.status.destroy());
     this.cleanup.add(() => this.bottom.destroy());
     this.cleanup.add(() => this.canvas.destroy());
+    const tooltips = new AdaptiveTooltipController(this.element);
+    this.cleanup.add(() => tooltips.destroy());
   }
 
   destroy(): void {
