@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * 发布后自检：用与插件内置更新器（src/services/updates/release-client.ts）完全相同的规则
- * 校验线上的 Release，确认 Obsidian 里的「检查更新」和 BRAT 都能正常拉取这个版本。
+ * 校验线上 Release 的资产；客户端保存、替换和重新加载仍需单独验证。
  *
  * 用法（在仓库根目录）：
  *   node .github/scripts/verify-release.mjs 1.1.1
@@ -86,7 +86,7 @@ async function main() {
     assets[name] = { size: asset.size, digest: asset.digest.slice(7).toLowerCase(), url };
   }
 
-  /** 下载资产并复现插件的两道校验：字节大小 + SHA-256，以及 UTF-8 往返后的 SHA-256。 */
+  /** 下载资产并验证字节大小、SHA-256 和 UTF-8 编码。 */
   async function download(name) {
     const bytes = await retry(`下载 ${name}`, async () => {
       const response = await fetch(assets[name].url, { redirect: "follow" });
@@ -103,9 +103,6 @@ async function main() {
       text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
     } catch {
       fail(`${name} 不是合法的 UTF-8 文本`);
-    }
-    if (createHash("sha256").update(text, "utf8").digest("hex") !== assets[name].digest) {
-      fail(`${name} 经 UTF-8 往返后哈希不再匹配，插件会判定 integrity 失败`);
     }
     console.log(`  ok  ${name.padEnd(14)} ${String(bytes.byteLength).padStart(9)} bytes  sha256:${hex.slice(0, 12)}…`);
     return text;
@@ -133,7 +130,7 @@ async function main() {
   await download("styles.css");
 
   console.log(`\nrelease ${release.tag_name} 通过自检：${FILES.join(" / ")} 三个资产齐全、digest 一致，`);
-  console.log(`插件内置更新器与 BRAT 均可用：${release.html_url}`);
+  console.log(`发布资产检查通过：${release.html_url}；客户端安装与重载需另行验证。`);
 }
 
 try {

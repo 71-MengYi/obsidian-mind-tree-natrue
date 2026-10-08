@@ -131,22 +131,25 @@ function fixture(language = "en", notes = "## Changes\n\n- **Improved** navigati
   };
   const Plugin = load("/main.js").default as new (app: TestApp, manifest: { name: string }) => RunningPlugin;
   const plugin = new Plugin(app, { name: "Mind Tree Nature" });
-  let release: PluginRelease = { id: 42, version: "1.0.2", notes, assets: {} as PluginRelease["assets"],
+  let release: PluginRelease = { id: 42, version: "1.0.2", notes, manifestText: "{}", assets: {} as PluginRelease["assets"],
     manifest: { id: "mind-tree-nature", version: "1.0.2", minAppVersion: "1.8.7", isDesktopOnly: false } };
   let checks = 0, subscriptions = 0;
   const installs: PluginRelease[] = [];
   const notifications: UpdateState[] = [];
   const client = {
     async latest() { checks++; return { ...release }; },
-    async download(value: PluginRelease) { installs.push(value); throw new UpdateError("network"); }
+    async download(value: PluginRelease) {
+      assert.equal(app.modals.some((modal) => modal.visible), false, "confirmation must close before installation");
+      installs.push(value); throw new UpdateError("network");
+    }
   } as unknown as ReleaseClient;
   const updates = new UpdateCoordinator(client, {} as UpdateStore, {
-    assertSupported() { assert.equal(app.modals.some((modal) => modal.visible), false, "confirmation must close before installation"); },
+    canReload: () => true,
     async prepare() { return assert.fail("download stops this test before staging"); }
   }, plugin.updateRuntime, "1.0.1", (state) => {
     notifications.push(state);
     if (state.phase === "available") plugin.showAvailableUpdate();
-  });
+  }, () => undefined);
   const subscribe = updates.subscribe.bind(updates);
   updates.subscribe = (listener) => {
     subscriptions++;
@@ -296,5 +299,35 @@ test("settings View update reopens the cached release without checking or instal
     assert.equal(view.hidden, false); assert.equal(f.counts().checks, 2);
     section.destroy(); assert.equal(f.counts().subscriptions, 1);
     f.plugin.onunload(); assert.equal(f.counts().subscriptions, 0);
+  }
+});
+
+test("pending restart and actionable write errors are localized without offering another install", async () => {
+  for (const language of ["zh", "en"]) {
+    const f = fixture(language);
+    const Section = f.load("/plugin-update-section.js").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
+    let state: UpdateState = { phase: "restart-required", currentVersion: "1.0.1", installedVersion: "1.0.2" };
+    const port: SettingsPagePort = { settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
+      refreshOpenLayouts() {}, rebuildResourceIndex: async () => assert.fail(),
+      updates: { check: async () => assert.fail(), showAvailable: () => assert.fail(),
+        subscribe(listener) { listener(state); return () => {}; } } };
+    const parent = f.app.document.createElement("div");
+    const section = new Section(parent, port);
+    const status = parent.all().find((element) => element.attributes.role === "status")!;
+    assert.match(status.text, /1\.0\.2/); assert.doesNotMatch(status.text, /1\.0\.1/);
+    assert.match(status.text, language === "zh" ? /重启 Obsidian/ : /Restart Obsidian/);
+    const buttons = parent.all().filter((element) => element.tag === "button");
+    assert.equal(buttons[0]!.disabled, true); assert.equal(buttons[1]!.hidden, true);
+    section.destroy();
+    for (const code of ["EACCES", "ENOSPC"]) {
+      state = { phase: "error", currentVersion: "1.0.1", backupPath: "backup-path",
+        error: new UpdateError("storage", "plugin/main.js", { stage: "installing", cause: Object.assign(new Error(code), { code }) }) };
+      parent.empty(); const errorSection = new Section(parent, port);
+      const message = parent.all().find((element) => element.attributes.role === "status")!.text;
+      assert.match(message, /plugin\/main\.js/); assert.doesNotMatch(message, /backup-path/);
+      assert.match(message, code === "EACCES" ? (language === "zh" ? /权限/ : /permissions/) : (language === "zh" ? /空间不足/ : /Not enough space/));
+      errorSection.destroy();
+    }
+    f.plugin.onunload();
   }
 });

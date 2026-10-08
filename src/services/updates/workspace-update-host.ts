@@ -33,7 +33,7 @@ export class WorkspaceUpdateHost implements UpdateHost {
       hasBlockingDialog(): boolean;
     }) {}
 
-  assertSupported(): void { this.bridge.assertSupported(); }
+  canReload(): boolean { return this.bridge.canReload(); }
 
   async prepare(): Promise<PreparedPluginUpdate> {
     if (this.ports.hasBlockingDialog()) throw new UpdateError("busy");
@@ -93,10 +93,6 @@ export class WorkspaceUpdateHost implements UpdateHost {
             await this.ports.flushSettings();
             for (const view of views) view.assertUpdateSafe();
           }
-          for (const entry of entries) {
-            if (entry.file.path !== entry.path || this.app.vault.getFileByPath(entry.path) !== entry.file
-              || await this.app.vault.read(entry.file) !== entry.source) throw new UpdateError("changed", entry.path);
-          }
         },
         unload: async () => {
           await emptyLeaves(); // keep leaf positions, splits and popout windows
@@ -104,7 +100,7 @@ export class WorkspaceUpdateHost implements UpdateHost {
           await this.bridge.unload();
         },
         load: async (version) => {
-          // Also used after a failed new instance/restore, before rolling back.
+          // Leave the captured leaf positions available for the new instance.
           await emptyLeaves();
           await this.bridge.load(version);
         },

@@ -1,11 +1,12 @@
-import { compareVersions, UpdateError, type PluginRelease, type ReleaseClient } from "./release-client";
+import { compareVersions, updateFailure, UpdateError, type PluginRelease, type ReleaseClient, type UpdateStage } from "./release-client";
 import type { UpdateStore } from "./update-store";
 
 export type UpdatePhase = "idle" | "checking" | "current" | "available" | "downloading" | "preparing"
-  | "installing" | "reloading" | "updated" | "error";
+  | "installing" | "reloading" | "updated" | "restart-required" | "error";
 export interface UpdateState {
   readonly phase: UpdatePhase; readonly currentVersion: string; readonly latestVersion?: string;
   readonly availableRelease?: PluginRelease;
+  readonly installedVersion?: string;
   readonly error?: UpdateError; readonly backupPath?: string;
 }
 export interface PreparedPluginUpdate {
@@ -16,7 +17,7 @@ export interface PreparedPluginUpdate {
   resume(): void;
 }
 export interface UpdateHost {
-  assertSupported(): void;
+  canReload(): boolean;
   prepare(): Promise<PreparedPluginUpdate>;
 }
 
@@ -25,6 +26,8 @@ export interface UpdateRuntime {
   startupChecked: boolean; installing: boolean; paused: boolean; frozen: boolean;
   /** Saved baselines bridge the brief interval without a live file view. */
   baselines?: Map<string, string>;
+  pendingRestartVersion?: string;
+  restartListeners?: Set<() => void>;
 }
 const RUNTIME = Symbol.for("mind-tree-nature:update-runtime:v1");
 export function updateRuntime(app: object): UpdateRuntime {
@@ -46,10 +49,36 @@ export class UpdateCoordinator {
 
   constructor(private readonly client: ReleaseClient, private readonly store: UpdateStore,
     private readonly host: UpdateHost, private readonly runtime: UpdateRuntime, version: string,
-    private readonly notify: (state: UpdateState) => void) {
+    private readonly notify: (state: UpdateState) => void,
+    private readonly diagnose: (error: UpdateError) => void = (error) => console.warn("Mind Tree Nature update:", error)) {
     this.state = { phase: "idle", currentVersion: version };
+    (this.runtime.restartListeners ??= new Set()).add(this.syncRestartState);
+    this.syncRestartState();
   }
 
+  private syncRestartState = (): void => {
+    const installedVersion = this.runtime.pendingRestartVersion;
+    if (installedVersion) {
+      if (this.state.phase === "restart-required" && this.state.installedVersion === installedVersion) return;
+      this.publish({ phase: "restart-required", currentVersion: this.state.currentVersion,
+        installedVersion, latestVersion: installedVersion });
+    } else if (this.state.phase === "restart-required") {
+      this.publish({ phase: "idle", currentVersion: this.state.currentVersion });
+    }
+  };
+  /** A manual reload of the installed version also completes a pending restart. */
+  markReady(): void {
+    if (!this.runtime.installing && this.runtime.pendingRestartVersion === this.state.currentVersion) {
+      this.runtime.pendingRestartVersion = undefined;
+      for (const listener of this.runtime.restartListeners ?? []) listener();
+    }
+  }
+  requireRestart(version: string): void {
+    this.runtime.pendingRestartVersion = version;
+    this.syncRestartState();
+    for (const listener of this.runtime.restartListeners ?? []) listener();
+    this.notify(this.state);
+  }
   subscribe(listener: (state: UpdateState) => void): () => void {
     this.listeners.add(listener); listener(this.state);
     return () => this.listeners.delete(listener);
@@ -59,6 +88,7 @@ export class UpdateCoordinator {
     for (const listener of this.listeners) listener(state);
   }
   block(error: UpdateError): void {
+    this.diagnose(error);
     this.blocked = error;
     this.publish({ ...this.state, phase: "error", error, backupPath: this.store.backupPath });
   }
@@ -70,6 +100,7 @@ export class UpdateCoordinator {
   check(): Promise<void> {
     if (this.disposed || this.blocked || this.runtime.installing) return Promise.resolve();
     if (this.operation) return this.operation;
+    if (this.runtime.pendingRestartVersion) { this.syncRestartState(); return Promise.resolve(); }
     const currentVersion = this.state.currentVersion;
     const operation = Promise.resolve().then(async () => {
       let state: UpdateState;
@@ -79,7 +110,9 @@ export class UpdateCoordinator {
         state = { phase: newer ? "available" : "current", currentVersion,
           latestVersion: release.version, availableRelease: newer ? release : undefined };
       } catch (error) {
-        state = { phase: "error", currentVersion, error: this.asError(error) };
+        const failure = updateFailure(error, "checking");
+        this.diagnose(failure);
+        state = { phase: "error", currentVersion, error: failure };
       }
       // Release the check before exposing its result: confirmation may install immediately.
       this.operation = undefined;
@@ -96,6 +129,7 @@ export class UpdateCoordinator {
     if (this.operation) return this.operation;
     const release = this.state.availableRelease;
     if (this.disposed || this.blocked || !release || this.state.phase !== "available" || this.runtime.installing
+      || this.runtime.pendingRestartVersion
       || (expectedRelease && expectedRelease !== release)) return Promise.resolve();
     this.runtime.installing = true;
     const originalVersion = this.state.currentVersion;
@@ -103,57 +137,72 @@ export class UpdateCoordinator {
     phase("downloading");
     this.operation = (async () => {
       let prepared: PreparedPluginUpdate | undefined;
-      let staged = false, unloadStarted = false, writeStarted = false, committed = false;
+      let staged = false, writeStarted = false, committed = false;
+      let runningVersion = originalVersion;
+      let stage: UpdateStage = "downloading";
       try {
-        this.host.assertSupported();
         const payload = await this.client.download(release);
         if (this.disposed) throw new UpdateError("cancelled");
-        await this.store.stage(payload, originalVersion);
-        staged = true;
-        if (this.disposed) throw new UpdateError("cancelled");
+        stage = "preparing";
         phase("preparing");
         prepared = await this.host.prepare();
         if (this.disposed) throw new UpdateError("cancelled");
+        stage = "backup";
+        await this.store.stage(payload, originalVersion, release.version);
+        staged = true;
+        if (this.disposed) throw new UpdateError("cancelled");
+        stage = "preparing";
         await prepared.assertSafe();
-        await this.store.verify("before");
-        unloadStarted = true;
-        await prepared.unload();
+        stage = "installing";
         phase("installing");
         writeStarted = true;
-        await this.store.install(() => prepared!.assertSafe());
-        phase("reloading");
-        await prepared.assertSafe();
-        await prepared.load(release.version);
-        await prepared.restore();
+        await this.store.install();
         await this.store.commit();
         committed = true;
-        await this.store.cleanup();
-        this.publish({ phase: "updated", currentVersion: release.version, latestVersion: release.version });
+        stage = "reloading";
+        phase("reloading");
+        if (this.disposed || !this.host.canReload()) throw new UpdateError("reload");
+        await prepared.assertSafe();
+        await prepared.unload();
+        await prepared.load(release.version);
+        runningVersion = release.version;
+        await prepared.restore();
+        this.runtime.pendingRestartVersion = undefined;
+        this.publish({ phase: "updated", currentVersion: runningVersion, installedVersion: release.version, latestVersion: release.version });
         this.notify(this.state);
       } catch (error) {
-        let failure = this.asError(error);
-        try {
-          if (!committed) {
+        let failure = updateFailure(error, stage);
+        this.diagnose(failure);
+        if (committed) {
+          this.runtime.pendingRestartVersion = release.version;
+          this.publish({ phase: "restart-required", currentVersion: runningVersion,
+            installedVersion: release.version, latestVersion: release.version });
+        } else {
+          try {
             if (writeStarted) await this.store.rollback();
-            if (unloadStarted) { await prepared!.load(originalVersion); await prepared!.restore(); }
-            if (staged) await this.store.cleanup();
+          } catch (rollbackError) {
+            failure = new UpdateError("recovery", this.store.backupPath, { stage: "rollback", cause: rollbackError });
+            this.diagnose(failure);
           }
-        } catch { failure = new UpdateError("recovery", this.store.backupPath); }
-        this.publish({ phase: "error", currentVersion: committed ? release.version : originalVersion,
-          error: failure, backupPath: this.store.backupPath });
+          this.publish({ phase: "error", currentVersion: originalVersion, error: failure, backupPath: this.store.backupPath });
+        }
         this.notify(this.state);
       } finally {
-        prepared?.resume();
+        if (staged) await this.store.cleanupAfterUpdate();
+        try { prepared?.resume(); } catch (error) { this.diagnose(updateFailure(error, "reloading")); }
         this.runtime.installing = false;
         this.runtime.paused = false;
         this.runtime.frozen = false;
         this.runtime.baselines = undefined;
+        for (const listener of this.runtime.restartListeners ?? []) listener();
       }
     })().finally(() => { this.operation = undefined; });
     return this.operation;
   }
 
-  private asError(error: unknown): UpdateError { return error instanceof UpdateError ? error : new UpdateError("storage"); }
   /** Own hot reload must not cancel its independent installation continuation. */
-  dispose(): void { this.disposed = true; this.listeners.clear(); }
+  dispose(): void {
+    this.disposed = true; this.listeners.clear();
+    this.runtime.restartListeners?.delete(this.syncRestartState);
+  }
 }

@@ -252,6 +252,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       void this.activateMindTreeLeaf(this.app.workspace.getMostRecentLeaf());
     });
     this.updateReady = true;
+    this.updates.markReady();
   }
 
   onunload(): void {
@@ -306,13 +307,13 @@ export default class MindTreeNaturePlugin extends Plugin {
     let clientId: unknown;
     let storageError: UpdateError | undefined;
     try { clientId = this.app.loadLocalStorage(clientKey); }
-    catch { storageError = new UpdateError("storage", directory); }
+    catch (error) { storageError = new UpdateError("storage", directory, { stage: "backup", cause: error }); }
     if (typeof clientId !== "string" || !/^[a-zA-Z0-9-]{1,80}$/.test(clientId)) {
       clientId = crypto.randomUUID();
       try {
         this.app.saveLocalStorage(clientKey, clientId);
         if (this.app.loadLocalStorage(clientKey) !== clientId) throw new Error();
-      } catch { storageError = new UpdateError("storage", directory); }
+      } catch (error) { storageError = new UpdateError("storage", directory, { stage: "backup", cause: error }); }
     }
     const store = new UpdateStore(this.app.vault.adapter, {
       load: () => this.app.loadLocalStorage(pointerKey),
@@ -326,7 +327,10 @@ export default class MindTreeNaturePlugin extends Plugin {
         .map((leaf) => leaf.view as unknown as UpdateViewParticipant)
         .filter((view) => typeof view.captureUpdatePresentation === "function"),
       settle: () => this.updateActivity.settle(),
-      flushSettings: async () => { try { await this.settingsPersistence.flush(); } catch { throw new UpdateError("save"); } },
+      flushSettings: async () => {
+        try { await this.settingsPersistence.flush(); }
+        catch (error) { throw new UpdateError("save", "", { stage: "preparing", cause: error }); }
+      },
       isUnloading: () => this.unloading,
       hasBlockingDialog: () => {
         const documents = new Set<Document>([this.app.workspace.containerEl.ownerDocument]);
@@ -341,7 +345,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       headers: { Accept: "application/vnd.github+json" }, throw: false }), requireApiVersion, Platform.isMobile),
       store, host, this.updateRuntime, this.manifest.version, (state) => {
         if (state.phase === "available") this.showAvailableUpdate();
-        else new Notice(updateMessage(state), 10_000);
+        else new Notice(updateMessage(state), state.phase === "restart-required" ? 0 : 10_000);
       });
     if (storageError) { this.updates.block(storageError); return true; }
     if (!this.updateRuntime.installing) {
@@ -349,18 +353,26 @@ export default class MindTreeNaturePlugin extends Plugin {
         const recovered = await store.recover();
         if (recovered?.rolledBack) {
           new Notice(t("update.recovered", { version: recovered.version }));
+          if (!bridge.canReload()) {
+            this.updates.requireRestart(recovered.version);
+            return false;
+          }
           // Reload even if manifest versions match: a crash might have replaced
           // main.js but not manifest.json, so the running code can still be new.
           this.updateRuntime.installing = true;
           this.updateRuntime.startupChecked = true;
           setTimeout(() => {
-            void bridge.load(recovered.version).catch(() => new Notice(t("update.error.recovery", { path: store.directory }), 0))
+            void bridge.load(recovered.version).catch((error) => {
+              console.warn("Mind Tree Nature update: reload after recovery", error);
+              this.updates.requireRestart(recovered.version);
+            })
               .finally(() => { this.updateRuntime.installing = false; });
           }, 0);
           return false;
         }
       } catch (error) {
-        this.updates.block(error instanceof UpdateError ? error : new UpdateError("recovery", store.directory));
+        this.updates.block(error instanceof UpdateError ? error
+          : new UpdateError("recovery", store.directory, { stage: "recovery", cause: error }));
         new Notice(updateMessage(this.updates.state), 0);
       }
     }

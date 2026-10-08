@@ -29,7 +29,7 @@ export class PluginUpdateSection {
       const message = updateMessage(state);
       status.hidden = !message;
       status.setText(message);
-      check.disabled = updateBusy(state);
+      check.disabled = updateBusy(state) || state.phase === "restart-required";
       view.hidden = state.phase !== "available" || !state.availableRelease;
       view.disabled = updateBusy(state);
     });

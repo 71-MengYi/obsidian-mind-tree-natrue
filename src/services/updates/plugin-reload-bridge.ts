@@ -15,7 +15,7 @@ interface PluginManager {
 
 /**
  * Obsidian has no public hot-reload API. Keep its optional private surface in
- * ONE adapter, feature-detect before staging, and never alter enabled-plugins
+ * ONE adapter, feature-detect after installation, and never alter enabled-plugins
  * configuration (the AndSave variants would sync an accidental disable).
  */
 export class PluginReloadBridge {
@@ -26,7 +26,9 @@ export class PluginReloadBridge {
       || typeof manager.loadManifests !== "function") throw new UpdateError("reload");
     return manager as PluginManager;
   }
-  assertSupported(): void { this.manager(); }
+  canReload(): boolean {
+    try { this.manager(); return true; } catch { return false; }
+  }
   async unload(): Promise<void> {
     const manager = this.manager();
     const previous = manager.plugins[UPDATE_PLUGIN_ID];

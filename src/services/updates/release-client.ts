@@ -9,9 +9,25 @@ export const UPDATE_LIMITS: Record<UpdateFile, number> = {
 
 export type UpdateErrorCode = "network" | "timeout" | "release" | "version" | "identity" | "compatibility"
   | "asset" | "integrity" | "crypto" | "reload" | "busy" | "save" | "changed" | "storage" | "recovery" | "cancelled";
+export type UpdateStage = "checking" | "downloading" | "preparing" | "backup" | "installing" | "rollback" | "reloading" | "cleanup" | "recovery";
 export class UpdateError extends Error {
-  constructor(readonly code: UpdateErrorCode, readonly detail = "") { super(`${code}: ${detail}`); }
+  readonly stage?: UpdateStage;
+  readonly target?: string;
+  constructor(readonly code: UpdateErrorCode, readonly detail = "", options?: { stage?: UpdateStage; cause?: unknown; target?: string }) {
+    super(code + ": " + detail, options);
+    this.stage = options?.stage;
+    this.target = options?.target;
+  }
 }
+export function updateFailure(error: unknown, stage: UpdateStage, detail = "", code: UpdateErrorCode = "storage"): UpdateError {
+  return new UpdateError(error instanceof UpdateError ? error.code : code,
+    error instanceof UpdateError && error.detail ? error.detail : detail,
+    { stage: error instanceof UpdateError && error.stage ? error.stage : stage, cause: error,
+      target: error instanceof UpdateError && error.target ? error.target : detail || undefined });
+}
+export type UpdateDelay = (milliseconds: number) => Promise<void>;
+export const updateDelay: UpdateDelay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
+export const UPDATE_RETRY_DELAYS = [1_000, 3_000] as const;
 
 export interface UpdateManifest {
   id: string; version: string; minAppVersion: string; isDesktopOnly: boolean;
@@ -24,6 +40,7 @@ export interface PluginRelease {
   readonly notes: string;
   readonly assets: Readonly<Record<UpdateFile, ReleaseAsset>>;
   readonly manifest: Readonly<UpdateManifest>;
+  readonly manifestText: string;
 }
 export type UpdatePayload = Record<UpdateFile, string>;
 export interface UpdateResponse { status: number; arrayBuffer: ArrayBuffer }
@@ -49,7 +66,8 @@ function record(value: unknown): Record<string, unknown> {
 }
 export function readUpdateManifest(source: string): UpdateManifest {
   let raw: Record<string, unknown>;
-  try { raw = record(JSON.parse(source)); } catch { throw new UpdateError("asset", "manifest.json"); }
+  try { raw = record(JSON.parse(source)); }
+  catch (error) { throw new UpdateError("asset", "manifest.json", { cause: error }); }
   if (raw.id !== UPDATE_PLUGIN_ID) throw new UpdateError("identity");
   versionParts(raw.version); versionParts(raw.minAppVersion);
   if (typeof raw.isDesktopOnly !== "boolean" || typeof raw.name !== "string" || !raw.name.trim()
@@ -77,22 +95,36 @@ export async function updateTimeout<T>(task: Promise<T>, milliseconds: number): 
 
 export class ReleaseClient {
   constructor(private readonly request: UpdateRequest, private readonly compatible: (version: string) => boolean,
-    private readonly mobile: boolean, private readonly timeoutMs = 15_000) {}
+    private readonly mobile: boolean, private readonly timeoutMs = 15_000,
+    private readonly assetTimeoutMs = 60_000, private readonly delay: UpdateDelay = updateDelay) {}
 
-  private async get(url: string, limit: number): Promise<ArrayBuffer> {
-    let response: UpdateResponse;
-    try { response = await updateTimeout(this.request(url), this.timeoutMs); }
-    catch (error) { if (error instanceof UpdateError) throw error; throw new UpdateError("network"); }
-    if (response.status !== 200) throw new UpdateError("network", `HTTP ${response.status}`);
-    if (response.arrayBuffer.byteLength > limit) throw new UpdateError("asset");
-    return response.arrayBuffer;
+  private async get(url: string, limit: number, file?: UpdateFile): Promise<ArrayBuffer> {
+    for (let attempt = 0; ; attempt++) {
+      let retryable = false;
+      try {
+        let response: UpdateResponse;
+        try { response = await updateTimeout(this.request(url), file ? this.assetTimeoutMs : this.timeoutMs); }
+        catch (error) { retryable = true; throw error instanceof UpdateError ? error : new UpdateError("network", "", { cause: error }); }
+        if (response.status !== 200) {
+          retryable = response.status === 408 || (response.status >= 500 && response.status <= 599);
+          throw new UpdateError("network", "HTTP " + response.status);
+        }
+        if (response.arrayBuffer.byteLength > limit) throw new UpdateError("asset", file);
+        return response.arrayBuffer;
+      } catch (error) {
+        if (!retryable || attempt >= UPDATE_RETRY_DELAYS.length) {
+          throw updateFailure(error, file ? "downloading" : "checking", file, "network");
+        }
+        await this.delay(UPDATE_RETRY_DELAYS[attempt]!);
+      }
+    }
   }
 
   async latest(): Promise<PluginRelease> {
     const bytes = await this.get(`https://api.github.com/repos/${UPDATE_REPOSITORY}/releases/latest`, 1024 * 1024);
     let raw: Record<string, unknown>;
     try { raw = record(JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes))); }
-    catch { throw new UpdateError("release"); }
+    catch (error) { throw new UpdateError("release", "", { cause: error }); }
     if (!Number.isSafeInteger(raw.id) || Number(raw.id) <= 0 || raw.draft !== false || raw.prerelease !== false) {
       throw new UpdateError("release");
     }
@@ -112,10 +144,11 @@ export class ReleaseClient {
       }
       assets[name] = { name, url, size: Number(asset.size), hash: asset.digest.slice(7).toLowerCase() };
     }
-    const manifest = readUpdateManifest(await this.downloadAsset(assets["manifest.json"]));
+    const manifestText = await this.downloadAsset(assets["manifest.json"]);
+    const manifest = readUpdateManifest(manifestText);
     this.validateManifest(manifest, version);
     const notes = typeof raw.body === "string" && raw.body.trim() ? raw.body : "";
-    return { id: Number(raw.id), version, notes, assets, manifest };
+    return { id: Number(raw.id), version, notes, assets, manifest, manifestText };
   }
 
   private validateManifest(manifest: UpdateManifest, version: string): void {
@@ -126,21 +159,19 @@ export class ReleaseClient {
   }
 
   private async downloadAsset(asset: ReleaseAsset): Promise<string> {
-    const bytes = await this.get(asset.url, UPDATE_LIMITS[asset.name]);
+    const bytes = await this.get(asset.url, UPDATE_LIMITS[asset.name], asset.name);
     if (bytes.byteLength !== asset.size || await sha256(bytes) !== asset.hash) throw new UpdateError("integrity", asset.name);
     // Byte-for-byte UTF-8 round trips are essential for digest verification on disk.
     let text: string;
     try { text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes); }
-    catch { throw new UpdateError("asset", asset.name); }
-    if (await sha256(text) !== asset.hash) throw new UpdateError("integrity", asset.name);
+    catch (error) { throw new UpdateError("asset", asset.name, { cause: error }); }
     return text;
   }
 
   async download(release: PluginRelease): Promise<UpdatePayload> {
-    const result = {} as UpdatePayload;
+    const result = { "manifest.json": release.manifestText } as UpdatePayload;
     // Sequential transfers keep mobile peak memory bounded. Nothing is installed here.
-    for (const name of UPDATE_FILES) result[name] = await this.downloadAsset(release.assets[name]);
-    this.validateManifest(readUpdateManifest(result["manifest.json"]), release.version);
+    for (const name of UPDATE_FILES) if (name !== "manifest.json") result[name] = await this.downloadAsset(release.assets[name]);
     return result;
   }
 }
