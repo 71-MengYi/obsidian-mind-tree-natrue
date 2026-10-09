@@ -62,6 +62,7 @@ import {
   assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot
 } from "../services/document-conflict";
 import { VersionComparison } from "./components/version-comparison";
+import { ThemePreviewPanel } from "./components/theme-preview";
 import type { PendingTitleDraft } from "../services/pending-conflict-store";
 import {
   DocumentSession,
@@ -271,6 +272,8 @@ export class MindTreeView extends TextFileView {
   private fileDropTargetEl?: HTMLElement;
   private fileDropPlacement?: DropPlacement;
   private markerPopover?: MarkerPopoverHandle;
+  /** Lazily created hover preview for the theme list in the tree settings menu. */
+  private themePreview?: ThemePreviewPanel;
   private cutInProgress = false;
   private suppressContextMenu = false;
   private dropTargetEl?: HTMLElement;
@@ -366,6 +369,8 @@ export class MindTreeView extends TextFileView {
     this.keyboardAvoidanceController?.destroy();
     this.keyboardAvoidanceController = undefined;
     this.markerPopover?.close();
+    this.themePreview?.destroy();
+    this.themePreview = undefined;
     this.versionComparison?.destroy();
     this.versionComparison = undefined;
     const ownerWindow = this.ownerWindow();
@@ -989,6 +994,8 @@ export class MindTreeView extends TextFileView {
     this.keyboardAvoidanceController?.reset();
     this.sharedSession?.releaseEditor(this.sharedParticipantId);
     this.markerPopover?.close();
+    this.themePreview?.destroy();
+    this.themePreview = undefined;
     this.versionComparison?.destroy();
     this.versionComparison = undefined;
     if (this.rootEl) { this.rootEl.hidden = false; this.rootEl.inert = false; }
@@ -1598,8 +1605,26 @@ export class MindTreeView extends TextFileView {
       setConnectionStyle: (value) => this.setConnectionStyle(value),
       setNodeShape: (value) => this.setNodeShape(value),
       setCollectionMode: (value) => this.updateDocumentSettings((draft) => { draft.collectionMode = value; }, true, "collectionMode"),
-      toggleRecursiveScan: () => this.updateDocumentSettings((draft) => { draft.recursiveScan = !draft.recursiveScan; }, true, "recursiveScan")
+      toggleRecursiveScan: () => this.updateDocumentSettings((draft) => { draft.recursiveScan = !draft.recursiveScan; }, true, "recursiveScan"),
+      previewTheme: (theme, row) => this.showThemePreview(theme, row),
+      endThemePreview: () => this.themePreview?.hide()
     }).show(event);
+  }
+
+  /**
+   * Hover preview inside the theme list. The panel owns no document or session
+   * state, so it can never mutate the tree, history or viewport.
+   */
+  private showThemePreview(theme: MindTreeTheme, row: HTMLElement): void {
+    if (!this.themePreview) {
+      this.themePreview = new ThemePreviewPanel({
+        ownerDocument: this.rootEl.ownerDocument,
+        nodeWrapWidth: this.plugin.settings.nodeWrapWidth,
+        nodeAlignment: this.plugin.settings.nodeAlignment
+      });
+    }
+    const rect = row.getBoundingClientRect();
+    this.themePreview.show(theme, { left: rect.left, top: rect.top, right: rect.right, bottom: rect.bottom });
   }
 
   /** The help menu mirrors every keyboard branch handled by onKeyDown/onPaste. */

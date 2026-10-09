@@ -98,6 +98,7 @@ On macOS, use `Cmd` instead of `Ctrl`. The round question-mark button at the vie
 - `Ctrl/Cmd + E`: create a Markdown note for an unlinked node and link it automatically. New notes can open in a right split, a new tab, the current tab, or a new window — your choice in settings.
 - Node context menu → **Link existing file**: search every file in the vault except the current mind tree itself.
 - **File collection**: the *File collection* option in the view's top-left menu decides what happens to unlinked files sitting next to a mind tree — *off / ask every time / add to end of first level / add to Collection*. The scan button in the bottom-left status bar re-scans the current folder for new files at any time.
+- **Theme preview**: open *Theme* in the view's top-left menu and hover an option — a small preview panel appears next to it and renders that theme's colors and connections on a sample tree in real time. Moving to another option switches instantly; moving away hides it.
 - You can also **drag files** in from the vault or the system, including images from the clipboard.
 
 Once linked, node titles and file names stay in sync both ways. If you don't want that, turn off **name sync** in the first item of the context menu. Only after fully removing the link (not just name sync) do the create/link entries reappear.
