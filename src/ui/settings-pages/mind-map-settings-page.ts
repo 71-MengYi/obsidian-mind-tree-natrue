@@ -14,7 +14,7 @@ import {
 } from "../presentation";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
 
-/** Global appearance/export preferences and defaults copied into new trees. */
+/** Global appearance/export preferences and runtime defaults for trees without their own value. */
 export class MindMapSettingsPage implements SettingsPageObject {
   readonly element: HTMLElement;
 

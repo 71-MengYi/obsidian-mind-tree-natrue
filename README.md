@@ -109,7 +109,7 @@ macOS 上把 `Ctrl` 换成 `Cmd`。视图左上角的圆形问号按钮内有同
 
 ## 文档格式与隐私
 
-- 思维树使用顶层 YAML 属性 `documentId`、`schemaVersion`、`layoutMode`、`recursiveScan`、`collectionMode`、`theme` 和 `nodeShape`，其后是一段 Markdown 大纲。大纲之后存放无损 gzip 压缩的 JSON，并附有一条明确要求 AI 工具忽略它的说明；设置项不会在该载荷中重复保存。
+- 思维树使用顶层 YAML 属性 `documentId`、`schemaVersion`、`layoutMode`、`recursiveScan`、`collectionMode`、`theme` 和 `nodeShape`，其后是一段 Markdown 大纲。大纲之后存放无损 gzip 压缩的 JSON，并附有一条明确要求 AI 工具忽略它的说明；设置项不会在该载荷中重复保存。新建思维树不写入任何设置属性，缺失的设置在运行时使用「设置 → 思维导图」中的全局默认值，只有在该树左上角设置菜单里主动选择某项后才写入该文件并固定下来。
 - 插件不发送遥测数据，也不上传库内容。
 - 网页链接只做存储，绝不在后台抓取。
 - 所有界面文案由 i18n 提供简体中文与英语两套资源，并跟随 Obsidian 界面语言。

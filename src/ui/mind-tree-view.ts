@@ -1562,13 +1562,13 @@ export class MindTreeView extends TextFileView {
     this.updateDocumentSettings((settings) => { settings.theme = theme; }, false, "theme");
   }
 
-  /** Connection geometry is stored per tree; the plugin setting only initializes it. */
+  /** Connection geometry is stored per tree; the plugin setting only supplies the unset default. */
   private setConnectionStyle(connectionStyle: MindTreeConnectionStyle): void {
     if (!this.document) return;
     this.updateDocumentSettings((settings) => { settings.connectionStyle = connectionStyle; }, false, "connectionStyle");
   }
 
-  /** Node shape is tree-specific; the plugin setting only initializes new trees. */
+  /** Node shape is tree-specific; the plugin setting only supplies the unset default. */
   private setNodeShape(nodeShape: MindTreeNodeShape): void {
     if (!this.document) return;
     this.updateDocumentSettings((settings) => { settings.nodeShape = nodeShape; }, false, "nodeShape");

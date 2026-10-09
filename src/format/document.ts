@@ -50,7 +50,7 @@ export class MindTreeFormatError extends Error {
 }
 
 export interface ParseMindTreeOptions {
-  /** Global creation defaults also fill properties absent from older files. */
+  /** Global defaults resolve every property the file does not carry; never written back. */
   defaultLayoutMode?: MindTreeLayoutMode;
   defaultTheme?: MindTreeTheme;
   defaultNodeShape?: MindTreeNodeShape;
@@ -194,22 +194,13 @@ function synchronizeGeneratedHeading(prefix: string, title: string): string {
   return /^# [^\r\n]+$/.test(trimmed) ? `# ${escapeHeading(title)}` : prefix;
 }
 
-export function createMindTreeFile(
-  title: string,
-  theme: MindTreeTheme = "vibrant",
-  layoutMode: MindTreeLayoutMode = "balanced",
-  nodeShape: MindTreeNodeShape = "rounded",
-  collectionMode: MindTreeCollectionMode = "ask",
-  connectionStyle: MindTreeConnectionStyle = "theme"
-): string {
-  return serializeMindTreeFile(createEmptyDocument(
-    title,
-    theme,
-    layoutMode,
-    nodeShape,
-    collectionMode,
-    connectionStyle
-  ));
+/**
+ * Create the content of a brand-new tree. No setting property is written: a new
+ * tree inherits the current global defaults at runtime, and only a later
+ * explicit per-tree choice records a value in the Frontmatter.
+ */
+export function createMindTreeFile(title: string): string {
+  return serializeMindTreeFile(createEmptyDocument(title));
 }
 
 function normalizeDocument(value: unknown): MindTreeDocument {

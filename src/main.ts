@@ -855,19 +855,10 @@ export default class MindTreeNaturePlugin extends Plugin {
         path = normalizePath(`${directory ? `${directory}/` : ""}${safeTitle} ${counter}.mtn.md`);
         counter += 1;
       }
-      // Global appearance and collection choices are copied once into the new
-      // file's YAML. Later preference changes must not rewrite existing trees.
-      const file = await this.app.vault.create(
-        path,
-        createMindTreeFile(
-          safeTitle,
-          this.settings.theme,
-          this.settings.defaultLayoutMode,
-          this.settings.nodeShape,
-          this.settings.defaultCollectionMode,
-          this.settings.connectionStyle
-        )
-      );
+      // A new tree records no setting properties. Its appearance and collection
+      // behavior follow the current global defaults until the user chooses a
+      // per-tree value in that tree's settings menu.
+      const file = await this.app.vault.create(path, createMindTreeFile(safeTitle));
       await this.activateMindTree(file, this.app.workspace.getLeaf("tab"));
     } catch (error) {
       new Notice(t("notice.createTreeFailed", { message: error instanceof Error ? error.message : String(error) }));

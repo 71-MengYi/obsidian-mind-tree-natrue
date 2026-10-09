@@ -109,7 +109,7 @@ Once linked, node titles and file names stay in sync both ways. If you don't wan
 
 ## File format and privacy
 
-- Mind trees use top-level YAML `documentId`, `schemaVersion`, `layoutMode`, `recursiveScan`, `collectionMode`, `theme`, and `nodeShape` properties followed by a Markdown outline. Lossless gzip-compressed JSON is stored after the outline and an explicit instruction telling AI tools to ignore it; settings are not duplicated in that payload.
+- Mind trees use top-level YAML `documentId`, `schemaVersion`, `layoutMode`, `recursiveScan`, `collectionMode`, `theme`, and `nodeShape` properties followed by a Markdown outline. Lossless gzip-compressed JSON is stored after the outline and an explicit instruction telling AI tools to ignore it; settings are not duplicated in that payload. A new mind tree writes no setting property: absent settings use the global defaults from Settings → Mind map at runtime, and a property is written into that file only after you choose it in the tree's own settings menu.
 - The plugin does not send telemetry or upload vault content.
 - Web links are stored but never fetched in the background.
 - All UI text ships as Simplified Chinese and English i18n resources and follows your Obsidian language.

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addNode, cloneDocument, createEmptyDocument } from "../src/domain/tree";
 import { serializeMindTreeFile } from "../src/format/document";
+import { markSettingsEdited } from "../src/document-settings-state";
 import { assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot } from "../src/services/document-conflict";
 
 test("generated heading, outline, prose, unknown YAML and Base64 wrapping are not version changes", () => {
@@ -51,6 +52,8 @@ test("all six settings are metadata updates rather than version choices", () => 
   for (const [key, value] of Object.entries(changes)) {
     const external = cloneDocument(original);
     Object.assign(external.settings, { [key]: value });
+    // Only an explicitly chosen property reaches the external file's YAML.
+    markSettingsEdited(external, [key as keyof typeof changes]);
     const result = assessExternalVersion(baseline, local, serializeMindTreeFile(external));
     assert.equal(result.kind, "unchanged", key);
     if (result.kind === "unchanged") {

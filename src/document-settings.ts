@@ -41,8 +41,9 @@ const CONNECTION_STYLES = new Set<MindTreeConnectionStyle>([
 const NODE_SHAPES = new Set<MindTreeNodeShape>(["rounded", "square", "borderless"]);
 
 /**
- * Only options that genuinely vary by tree belong here. Global layout/theme
- * preferences merely provide creation defaults; operation defaults stay global.
+ * Only options that genuinely vary by tree belong here. A global layout/theme
+ * preference is merely the runtime default for a tree that never chose its own
+ * value; operation defaults stay global.
  */
 export const DEFAULT_DOCUMENT_SETTINGS: Readonly<MindTreeDocumentSettings> = {
   layoutMode: "balanced",
@@ -82,8 +83,8 @@ export function normalizeNodeShape(value: unknown, fallback: unknown = "rounded"
 
 /**
  * Validate the top-level, hand-editable YAML values. `defaults` is deliberately
- * supplied by the caller: opening an older file should inherit the user's
- * current creation defaults for every property that did not exist yet.
+ * supplied by the caller: every property a file does not carry resolves to the
+ * user's current global default at runtime, without writing it back.
  */
 export function normalizeDocumentSettings(
   value: unknown,
@@ -114,17 +115,6 @@ export function documentSettingsUsedDefaults(
   const record = asRecord(value);
   return (Object.keys(DOCUMENT_SETTING_YAML_KEYS) as Array<keyof MindTreeDocumentSettings>)
     .some((property) => record?.[DOCUMENT_SETTING_YAML_KEYS[property]] !== normalized[property]);
-}
-
-/** Serialize every registered setting as an individual top-level YAML value. */
-export function documentSettingsToYaml(
-  value: Readonly<MindTreeDocumentSettings>
-): Record<string, string | boolean> {
-  const normalized = normalizeDocumentSettings(value);
-  return Object.fromEntries(
-    (Object.keys(DOCUMENT_SETTING_YAML_KEYS) as Array<keyof MindTreeDocumentSettings>)
-      .map((property) => [DOCUMENT_SETTING_YAML_KEYS[property], normalized[property]])
-  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {

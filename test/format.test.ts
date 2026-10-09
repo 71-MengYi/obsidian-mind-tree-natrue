@@ -15,6 +15,7 @@ import {
 import { CURRENT_MIND_TREE_SCHEMA_VERSION } from "../src/format/migrations";
 import { OUTLINE_END } from "../src/format/outline";
 import { normalizeConnectionStyle, normalizeNodeShape } from "../src/document-settings";
+import { markSettingsEdited, TREE_SETTING_KEYS } from "../src/document-settings-state";
 
 test("round-trips YAML document settings outside the compressed data section", () => {
   const document = createEmptyDocument("Project");
@@ -24,6 +25,8 @@ test("round-trips YAML document settings outside the compressed data section", (
   document.settings.theme = "midnight";
   document.settings.connectionStyle = "orthogonal-dashed";
   document.settings.nodeShape = "borderless";
+  // Settings reach the file only as explicit per-tree choices.
+  markSettingsEdited(document, TREE_SETTING_KEYS);
   document.unknownFields = { viewport: { x: 12, y: 34, zoom: 2 } };
   const note = addNode(document, document.rootId, "Requirements");
   note.resource = {
@@ -79,27 +82,57 @@ test("round-trips YAML document settings outside the compressed data section", (
   assert.equal(parsed.document.documentId, undefined);
 });
 
-test("new files receive the supplied global default theme as a YAML setting", () => {
-  const source = createMindTreeFile("Ocean plan", "ocean");
-  assert.match(source, /^---\nschemaVersion: 2\nlayoutMode: balanced\nrecursiveScan: false\ncollectionMode: ask\ntheme: ocean\nconnectionStyle: theme\nnodeShape: rounded\n---/);
+test("new files write no setting property and inherit the global default theme", () => {
+  const source = createMindTreeFile("Ocean plan");
+  assert.match(source, /^---\nschemaVersion: 2\n---/);
+  assert.doesNotMatch(source, /\n(?:layoutMode|recursiveScan|collectionMode|theme|connectionStyle|nodeShape):/);
   assert.doesNotMatch(source, /\ndocumentId:/);
-  assert.equal(parseMindTreeFile(source).document.settings.theme, "ocean");
+  assert.equal(parseMindTreeFile(source, { defaultTheme: "ocean" }).document.settings.theme, "ocean");
+  assert.equal(parseMindTreeFile(source).document.settings.theme, "vibrant");
 });
 
-test("neutral elevation themes parse and serialize as ordinary YAML theme values", () => {
+test("neutral elevation themes stay global until the tree chooses one explicitly", () => {
   for (const theme of ["flat", "minimal", "floating"] as const) {
-    const source = createMindTreeFile(`${theme} plan`, theme);
-    assert.match(source, new RegExp(`\\ntheme: ${theme}\\n`));
-    const parsed = parseMindTreeFile(source);
+    const source = createMindTreeFile(`${theme} plan`);
+    assert.doesNotMatch(source, /^theme:/m);
+    const parsed = parseMindTreeFile(source, { defaultTheme: theme });
     assert.equal(parsed.document.settings.theme, theme);
-    assert.match(serializeMindTreeFile(parsed.document), new RegExp(`\\ntheme: ${theme}\\n`));
+    markSettingsEdited(parsed.document, ["theme"]);
+    assert.match(serializeMindTreeFile(parsed.document, source), new RegExp(`^theme: ${theme}$`, "m"));
   }
 });
 
-test("new files receive the supplied global default layout as a YAML setting", () => {
-  const source = createMindTreeFile("Tree plan", "vibrant", "tree");
-  assert.match(source, /^---\nschemaVersion: 2\nlayoutMode: tree\nrecursiveScan: false\ncollectionMode: ask\ntheme: vibrant\nconnectionStyle: theme\nnodeShape: rounded\n---/);
-  assert.equal(parseMindTreeFile(source).document.settings.layoutMode, "tree");
+test("new files write no layout property and inherit the global default layout", () => {
+  const source = createMindTreeFile("Tree plan");
+  assert.doesNotMatch(source, /^layoutMode:/m);
+  assert.equal(parseMindTreeFile(source, { defaultLayoutMode: "tree" }).document.settings.layoutMode, "tree");
+  assert.equal(parseMindTreeFile(source).document.settings.layoutMode, "balanced");
+});
+
+test("a new tree keeps every setting absent across node edits and reopen", () => {
+  const globals = { defaultTheme: "ocean", defaultLayoutMode: "tree" } as const;
+  const created = createMindTreeFile("Fresh tree");
+  const parsed = parseMindTreeFile(created, globals).document;
+  assert.equal(parsed.settings.theme, "ocean");
+  addNode(parsed, parsed.rootId, "First child");
+  const saved = serializeMindTreeFile(parsed, created);
+
+  assert.match(saved, /- First child/);
+  assert.doesNotMatch(saved, /^(?:layoutMode|recursiveScan|collectionMode|theme|connectionStyle|nodeShape):/m);
+  assert.equal(parseMindTreeFile(saved, globals).document.settings.theme, "ocean");
+  assert.equal(parseMindTreeFile(saved, globals).document.settings.layoutMode, "tree");
+});
+
+test("an explicit per-tree choice pins that property while unset ones follow the globals", () => {
+  const created = createMindTreeFile("Pinned tree");
+  const chosen = parseMindTreeFile(created, { defaultTheme: "ocean" }).document;
+  markSettingsEdited(chosen, ["theme"]);
+  const saved = serializeMindTreeFile(chosen, created);
+
+  assert.match(saved, /^theme: ocean$/m);
+  const later = parseMindTreeFile(saved, { defaultTheme: "midnight", defaultLayoutMode: "radial" }).document;
+  assert.equal(later.settings.theme, "ocean");
+  assert.equal(later.settings.layoutMode, "radial");
 });
 
 test("a linked schema-v2 tree persists its optional documentId", () => {
@@ -110,15 +143,17 @@ test("a linked schema-v2 tree persists its optional documentId", () => {
   assert.equal(parseMindTreeFile(source).document.documentId, document.documentId);
 });
 
-test("new files receive the supplied global default node shape as a YAML setting", () => {
-  const source = createMindTreeFile("Borderless plan", "vibrant", "balanced", "borderless");
-  assert.match(source, /\nnodeShape: borderless\n/);
-  assert.equal(parseMindTreeFile(source).document.settings.nodeShape, "borderless");
+test("new files write no node shape property and inherit the global default shape", () => {
+  const source = createMindTreeFile("Borderless plan");
+  assert.doesNotMatch(source, /^nodeShape:/m);
+  assert.equal(parseMindTreeFile(source, { defaultNodeShape: "borderless" }).document.settings.nodeShape, "borderless");
+  assert.equal(parseMindTreeFile(source).document.settings.nodeShape, "rounded");
 });
 
 test("removed capsule and sketch settings fall back to rounded without a schema migration", () => {
   for (const removedShape of ["capsule", "sketch"]) {
-    const legacy = createMindTreeFile("Old shape").replace("nodeShape: rounded", `nodeShape: ${removedShape}`);
+    const legacy = createMindTreeFile("Old shape")
+      .replace("schemaVersion: 2", `schemaVersion: 2\nnodeShape: ${removedShape}`);
     const parsed = parseMindTreeFile(legacy, { defaultNodeShape: "rounded" });
     assert.equal(parsed.migratedFromSchemaVersion, undefined);
     assert.equal(parsed.defaultedDocumentSettings, true);
@@ -130,7 +165,7 @@ test("removed capsule and sketch settings fall back to rounded without a schema 
 
 test("invalid connection styles use the global default without a schema migration", () => {
   const invalid = createMindTreeFile("Invalid line")
-    .replace("connectionStyle: theme", "connectionStyle: unsupported");
+    .replace("schemaVersion: 2", "schemaVersion: 2\nconnectionStyle: unsupported");
   const parsed = parseMindTreeFile(invalid, { defaultConnectionStyle: "smooth-dashed" });
 
   assert.equal(parsed.migratedFromSchemaVersion, undefined);
@@ -140,28 +175,26 @@ test("invalid connection styles use the global default without a schema migratio
   assert.equal(normalizeConnectionStyle("unsupported", "orthogonal"), "orthogonal");
 });
 
-test("new files receive the supplied global default collection strategy as a YAML setting", () => {
-  const source = createMindTreeFile("Quiet tree", "vibrant", "balanced", "rounded", "off");
-  assert.match(source, /\ncollectionMode: off\n/);
-  assert.equal(parseMindTreeFile(source).document.settings.collectionMode, "off");
+test("new files write no collection strategy and inherit the global default strategy", () => {
+  const source = createMindTreeFile("Quiet tree");
+  assert.doesNotMatch(source, /^collectionMode:/m);
+  assert.equal(parseMindTreeFile(source, { defaultCollectionMode: "off" }).document.settings.collectionMode, "off");
+  assert.equal(parseMindTreeFile(source).document.settings.collectionMode, "ask");
 });
 
-test("new files receive the supplied global default connection style as a YAML setting", () => {
-  const source = createMindTreeFile(
-    "Straight plan",
-    "vibrant",
-    "balanced",
-    "rounded",
-    "ask",
-    "straight"
-  );
-  assert.match(source, /\nconnectionStyle: straight\n/);
-  assert.equal(parseMindTreeFile(source).document.settings.connectionStyle, "straight");
+test("new files write no connection style and inherit the global default style", () => {
+  const source = createMindTreeFile("Straight plan");
+  assert.doesNotMatch(source, /^connectionStyle:/m);
+  assert.equal(parseMindTreeFile(source, { defaultConnectionStyle: "straight" }).document.settings.connectionStyle, "straight");
+  assert.equal(parseMindTreeFile(source).document.settings.connectionStyle, "theme");
 });
 
 test("migrates the unversioned v1 baseline through the central migration factory", () => {
-  const current = createMindTreeFile("Migrated tree", "vibrant", "balanced", "rounded");
-  const v1 = current
+  // v1 predates the "no settings by default" rule, so its file carried the
+  // properties it had; only some of them are known to the current catalog.
+  const versioned = createEmptyDocument("Migrated tree");
+  markSettingsEdited(versioned, TREE_SETTING_KEYS);
+  const v1 = serializeMindTreeFile(versioned)
     .replace(/^schemaVersion:.*\n/m, "")
     .replace(/^nodeShape:.*\n/m, "")
     .replace(/^collectionMode:.*\n/m, "")
@@ -183,8 +216,7 @@ test("migrates the unversioned v1 baseline through the central migration factory
 });
 
 test("fills a missing collection strategy without invoking a version migration", () => {
-  const currentWithoutCollection = createMindTreeFile("Collected tree")
-    .replace(/^collectionMode:.*\n/m, "");
+  const currentWithoutCollection = createMindTreeFile("Collected tree");
   const parsed = parseMindTreeFile(currentWithoutCollection, { defaultCollectionMode: "collect" });
 
   assert.equal(parsed.migratedFromSchemaVersion, undefined);
@@ -245,16 +277,10 @@ test("preserves unrelated frontmatter and Markdown outside generated sections", 
   assert.equal((saved.match(new RegExp(DATA_START, "g")) ?? []).length, 1);
 });
 
-test("fills missing current YAML properties from supplied defaults", () => {
-  const current = createMindTreeFile("Defaults");
-  const missingSettings = current
-    .replace(/^layoutMode:.*\n/m, "")
-    .replace(/^recursiveScan:.*\n/m, "")
-    .replace(/^collectionMode:.*\n/m, "")
-    .replace(/^theme:.*\n/m, "")
-    .replace(/^connectionStyle:.*\n/m, "")
-    .replace(/^nodeShape:.*\n/m, "");
-  const parsed = parseMindTreeFile(missingSettings, {
+test("fills missing current YAML properties from supplied defaults while keeping present ones", () => {
+  const current = createMindTreeFile("Defaults")
+    .replace("schemaVersion: 2", "schemaVersion: 2\ntheme: midnight");
+  const parsed = parseMindTreeFile(current, {
     defaultLayoutMode: "left",
     defaultTheme: "ocean",
     defaultNodeShape: "borderless",
@@ -267,10 +293,13 @@ test("fills missing current YAML properties from supplied defaults", () => {
     layoutMode: "left",
     recursiveScan: false,
     collectionMode: "off",
-    theme: "ocean",
+    theme: "midnight",
     connectionStyle: "smooth-dashed",
     nodeShape: "borderless"
   });
+  // Missing properties stay absent: a save must not fill them back in.
+  assert.doesNotMatch(serializeMindTreeFile(parsed.document, current), /^(?:layoutMode|collectionMode|nodeShape):/m);
+  assert.match(serializeMindTreeFile(parsed.document, current), /^theme: midnight$/m);
 });
 
 test("rejects removed legacy file formats", () => {
@@ -281,8 +310,8 @@ test("rejects removed legacy file formats", () => {
   const current = serializeMindTreeFile(document);
   const nestedDocumentSettings = current
     .replace(
-      /^layoutMode:.*\nrecursiveScan:.*\ncollectionMode:.*\ntheme:.*\nconnectionStyle:.*\nnodeShape:.*\n/m,
-      "mindTree:\n  layoutMode: balanced\n  recursiveScan: false\n  collectionMode: ask\n  theme: vibrant\n  connectionStyle: theme\n  nodeShape: rounded\n"
+      /^schemaVersion: 2\n/m,
+      "schemaVersion: 2\nmindTree:\n  layoutMode: balanced\n  recursiveScan: false\n  collectionMode: ask\n  theme: vibrant\n  connectionStyle: theme\n  nodeShape: rounded\n"
     );
   assert.throws(() => parseMindTreeFile(codeBlock), /compressed data section/i);
   assert.throws(() => parseMindTreeFile(frontmatterPayload), /compressed data section/i);

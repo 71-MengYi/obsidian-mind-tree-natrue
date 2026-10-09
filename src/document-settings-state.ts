@@ -1,4 +1,4 @@
-import { DOCUMENT_SETTING_YAML_KEYS, documentSettingsToYaml } from "./document-settings";
+import { DOCUMENT_SETTING_YAML_KEYS } from "./document-settings";
 import type { MindTreeDocument, MindTreeDocumentSettings } from "./types";
 
 export type TreeSettingKey = keyof MindTreeDocumentSettings;
@@ -37,10 +37,14 @@ export function copySettingsState(from: MindTreeDocument, to: MindTreeDocument):
   if (state) states.set(to, copy(state));
 }
 
+/**
+ * A document without an ownership record owns no YAML property. Its settings are
+ * runtime defaults (global or code defaults), not an instruction to write them:
+ * a tree gains a property only by parsing one that already exists or by an
+ * explicit per-tree choice.
+ */
 function stateOf(document: MindTreeDocument): SettingsState {
-  return states.get(document) ?? {
-    raw: documentSettingsToYaml(document.settings), normalized: { ...document.settings }, pending: {}
-  };
+  return states.get(document) ?? { raw: {}, normalized: { ...document.settings }, pending: {} };
 }
 
 function pendingOf(document: MindTreeDocument): SettingsState["pending"] {
@@ -66,9 +70,12 @@ export function markSettingsEdited(document: MindTreeDocument, keys: readonly Tr
   states.set(document, state);
 }
 
-/** Latest disk wins a same-field race; unrelated user edits remain writable. */
+/**
+ * Latest disk wins a same-field race; unrelated user edits remain writable.
+ * Existing YAML is preserved as-is, including properties this document never
+ * owned explicitly: absence stays absence instead of being filled with defaults.
+ */
 export function settingsForSerialization(document: MindTreeDocument, latest: RawTreeSettings): RawTreeSettings {
-  if (!states.has(document)) return documentSettingsToYaml(document.settings); // Brand-new document.
   const state = stateOf(document);
   const result = copy(latest);
   const pending = pendingOf(document);

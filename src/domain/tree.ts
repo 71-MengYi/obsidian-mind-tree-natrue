@@ -36,6 +36,11 @@ export function nowIso(): string {
   return new Date().toISOString();
 }
 
+/**
+ * Build a document that has never been parsed. The setting arguments are runtime
+ * values for immediate layout/render only: they belong to no file until the
+ * document is parsed from one or `markSettingsEdited` records an explicit choice.
+ */
 export function createEmptyDocument(
   title = ROOT_TITLE,
   theme: MindTreeTheme = "vibrant",

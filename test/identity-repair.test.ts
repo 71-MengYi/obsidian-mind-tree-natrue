@@ -5,12 +5,16 @@ import { addNode, cloneDocument, createEmptyDocument, renameNode } from "../src/
 import { parseMindTreeFile, serializeMindTreeFile, mindTreeMachineDataFingerprint } from "../src/format/document";
 import { restoreDocumentIdentity } from "../src/format/document-identity";
 import { PendingConflictStore } from "../src/services/pending-conflict-store";
+import { markSettingsEdited, TREE_SETTING_KEYS } from "../src/document-settings-state";
 import { VersionConflictCoordinator, type VersionChoiceResult } from "../src/services/version-conflict-coordinator";
 import { MemoryConflictIO, deferred } from "./helpers/pending-conflict-io";
 
 function fixture() {
   const baseline = createEmptyDocument("Tree");
   baseline.documentId = "original-identity";
+  // A tree file carries the properties it was created with; identity repair and
+  // version choice must preserve that YAML exactly.
+  markSettingsEdited(baseline, TREE_SETTING_KEYS);
   const source = serializeMindTreeFile(baseline);
   const local = cloneDocument(baseline);
   addNode(local, local.rootId, "Local work");

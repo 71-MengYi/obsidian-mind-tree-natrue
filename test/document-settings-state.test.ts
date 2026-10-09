@@ -8,9 +8,14 @@ import { DocumentSession } from "../src/services/document-session";
 
 const parse = (source: string) => parseMindTreeFile(source).document;
 const remove = (source: string, key: string) => source.replace(new RegExp(`^${key}:.*\\n`, "m"), "");
+/** Only an explicit per-tree choice puts a setting into the YAML. */
+const withSettings = (document = createEmptyDocument("Tree")): string => {
+  markSettingsEdited(document, TREE_SETTING_KEYS);
+  return serializeMindTreeFile(document);
+};
 
 test("deleting each setting is metadata only and neither node saves nor reopen fill it back", () => {
-  const base = serializeMindTreeFile(createEmptyDocument("Tree", "flat", "left", "square", "root", "straight"));
+  const base = withSettings(createEmptyDocument("Tree", "flat", "left", "square", "root", "straight"));
   for (const key of TREE_SETTING_KEYS) {
     const local = parse(base);
     const added = addNode(local, local.rootId, "Unsaved local node");
@@ -26,7 +31,7 @@ test("deleting each setting is metadata only and neither node saves nor reopen f
 });
 
 test("missing fields can be explicitly set to their default, then undo restores absence", () => {
-  const source = remove(serializeMindTreeFile(createEmptyDocument("Tree")), "theme");
+  const source = remove(withSettings(), "theme");
   const original = parse(source);
   const history = new DocumentSession();
   history.load(source);
@@ -43,7 +48,7 @@ test("missing fields can be explicitly set to their default, then undo restores 
 });
 
 test("local property edits merge by field, while a same-field disk change or deletion wins", () => {
-  const base = serializeMindTreeFile(createEmptyDocument("Tree"));
+  const base = withSettings();
   for (const external of [base.replace("theme: vibrant", "theme: ocean"), remove(base, "theme")]) {
     const local = parse(base);
     local.settings.theme = "flat";
@@ -59,7 +64,7 @@ test("local property edits merge by field, while a same-field disk change or del
 });
 
 test("external properties are rebased into undo/redo without restoring deleted values", () => {
-  const source = serializeMindTreeFile(createEmptyDocument("Tree", "flat"));
+  const source = withSettings(createEmptyDocument("Tree", "flat"));
   const history = new DocumentSession();
   history.load(source);
   const original = parse(source);

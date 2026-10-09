@@ -10,7 +10,8 @@ export type { MindTreeSettings } from "./settings-model";
 
 /**
  * Cross-tree preferences remain in plugin data. Layout, theme, connection and
- * shape preferences are creation defaults; active values live per document.
+ * shape preferences are runtime defaults for trees without their own value;
+ * active values live per document.
  */
 type SettingsPage = "basic" | "mind-map" | "topic-notes";
 

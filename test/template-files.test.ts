@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { addNode, cloneDocument, createEmptyDocument, getNode } from "../src/domain/tree";
 import { parseMindTreeFile, serializeMindTreeFile } from "../src/format/document";
+import { markSettingsEdited } from "../src/document-settings-state";
 import { extractNonMarkdownResourceId, linkedFileTitle } from "../src/format/resource-id";
 import {
   filesInTemplateFolder, templateFileExtension, TemplateFileService,
@@ -156,6 +157,8 @@ test("mind-tree copies replace only documentId and preserve compressed data, set
   const document = createEmptyDocument("Template");
   document.documentId = "00000000-0000-4000-8000-999999999999";
   document.settings.theme = "flat";
+  // Only an explicit per-tree choice is written into the template's Frontmatter.
+  markSettingsEdited(document, ["theme"]);
   const child = addNode(document, document.rootId, "Existing link");
   child.resource = { type: "file", resourceId: "existing-resource", pathHint: "Files/original.pdf", fileKind: "attachment" };
   const source = f.add("Templates/Tree.mtn.md", serializeMindTreeFile(document));
