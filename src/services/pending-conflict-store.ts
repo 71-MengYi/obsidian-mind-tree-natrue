@@ -22,6 +22,51 @@ export interface PendingConflictRecord {
   receipt?: { choice: "current" | "external"; source: string; phase: "prepared" | "verified"; resumeDraft?: boolean };
 }
 
+/** A loaded record together with the identity needed to relocate or drop it. */
+export interface PendingConflictEntry {
+  readonly id: string;
+  readonly path: string;
+  readonly record: PendingConflictRecord;
+}
+
+export type PendingConflictResolution =
+  | { kind: "live" }
+  | { kind: "rebind"; path: string }
+  | { kind: "stale-path" }
+  | { kind: "retain" };
+
+/**
+ * Decide what an unresolved journal record still refers to, from evidence only.
+ * A missing path never authorizes guessing: rebinding needs exactly one live file
+ * once the recorded file is gone, and a path proves reuse only when the live file
+ * already carries a different established identity. `live` means the record
+ * anchors a real disk location and the session may stop blocking; `retain` is
+ * reserved for cases that still need a person to decide.
+ */
+export function resolvePendingConflict(input: {
+  /** Identity frozen in the record's baseline. */
+  readonly recordDocumentId?: string;
+  /** Identity currently stored in the file at the recorded path. */
+  readonly recordedPathDocumentId?: string;
+  /** Whether the recorded path currently holds a mind-tree file. */
+  readonly recordedPathExists: boolean;
+  /** Live paths whose indexed identity equals the recorded identity. */
+  readonly identityPaths: readonly string[];
+  readonly recordPath: string;
+}): PendingConflictResolution {
+  const { recordDocumentId, recordedPathDocumentId, recordedPathExists, identityPaths, recordPath } = input;
+  if (recordedPathExists) {
+    // An unreadable identity is not proof of a different document.
+    if (!recordDocumentId || !recordedPathDocumentId || recordedPathDocumentId === recordDocumentId) return { kind: "live" };
+    return { kind: "stale-path" };
+  }
+  // The recorded file is gone. Adopt the path only if exactly one live file
+  // carries the recorded identity; otherwise the record must wait for a person.
+  const candidates = identityPaths.filter((path) => path !== recordPath);
+  if (!recordDocumentId) return candidates.length ? { kind: "retain" } : { kind: "live" };
+  return candidates.length === 1 ? { kind: "rebind", path: candidates[0]! } : { kind: "retain" };
+}
+
 export interface PendingConflictIO {
   exists(path: string): Promise<boolean>;
   mkdir(path: string): Promise<void>;
@@ -103,6 +148,13 @@ export class PendingConflictStore {
       if (path !== `${this.directory}/${record.id}.json`) throw new Error("Pending conflict filename mismatch.");
       records.push(record);
     }
+    // Two records on one path must never be reduced to one by ordering.
+    const byPath = new Map<string, string>();
+    for (const record of records) {
+      const seen = byPath.get(record.path);
+      if (seen !== undefined && seen !== record.id) throw new Error("Multiple unresolved records refer to this file; none were discarded.");
+      byPath.set(record.path, record.id);
+    }
     return records;
   }
 
@@ -117,6 +169,33 @@ export class PendingConflictStore {
   /** Startup diagnostics report orphans; they never infer a replacement path. */
   pendingPaths(): Promise<string[]> {
     return this.serial(async () => (await this.records()).map((record) => record.path));
+  }
+
+  /** Relocation cleanup needs the record id, not only the locator. */
+  pendingRecords(): Promise<PendingConflictEntry[]> {
+    return this.serial(async () => (await this.records()).map((record) => ({ id: record.id, path: record.path, record })));
+  }
+
+  /**
+   * Re-point one record at a moved file. The journal file is keyed by record id,
+   * so relocation rewrites that one file in place: the previous locator can never
+   * survive as a second record, and a failed rewrite leaves the original path.
+   */
+  rekey(entry: PendingConflictEntry, nextPath: string): Promise<void> {
+    const target = canonicalTreePath(nextPath);
+    const next: PendingConflictRecord = { ...entry.record, path: target };
+    validatePendingConflict(next, this.options());
+    const text = JSON.stringify(next);
+    return this.serial(async () => {
+      const from = `${this.directory}/${entry.id}.json`;
+      if (!await this.io.exists(from)) return;
+      const stored = validatePendingConflict(JSON.parse(await this.io.read(from)), this.options());
+      if (stored.path !== entry.path || stored.currentSource !== entry.record.currentSource) {
+        throw new Error("Pending conflict changed before relocation.");
+      }
+      await this.io.process(from, () => text);
+      if (await this.io.read(from) !== text) throw new Error("Pending conflict relocation failed.");
+    });
   }
 
   put(record: PendingConflictRecord): Promise<void> {
@@ -137,12 +216,15 @@ export class PendingConflictStore {
     });
   }
 
-  remove(record: PendingConflictRecord): Promise<void> {
+  /** Moves are handled by `rekey`; cleanup only proves the record is unchanged. */
+  remove(entry: PendingConflictEntry): Promise<void> {
+    const { record } = entry;
     return this.serial(async () => {
       const path = `${this.directory}/${record.id}.json`;
       if (!await this.io.exists(path)) return;
       const stored = validatePendingConflict(JSON.parse(await this.io.read(path)), this.options());
-      if (stored.path !== record.path || JSON.stringify(stored.receipt) !== JSON.stringify(record.receipt)
+      if (stored.path !== record.path || stored.path !== entry.path
+        || JSON.stringify(stored.receipt) !== JSON.stringify(record.receipt)
         || stored.currentSource !== record.currentSource) throw new Error("Pending conflict changed before cleanup.");
       await this.io.remove(path);
       if (await this.io.exists(path)) throw new Error("Pending conflict cleanup failed.");

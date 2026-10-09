@@ -3,7 +3,7 @@ import { serializeMindTreeFile, type ParseMindTreeOptions } from "../format/docu
 import type { MindTreeDocument } from "../types";
 import { assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot,
   type ManagedMindTreeSnapshot } from "./document-conflict";
-import { canonicalTreePath, type PendingConflictRecord, type PendingConflictStore, type PendingTitleDraft } from "./pending-conflict-store";
+import { canonicalTreePath, type PendingConflictEntry, type PendingConflictRecord, type PendingConflictStore, type PendingTitleDraft } from "./pending-conflict-store";
 import { rebaseTreeSettings, TREE_SETTING_KEYS } from "../document-settings-state";
 import { restoreDocumentIdentity } from "../format/document-identity";
 
@@ -368,7 +368,7 @@ export class VersionConflictCoordinator {
       ...(choice === "current" && this.record?.draft ? this.record.receipt?.resumeDraft
         ? { resumeDraft: this.record.draft } : { draft: this.record.draft } : {}),
       ...(choice === "current" && this.record?.titleRenames ? { titleRenames: this.record.titleRenames } : {}) };
-    await this.ports.store.remove(this.record!);
+    await this.ports.store.remove(this.entry());
     this.record = undefined;
     this.current = undefined;
     this.external = undefined;
@@ -379,6 +379,58 @@ export class VersionConflictCoordinator {
     this.readSequence++;
     this.ports.resolved(result);
     return result;
+  }
+
+  /**
+   * Drop an unresolvable journal record and unlock the shared session. Used when
+   * the located file was deleted or replaced by a different document: local work
+   * is already unreachable, and a retained record would lock mutation forever.
+   */
+  discard(): Promise<void> {
+    return this.serial(async () => {
+      if (this.record) {
+        try { await this.ports.store.remove(this.entry()); }
+        catch { /* Startup cleanup retries; the session must still be released. */ }
+      }
+      this.forget();
+    });
+  }
+
+  /**
+   * Release the session synchronously, then clean the journal in the background.
+   * A close handler cannot wait for queued work, and a lock that outlives the
+   * file would suppress the normal close of that view.
+   */
+  abandon(): void {
+    if (!this.record) return;
+    const record = this.record;
+    this.forget();
+    void this.serial(async () => {
+      try { await this.ports.store.remove({ id: record.id, path: record.path, record }); }
+      catch { /* Startup cleanup retries later; the session is already released. */ }
+    });
+  }
+
+  private forget(): void {
+    this.record = undefined;
+    this.current = undefined;
+    this.external = undefined;
+    this.error = undefined;
+    this.errorDetails = undefined;
+    this.storageError = undefined;
+    this.operationError = undefined;
+    this.changedAgain = false;
+    this.busy = false;
+    this.durable = false;
+    this.assessmentKind = "metadata";
+    this.readSequence++;
+    this.readRequested = false;
+    this.ports.changed();
+  }
+
+  private entry(): PendingConflictEntry {
+    const record = this.record!;
+    return { id: record.id, path: record.path, record };
   }
 }
 

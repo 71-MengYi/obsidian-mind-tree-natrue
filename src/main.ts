@@ -2,12 +2,13 @@ import { addIcon, normalizePath, Notice, Platform, Plugin, removeIcon, requestUr
 import { around } from "monkey-around";
 import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile } from "./format/document";
 import { t } from "./i18n";
+import { createManagedMindTreeSnapshot } from "./services/document-conflict";
 import { ResourceIndexService, type ResourceIndexProgress, type ResourceIndexReport } from "./services/resource-index";
 import { LocalResourceCache } from "./services/local-resource-cache";
 import { SettingsPersistence, removeLegacyResourceIndex } from "./services/settings-persistence";
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
-import { PendingConflictStore } from "./services/pending-conflict-store";
+import { PendingConflictStore, resolvePendingConflict, type PendingConflictEntry } from "./services/pending-conflict-store";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
 import { MindTreeOpenCoordinator } from "./services/mind-tree-open-coordinator";
 import { canonicalTreePath } from "./services/pending-conflict-store";
@@ -204,8 +205,12 @@ export default class MindTreeNaturePlugin extends Plugin {
 
     this.app.workspace.onLayoutReady(() => {
       this.updates.startup(this.settings.autoCheckUpdates);
-      void this.rebuildResourceIndex().catch((error: unknown) => this.reportIndexFailure(error));
-      void this.reportUnlocatedPendingVersions();
+      void this.rebuildResourceIndex()
+        .catch((error: unknown) => this.reportIndexFailure(error))
+        // Journal cleanup reads vault paths and indexed identities, so it waits
+        // for the background index instead of racing it.
+        .then(() => { if (!this.unloading) return this.reportUnlocatedPendingVersions(); })
+        .catch(() => undefined);
       void this.deduplicateRestoredMindTrees();
       this.registerEvent(this.app.workspace.on("file-open", (file) => {
         if (file && isMindTreePath(file.path)) this.scheduleMindTreeActivation(file);
@@ -230,6 +235,7 @@ export default class MindTreeNaturePlugin extends Plugin {
         for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
           if (leaf.view instanceof MindTreeView && leaf.view.file?.path === file.path) leaf.view.checkExternalVersion();
         }
+        this.scheduleConflictCleanup();
       }));
       this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
         // Folder moves may emit only a folder event, not an event per child.
@@ -251,6 +257,8 @@ export default class MindTreeNaturePlugin extends Plugin {
             }
           }).catch((error: unknown) => this.reportIndexFailure(error));
         }
+        // A move that missed the synchronous rekey above is repaired here.
+        if (files.some((child) => isMindTreePath(child.path))) this.scheduleConflictCleanup();
       }));
       void this.activateMindTreeLeaf(this.app.workspace.getMostRecentLeaf());
     });
@@ -266,6 +274,10 @@ export default class MindTreeNaturePlugin extends Plugin {
     if (!this.coreInitialized) return;
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
     if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
+    if (this.scheduledConflictCleanup !== undefined) window.clearTimeout(this.scheduledConflictCleanup);
+    this.scheduledConflictCleanup = undefined;
+    if (this.discardedConflictNotice !== undefined) window.clearTimeout(this.discardedConflictNotice);
+    this.discardedConflictNotice = undefined;
     // Only a disposable local cache is flushed at unload, never old user settings.
     this.resourceCache?.save(this.resources?.entries() ?? []);
     this.settingsPersistence?.destroy();
@@ -622,11 +634,102 @@ export default class MindTreeNaturePlugin extends Plugin {
     }));
   }
 
+  /**
+   * Keep the journal aligned with the vault: a record whose file was deleted
+   * (or whose path now holds a different document) is dropped instead of being
+   * reported forever, and a uniquely identified move re-points the record
+   * rather than turning the moved tree into a permanent conflict.
+   */
   private async reportUnlocatedPendingVersions(): Promise<void> {
     try {
-      const missing = (await this.pendingConflicts.pendingPaths()).filter((path) => !this.app.vault.getFileByPath(path));
-      if (missing.length) new Notice(t("conflict.unlocated", { paths: missing.join("\n") }), 0);
+      const entries = await this.pendingConflicts.pendingRecords();
+      if (!entries.length) return;
+      const indexed = this.resources.entries();
+      const discarded: string[] = [];
+      for (const entry of entries) {
+        const documentId = this.pendingDocumentId(entry);
+        const live = this.vaultTreeAt(entry.path);
+        // Indexed identities only: a path that merely exists is not a relocation.
+        const identityPaths = documentId
+          ? indexed.filter((candidate) => candidate.resourceId === documentId).map((candidate) => canonicalTreePath(candidate.path))
+          : [];
+        // Same path, different established identity: the record now belongs to a
+        // document that no longer exists, so it must not block the live file.
+        const decision = resolvePendingConflict({
+          ...(documentId ? { recordDocumentId: documentId } : {}),
+          ...(live ? { recordedPathDocumentId: this.vaultDocumentId(live) } : {}),
+          recordedPathExists: Boolean(live),
+          identityPaths,
+          recordPath: entry.path
+        });
+        if (decision.kind === "live" || decision.kind === "retain") continue;
+        if (decision.kind === "rebind") {
+          const target = canonicalTreePath(decision.path);
+          // Never merge two records onto one locator; leave it for the next pass.
+          if (entries.some((other) => other.path === target)) continue;
+          await this.pendingConflicts.rekey(entry, target);
+          await this.mindTreeSessions.get(entry.path)?.conflict?.rename(target);
+          continue;
+        }
+        await this.pendingConflicts.remove(entry);
+        await this.discardSessionConflict(entry.path);
+        discarded.push(entry.path);
+      }
+      if (discarded.length) this.reportDiscardedVersions(discarded);
     } catch (error) { new Notice(t("conflict.storageError", { message: String(error) }), 0); }
+  }
+
+  private scheduledConflictCleanup?: number;
+  private discardedConflictPaths = new Set<string>();
+  private discardedConflictNotice?: number;
+
+  /** One notice per delete burst instead of one per file. */
+  private reportDiscardedVersions(paths: readonly string[]): void {
+    for (const path of paths) this.discardedConflictPaths.add(path);
+    if (this.discardedConflictNotice !== undefined) window.clearTimeout(this.discardedConflictNotice);
+    this.discardedConflictNotice = window.setTimeout(() => {
+      this.discardedConflictNotice = undefined;
+      const reported = [...this.discardedConflictPaths];
+      this.discardedConflictPaths.clear();
+      if (reported.length) new Notice(t("conflict.discarded", { paths: reported.sort().join("\n") }), 0);
+    }, 800);
+  }
+
+  /** Delete/rename bursts settle first; the vault index is read afterwards. */
+  private scheduleConflictCleanup(): void {
+    if (this.unloading) return;
+    if (this.scheduledConflictCleanup !== undefined) window.clearTimeout(this.scheduledConflictCleanup);
+    this.scheduledConflictCleanup = window.setTimeout(() => {
+      this.scheduledConflictCleanup = undefined;
+      void this.reportUnlocatedPendingVersions();
+    }, 800);
+  }
+
+  private vaultTreeAt(path: string): TFile | undefined {
+    const target = canonicalTreePath(path);
+    return this.app.vault.getFiles().find((file) => isMindTreePath(file.path) && canonicalTreePath(file.path) === target);
+  }
+
+  private vaultDocumentId(file: TFile): string | undefined {
+    const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.["documentId"];
+    return typeof value === "string" && value ? value : undefined;
+  }
+
+  /** Identity from the frozen baseline: never from the in-memory candidate. */
+  private pendingDocumentId(entry: PendingConflictEntry): string | undefined {
+    return createManagedMindTreeSnapshot(entry.record.baselineSource, this.documentParseOptions()).documentId;
+  }
+
+  /** Unlock a session whose file is gone so the view stops reporting a conflict. */
+  private async discardSessionConflict(path: string): Promise<void> {
+    const session = this.mindTreeSessions.get(path);
+    if (!session?.conflict?.active) return;
+    await session.conflict.discard();
+    if (this.vaultTreeAt(path)) {
+      for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+        if (leaf.view instanceof MindTreeView && leaf.view.file?.path === session.path) leaf.view.checkExternalVersion();
+      }
+    }
   }
 
   /** Restored leaves may predate routing hooks; keep one owner without focus changes. */

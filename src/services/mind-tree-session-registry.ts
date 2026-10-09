@@ -209,6 +209,25 @@ export class SharedMindTreeSession {
   /** Publish conflict state even to the view that detected it; no focus transfer. */
   notifyConflict(): void { this.notify("status"); }
 
+  /**
+   * The backing file is gone from the vault. Its deletion is a normal end of the
+   * document, not a failed operation: drop the unresolved-version lock, forget
+   * file side effects, and stop reporting unsaved work so closing the view never
+   * tries to write the deleted path. In-memory history stays readable.
+   */
+  markDeleted(): void {
+    this.restoring = false;
+    this.restoreError = undefined;
+    this.pendingRestoreChecked = true;
+    this.conflict?.abandon();
+    this.titleDraft = undefined;
+    this.activeEditorId = undefined;
+    this.externalSourceInFlight = undefined;
+    this.pendingWriteSource = undefined;
+    this.history.markSaved(this.history.currentRevision, this.history.sourceBaseline);
+    this.notify("status");
+  }
+
   /** Restart restoration replaces a disk-loaded cache, never an active edit. */
   restoreFrozenVersion(document: MindTreeDocument, baseline: string): void {
     this._document = document;

@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createEmptyDocument } from "../src/domain/tree";
+import { serializeMindTreeFile } from "../src/format/document";
+import { PendingConflictStore } from "../src/services/pending-conflict-store";
+import { VersionConflictCoordinator } from "../src/services/version-conflict-coordinator";
 import {
   MindTreeSessionRegistry,
   SharedMindTreeSession,
   type SharedSessionSnapshot
 } from "../src/services/mind-tree-session-registry";
+import { MemoryConflictIO } from "./helpers/pending-conflict-io";
 
 test("all leaves of one path share document, history, and change broadcasts", () => {
   const registry = new MindTreeSessionRegistry();
@@ -77,6 +81,52 @@ test("a locked session survives its last view closing without selecting a versio
   session.restoring = false;
   registry.releaseSession(session, "view");
   assert.equal(registry.get("Tree.mtn.md"), undefined);
+});
+
+test("a deleted file closes the session without a pending-write or conflict lock", async () => {
+  const session = new SharedMindTreeSession("Tree.mtn.md");
+  const document = createEmptyDocument("Tree");
+  session.initialize(document, "baseline");
+  const edited = session.history.execute(document, (draft) => { draft.title = "Edited"; });
+  session.replaceDocument(edited, "view");
+  const io = new MemoryConflictIO();
+  const store = new PendingConflictStore(io, ".obsidian/plugins/mtn", "device");
+  const source = serializeMindTreeFile(document);
+  await store.put({ version: 1, id: "pending-1", path: session.path, baselineSource: source, currentSource: source });
+  const coordinator = new VersionConflictCoordinator({
+    store, options: () => ({}), path: () => session.path, read: async () => source,
+    process: async () => undefined, beginWrite: () => undefined, endWrite: () => undefined,
+    changed: () => undefined, resolved: () => undefined, restored: () => undefined, createId: () => "pending-1"
+  });
+  await coordinator.restore();
+  session.conflict = coordinator;
+  session.restoreError = "file missing";
+  session.restoring = true;
+  session.history.markChanged();
+  session.claimEditor("view");
+  session.updateTitleDraft("view", document.rootId, "Tree", "Draft");
+  session.beginWrite("serialized");
+  const updates: SharedSessionSnapshot[] = [];
+  session.attach("view", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => undefined });
+
+  assert.equal(session.mutationLocked, true);
+  assert.equal(session.history.dirty, true);
+  assert.equal(coordinator.active, true);
+  session.markDeleted();
+
+  assert.equal(session.mutationLocked, false);
+  assert.equal(session.restoreError, undefined);
+  assert.equal(session.hasConflict, false);
+  assert.equal(coordinator.active, false);
+  assert.equal(session.draft, undefined);
+  assert.equal(session.isPendingWrite("serialized"), false);
+  assert.equal(session.history.dirty, false);
+  assert.equal(session.history.canUndo, true);
+  assert.equal(updates.at(-1)?.dirty, false);
+  assert.equal(updates.at(-1)?.hasConflict, false);
+  // Journal cleanup is deliberately off the close path, so it settles later.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(io.files.size, 0);
 });
 
 test("file side effects serialize and a failed operation does not poison the queue", async () => {

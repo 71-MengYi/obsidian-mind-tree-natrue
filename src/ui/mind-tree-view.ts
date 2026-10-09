@@ -565,6 +565,13 @@ export class MindTreeView extends TextFileView {
   private async flushViewBeforeDetach(expectedPath = this.sharedSessionPath): Promise<void> {
     if (!expectedPath || !this.sharedSession || this.sharedSessionPath !== normalizePath(expectedPath)) return;
     await this.externalCheckTask;
+    if (!this.backingFilePresent()) {
+      // The file was deleted. Nothing can be written to it, and its deletion is
+      // a normal close rather than a failed save: the shared session drops the
+      // unresolved-version lock and stops reporting this document as unsaved.
+      this.sharedSession.markDeleted();
+      return;
+    }
     if (this.mutationLocked()) {
       await this.sharedSession.history.runExclusiveWrite(async () => undefined);
       await this.sharedSession.conflict?.settle();
@@ -645,8 +652,23 @@ export class MindTreeView extends TextFileView {
     return this.plugin.updateRuntime.frozen || this.sharedSession?.mutationLocked === true;
   }
 
+  /**
+   * File deletion must be told apart from a save failure. The vault no longer
+   * knowing this path means the document has no backing file at all; a kept
+   * parent folder separates that from a view whose whole folder is in flux.
+   */
+  private backingFilePresent(): boolean {
+    const path = this.sharedSession?.path ?? this.file?.path;
+    if (!path) return false;
+    if (this.app.vault.getFileByPath(path)) return true;
+    const parent = path.split("/").slice(0, -1).join("/");
+    return Boolean(parent && this.app.vault.getAbstractFileByPath(parent));
+  }
+
   override async save(_clear = false): Promise<void> {
     if (this.mutationLocked()) throw new SaveConflictError();
+    // Writing a deleted path would recreate the file the user just removed.
+    if (!this.backingFilePresent()) return;
     await this.documentSession.requestSave(() => this.performQueuedSave());
   }
 
@@ -674,6 +696,8 @@ export class MindTreeView extends TextFileView {
    */
   private async performQueuedSave(): Promise<boolean> {
     if (this.mutationLocked()) throw new SaveConflictError();
+    // Never recreate a deleted path; the queued pass simply has no destination.
+    if (!this.backingFilePresent()) return false;
     const file = this.file;
     if (!this.document || !file || this.parseError) return false;
     const session = this.sharedSession;
@@ -732,6 +756,12 @@ export class MindTreeView extends TextFileView {
   checkExternalVersion(): void {
     if (this.viewClosed || !this.file || !this.sharedSession) return;
     const session = this.sharedSession;
+    if (!this.backingFilePresent()) {
+      // Deletion is not an external change to choose between: the document has
+      // no file left to compare with, so no version preview is created for it.
+      session.markDeleted();
+      return;
+    }
     if (session.restoring || session.restoreError) { this.externalCheckRequested = true; return; }
     if (session.conflict?.active) {
       void session.conflict.refresh().catch((error: unknown) => this.reportSaveFailure(error));
@@ -3083,7 +3113,8 @@ export class MindTreeView extends TextFileView {
     this.titleRenameNodeIds.add(job.nodeId);
     this.trackTitleFileOperation(async () => {
       try {
-        if (this.documentSessionToken === token && !this.mutationLocked()) await operation();
+        // A deleted file cannot be renamed or have linked files rewritten.
+        if (this.documentSessionToken === token && !this.mutationLocked() && this.backingFilePresent()) await operation();
       } finally {
         if (this.pendingTitleRenames.get(job.nodeId) === job) {
           this.pendingTitleRenames.delete(job.nodeId);
@@ -3375,6 +3406,8 @@ export class MindTreeView extends TextFileView {
 
   private scheduleSave(): void {
     if (this.mutationLocked()) return;
+    // A deleted file has no destination: scheduling a write would only fail.
+    if (!this.backingFilePresent()) return;
     const ownerWindow = this.ownerWindow();
     if (this.saveTimer !== undefined) ownerWindow.clearTimeout(this.saveTimer);
     this.saveTimer = ownerWindow.setTimeout(() => {

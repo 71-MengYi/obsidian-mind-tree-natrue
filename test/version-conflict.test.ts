@@ -250,6 +250,33 @@ test("dangerous identity, future schema, corrupt source and disappeared file nev
   }
 });
 
+test("discarding an unresolvable record removes the journal and releases the session", async () => {
+  const f = fixture();
+  await f.coordinator.enter(f.local, f.baseSource, { nodeId: f.local.rootId, originalTitle: "Tree", value: "Draft" });
+  assert.equal(f.coordinator.active, true);
+  const notificationsBefore = f.runtime.notifications;
+  await f.coordinator.discard();
+  assert.equal(f.coordinator.active, false);
+  assert.equal(f.coordinator.state, undefined);
+  assert.equal(await f.store.load(f.runtime.path), undefined);
+  assert.equal(f.io.files.size, 0);
+  assert.equal(f.runtime.writes, 0);
+  assert.equal(f.runtime.resolved.length, 0);
+  assert.ok(f.runtime.notifications > notificationsBefore);
+  // A discarded coordinator is not selectable and cannot resurrect the record.
+  assert.equal(await f.coordinator.choose("current"), undefined);
+  assert.equal(f.io.files.size, 0);
+});
+
+test("discard releases the session even when journal cleanup is denied", async () => {
+  const f = fixture();
+  await f.coordinator.enter(f.local, f.baseSource);
+  f.io.failRemove = true;
+  await f.coordinator.discard();
+  assert.equal(f.coordinator.active, false);
+  assert.equal(f.io.files.size, 1);
+});
+
 test("random interleaving of external refresh and choices never resolves an unseen version", async () => {
   for (let seed = 1; seed <= 24; seed++) {
     const f = fixture();
