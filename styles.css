@@ -1863,3 +1863,7 @@
 .mtn-theme-preview .mtn-canvas {
   cursor: default;
 }
+
+/* Rich titles use the same SVG glyph positions as the image exporter. */
+.mtn-rich-title { line-height: 0; }
+.mtn-rich-title > svg { display: block; overflow: visible; pointer-events: none; }

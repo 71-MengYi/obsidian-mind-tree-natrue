@@ -1,4 +1,5 @@
 import { cloneDocument } from "../domain/tree";
+import { validateNodeTitle } from "../format/node-title";
 import { serializeMindTreeFile, type ParseMindTreeOptions } from "../format/document";
 import type { MindTreeDocument } from "../types";
 import { assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot,
@@ -285,10 +286,21 @@ export class VersionConflictCoordinator {
       const selected = rebaseTreeSettings(choice === "current" ? resumeDraft
         ? matchesFrozen ? checked.document : this.confirmedDocument() : cloneDocument(this.current) : checked.document,
         checked.document, TREE_SETTING_KEYS);
+      // Choosing a version must not bypass the editor's filename restrictions.
+      // Keep the original title and return the rejected input as an editor draft.
+      const draft = this.record.draft;
+      const node = draft && selected.nodes[draft.nodeId];
+      const rejectedDraft = Boolean(choice === "current" && draft && node
+        && validateNodeTitle(draft.value, { ...node, title: draft.originalTitle }, draft.nodeId === selected.rootId));
+      if (rejectedDraft && node && draft) {
+        node.title = draft.originalTitle;
+        if (draft.nodeId === selected.rootId) selected.title = draft.originalTitle;
+      }
+      const retainDraft = resumeDraft || rejectedDraft;
       // Preserve a safe first identity assigned while the preview was open.
       if (!selected.documentId && checked.documentId) selected.documentId = checked.documentId;
       const proposed = choice === "current" ? serializeMindTreeFile(selected, latest) : latest;
-      this.record.receipt = { choice, source: proposed, phase: "prepared", ...(resumeDraft ? { resumeDraft: true } : {}) };
+      this.record.receipt = { choice, source: proposed, phase: "prepared", ...(retainDraft ? { resumeDraft: true } : {}) };
       await this.persist();
       let changed = false;
       await this.ports.process((disk) => {
@@ -308,7 +320,7 @@ export class VersionConflictCoordinator {
         await this.refresh();
         return;
       }
-      this.record.receipt = { choice, source: verified, phase: "verified", ...(resumeDraft ? { resumeDraft: true } : {}) };
+      this.record.receipt = { choice, source: verified, phase: "verified", ...(retainDraft ? { resumeDraft: true } : {}) };
       await this.persist();
       // Journal verification itself is asynchronous. A sync arriving during
       // that time still requires another choice, not silent acceptance.

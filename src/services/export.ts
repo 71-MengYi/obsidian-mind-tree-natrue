@@ -1,3 +1,5 @@
+import { nodeTitleMode } from "../format/node-title";
+import { renderRichTitleSvg } from "../ui/rich-title";
 import type {
   MindTreeConnectionStyle,
   MindTreeDocument,
@@ -158,7 +160,8 @@ export function renderBranchSvg(
     // Use the same title-only track as the DOM renderer. Trailing markers and
     // file controls change the outer rectangle, never wrapping or shifting text.
     const textWidth = Math.max(1, shifted.contentWidth - NODE_HORIZONTAL_INSETS);
-    const lines = wrapNodeTitle(node.title || "未命名节点", position.depth, textWidth, textMeasurer);
+    const measurement = textMeasurer.measure(node.title || "未命名节点", position.depth, nodeWrapWidth, nodeTitleMode(node, position.depth));
+    const lines = measurement.lines;
     const captionTop = imageAsset
       ? shifted.y + NODE_VERTICAL_PADDING + imageAsset.height + IMAGE_CAPTION_GAP
       : shifted.y;
@@ -220,7 +223,11 @@ export function renderBranchSvg(
     const imageSvg = imageAsset
       ? `<image class="mtn-node-image" x="${shifted.x + NODE_HORIZONTAL_PADDING}" y="${shifted.y + NODE_VERTICAL_PADDING}" width="${imageAsset.width}" height="${imageAsset.height}" href="${escapeXml(imageAsset.dataUrl)}" preserveAspectRatio="xMidYMid meet"/>`
       : "";
-    return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/>${imageSvg}<text text-anchor="start" font-family="${escapeXml(textStyle.fontFamily)}" font-size="${fontSize}" font-style="${escapeXml(textStyle.fontStyle)}" font-weight="${escapeXml(textStyle.fontWeight)}" letter-spacing="${textStyle.letterSpacing}" word-spacing="${textStyle.wordSpacing}" font-kerning="${textStyle.fontKerning}" font-stretch="${textStyle.fontStretch}" font-variant-caps="${textStyle.fontVariantCaps}" text-rendering="${textStyle.textRendering}" fill="${textColor}">${tspans}</text>${markerSvg}${resourceMarkerSvg}</g>`;
+    const richTitle = measurement.richLines
+      ? `<g transform="translate(${textX} ${captionTop + (captionHeight - measurement.height!) / 2})" color="${textColor}">${renderRichTitleSvg(measurement)}</g>`
+      : undefined;
+    const titleSvg = richTitle ?? `<text text-anchor="start" font-family="${escapeXml(textStyle.fontFamily)}" font-size="${fontSize}" font-style="${escapeXml(textStyle.fontStyle)}" font-weight="${escapeXml(textStyle.fontWeight)}" letter-spacing="${textStyle.letterSpacing}" word-spacing="${textStyle.wordSpacing}" font-kerning="${textStyle.fontKerning}" font-stretch="${textStyle.fontStretch}" font-variant-caps="${textStyle.fontVariantCaps}" text-rendering="${textStyle.textRendering}" fill="${textColor}">${tspans}</text>`;
+    return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/>${imageSvg}${titleSvg}${markerSvg}${resourceMarkerSvg}</g>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${canvasColor}"/>${paths}${nodes}</svg>`;
 }

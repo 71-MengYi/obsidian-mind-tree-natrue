@@ -1,3 +1,4 @@
+import { parseNodeTitle, nodeTitleMode, escapeTitleMarkdown } from "./node-title";
 import type { MindTreeDocument, MindTreeNode, NodeId } from "../types";
 import { renderNodeMarkerSuffix } from "../domain/markers";
 
@@ -27,13 +28,15 @@ function renderNode(
   const node = document.nodes[nodeId];
   if (!node || visiting.has(nodeId)) return;
   visiting.add(nodeId);
-  lines.push(`${"  ".repeat(depth)}- ${renderNodeLabel(node)}`);
+  lines.push(`${"  ".repeat(depth)}- ${renderNodeLabel(node, nodeId === document.rootId)}`);
   for (const childId of node.childIds) renderNode(document, childId, depth + 1, lines, visiting);
   visiting.delete(nodeId);
 }
 
-function renderNodeLabel(node: MindTreeNode): string {
-  const title = escapeMarkdown(node.title || "未命名节点");
+function renderNodeLabel(node: MindTreeNode, isRoot: boolean): string {
+  const source = node.title || "未命名节点";
+  const title = nodeTitleMode(node, isRoot ? 0 : 1) === "literal"
+    ? escapeTitleMarkdown(source) : parseNodeTitle(source).markdown;
   const resource = node.resource;
   const suffix = renderNodeMarkerSuffix(node);
   const withMarkers = (label: string): string => suffix ? `${label} ${suffix}` : label;

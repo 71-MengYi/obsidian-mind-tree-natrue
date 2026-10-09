@@ -1,3 +1,4 @@
+import type { TitleCommitResult } from "../format/node-title";
 import type { MindTreeDocument } from "../types";
 import type { VersionConflictCoordinator, VersionChoiceResult } from "./version-conflict-coordinator";
 import { DocumentSession } from "./document-session";
@@ -28,7 +29,7 @@ export interface SharedSessionParticipant {
   /** Refresh view-local rendering without changing its viewport. */
   readonly onSessionChange: (snapshot: SharedSessionSnapshot) => void;
   /** Commit the visible DOM draft before another view claims the editor. */
-  readonly commitActiveDraft: () => void;
+  readonly commitActiveDraft: () => TitleCommitResult;
 }
 
 export interface SharedTitleDraft {
@@ -136,19 +137,21 @@ export class SharedMindTreeSession {
   }
 
   /** Only one textarea draft may be authoritative for a shared file. */
-  claimEditor(id: string): void {
-    if (this.mutationLocked) return;
+  claimEditor(id: string): TitleCommitResult {
+    if (this.mutationLocked) return "rejected";
     if (this.activeEditorId && this.activeEditorId !== id) {
-      this.commitEditorOwner(this.activeEditorId);
+      if (this.commitEditorOwner(this.activeEditorId) === "rejected") return "rejected";
     }
     this.activeEditorId = id;
+    return "committed";
   }
 
-  commitEditorBeforeMutation(originId: string): void {
-    if (this.mutationLocked) return;
+  commitEditorBeforeMutation(originId: string): TitleCommitResult {
+    if (this.mutationLocked) return "rejected";
     if (this.activeEditorId && this.activeEditorId !== originId) {
-      this.commitEditorOwner(this.activeEditorId);
+      if (this.commitEditorOwner(this.activeEditorId) === "rejected") return "rejected";
     }
+    return "committed";
   }
 
   updateTitleDraft(
@@ -174,10 +177,11 @@ export class SharedMindTreeSession {
   }
 
   /** Clear stale draft ownership even if a participant omits its own cleanup. */
-  private commitEditorOwner(ownerId: string): void {
-    this.participants.get(ownerId)?.commitActiveDraft();
+  private commitEditorOwner(ownerId: string): TitleCommitResult {
+    if (this.participants.get(ownerId)?.commitActiveDraft() === "rejected") return "rejected";
     if (this.activeEditorId === ownerId) this.activeEditorId = undefined;
     if (this.titleDraft?.ownerId === ownerId) this.titleDraft = undefined;
+    return "committed";
   }
 
   /** De-duplicate the same TextFileView reload delivered to several leaves. */

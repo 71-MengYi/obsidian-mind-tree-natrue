@@ -1,3 +1,4 @@
+import { parseNodeTitle } from "../format/node-title";
 export interface TextLinkSpan {
   start: number;
   end: number;
@@ -65,8 +66,17 @@ export function scanTextLinkSpans(title: string): TextLinkSpan[] {
  */
 function collectLinkSpans(text: string): TextLinkSpan[] {
   const starts: number[] = [];
+  const protectedRanges = parseNodeTitle(text).protectedRanges;
   const found: TextLinkSpan[] = [];
+  let rangeIndex = 0;
   for (let index = 0; index < text.length; index += 1) {
+    while (protectedRanges[rangeIndex] && protectedRanges[rangeIndex]!.end <= index) rangeIndex++;
+    const range = protectedRanges[rangeIndex];
+    if (range && index >= range.start) {
+      found.push({ ...range, syntax: "opaque", target: "" });
+      index = range.end - 1;
+      continue;
+    }
     const char = text[index];
     if (char === "\\") { index += 1; continue; }
     if (char === "<" && /^https?:\/\//i.test(text.slice(index + 1, index + 9))) {

@@ -18,8 +18,8 @@ test("all leaves of one path share document, history, and change broadcasts", ()
   assert.equal(first, second);
 
   const updates: SharedSessionSnapshot[] = [];
-  first.attach("first", { onSessionChange: () => undefined, commitActiveDraft: () => undefined });
-  first.attach("second", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => undefined });
+  first.attach("first", { onSessionChange: () => undefined, commitActiveDraft: () => "committed" });
+  first.attach("second", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => "committed" });
   const document = createEmptyDocument("Tree");
   first.initialize(document, "source");
   first.history.markChanged();
@@ -35,11 +35,11 @@ test("a shared session commits the old editor before another leaf claims it", ()
   const commits: string[] = [];
   session.attach("left", {
     onSessionChange: () => undefined,
-    commitActiveDraft: () => commits.push("left")
+    commitActiveDraft: () => { commits.push("left"); return "committed"; }
   });
   session.attach("right", {
     onSessionChange: () => undefined,
-    commitActiveDraft: () => commits.push("right")
+    commitActiveDraft: () => { commits.push("right"); return "committed"; }
   });
   session.claimEditor("left");
   session.updateTitleDraft("left", "node", "before", "after");
@@ -52,7 +52,7 @@ test("a shared session commits the old editor before another leaf claims it", ()
 test("registry rekeys a live session when its file is renamed", () => {
   const registry = new MindTreeSessionRegistry();
   const session = registry.acquire("Old.mtn.md");
-  session.attach("view", { onSessionChange: () => undefined, commitActiveDraft: () => undefined });
+  session.attach("view", { onSessionChange: () => undefined, commitActiveDraft: () => "committed" });
   registry.rename("Old.mtn.md", "Folder/New.mtn.md");
 
   assert.equal(registry.get("Old.mtn.md"), undefined);
@@ -107,7 +107,7 @@ test("a deleted file closes the session without a pending-write or conflict lock
   session.updateTitleDraft("view", document.rootId, "Tree", "Draft");
   session.beginWrite("serialized");
   const updates: SharedSessionSnapshot[] = [];
-  session.attach("view", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => undefined });
+  session.attach("view", { onSessionChange: (value) => updates.push(value), commitActiveDraft: () => "committed" });
 
   assert.equal(session.mutationLocked, true);
   assert.equal(session.history.dirty, true);

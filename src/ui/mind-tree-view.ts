@@ -1,3 +1,4 @@
+import { fileTitleFromNode, validateNodeTitle, type TitleCommitResult } from "../format/node-title";
 import {
   FileSystemAdapter,
   normalizePath,
@@ -359,9 +360,8 @@ export class MindTreeView extends TextFileView {
     this.acceptingAssociations = false;
     this.fileAssociations.destroy();
     this.cancelCanvasGestures();
-    // The title textarea is intentionally not part of the document while the
-    // user types. Capture it before destroying DOM and wait for the shared save
-    // queue, otherwise closing a clean-looking leaf can lose the visible draft.
+    // Closing deliberately discards an uncommitted editor; confirmed document
+    // changes still wait for the shared save queue before the view is destroyed.
     await this.flushViewBeforeDetach();
     this.viewClosed = true;
     this.touchGestureController?.destroy();
@@ -464,7 +464,7 @@ export class MindTreeView extends TextFileView {
     this.cancelCanvasGestures();
     this.markerPopover?.close();
     this.fileAssociations.cancelCollection();
-    this.commitVisibleEditorDraft();
+    if (this.commitVisibleEditorDraft() === "rejected") throw new UpdateError("save", this.file?.path);
     if (this.rootEl) this.rootEl.inert = true;
   }
 
@@ -474,7 +474,7 @@ export class MindTreeView extends TextFileView {
     this.checkExternalVersion();
     await this.externalCheckTask;
     if (this.sharedSession?.mutationLocked || this.parseError) throw new UpdateError("busy", this.file?.path);
-    this.commitVisibleEditorDraft();
+    if (this.commitVisibleEditorDraft() === "rejected") throw new UpdateError("save", this.file?.path);
     await this.pendingTitleFileOperation;
     if (this.titleOperationFailures !== this.updateFailureBaseline) throw new UpdateError("save", this.file?.path);
     await this.flushPendingSave();
@@ -564,7 +564,7 @@ export class MindTreeView extends TextFileView {
   }
 
   /**
-   * Commit and durably save before a file switch or normal leaf close. The
+   * Discard the editor and durably save committed changes before detaching. The
    * method is idempotent because Obsidian may call onUnloadFile during onClose.
    */
   private async flushViewBeforeDetach(expectedPath = this.sharedSessionPath): Promise<void> {
@@ -582,7 +582,10 @@ export class MindTreeView extends TextFileView {
       await this.sharedSession.conflict?.settle();
       return;
     }
-    this.commitVisibleEditorDraft();
+    this.editingNodeId = undefined;
+    this.editingDraftValue = "";
+    this.keyboardAvoidanceController?.end();
+    this.sharedSession.releaseEditor(this.sharedParticipantId);
     try {
       await this.pendingTitleFileOperation;
     } catch (error) {
@@ -983,6 +986,7 @@ export class MindTreeView extends TextFileView {
     if (!draftState || !document.nodes[draftState.nodeId]) return document;
     const overlaid = cloneDocument(document);
     const title = draftState.value.replace(/[\r\n]+/g, " ").trim() || t("node.untitled");
+    if (validateNodeTitle(title, document.nodes[draftState.nodeId]!, draftState.nodeId === document.rootId)) return document;
     if (overlaid.nodes[draftState.nodeId]!.title !== title) renameNode(overlaid, draftState.nodeId, title);
     return overlaid;
   }
@@ -1035,7 +1039,7 @@ export class MindTreeView extends TextFileView {
   async flushForDocumentIdentityWrite(expectedPath: string): Promise<void> {
     if (normalizePath(this.file?.path ?? "") !== normalizePath(expectedPath)) return;
     if (this.mutationLocked()) throw new SaveConflictError();
-    this.commitVisibleEditorDraft();
+    if (this.commitVisibleEditorDraft() === "rejected") throw new SaveConflictError();
     await this.pendingTitleFileOperation;
     await this.flushPendingSave();
   }
@@ -1060,6 +1064,11 @@ export class MindTreeView extends TextFileView {
     const title = linkedFileTitle(file.path);
     const root = document.nodes[document.rootId];
     if (!root || (document.title === title && root.title === title)) return false;
+    const plain = fileTitleFromNode(root.title);
+    if (plain === undefined) return false; // Never rewrite legacy formula/code titles merely by opening.
+    try {
+      if (linkedFileTitle(buildLinkedResourcePath(file.path, plain, document.rootId)) === title) return false;
+    } catch { return false; }
     renameNode(document, document.rootId, title);
     return true;
   }
@@ -1166,8 +1175,9 @@ export class MindTreeView extends TextFileView {
   }
 
   undo(): void {
+    if (this.commitVisibleEditorDraft() === "rejected") return;
     if (this.mutationLocked()) return;
-    this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
+    if (this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId) === "rejected") return;
     if (!this.document || !this.documentSession.canUndo) return;
     const layoutAnchor = this.captureLayoutViewportAnchor();
     const previous = this.documentSession.undo(this.document);
@@ -1179,8 +1189,9 @@ export class MindTreeView extends TextFileView {
   }
 
   redo(): void {
+    if (this.commitVisibleEditorDraft() === "rejected") return;
     if (this.mutationLocked()) return;
-    this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
+    if (this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId) === "rejected") return;
     if (!this.document || !this.documentSession.canRedo) return;
     const layoutAnchor = this.captureLayoutViewportAnchor();
     const next = this.documentSession.redo(this.document);
@@ -1421,7 +1432,7 @@ export class MindTreeView extends TextFileView {
     this.touchGestureController = new TouchGestureController(this.canvasEl, {
       sessionToken: () => !this.viewClosed && this.document && !this.parseError ? this.documentSessionToken : undefined,
       prepareGesture: () => {
-        this.commitVisibleEditorDraft();
+        if (this.commitVisibleEditorDraft() === "rejected") return;
         this.app.workspace.setActiveLeaf(this.leaf, { focus: false });
         this.canvasEl.focus({ preventScroll: true });
       },
@@ -1519,8 +1530,8 @@ export class MindTreeView extends TextFileView {
   private async saveFromStatusBar(): Promise<void> {
     if (this.mutationLocked()) return;
     if (!this.document || this.parseError) return;
-    this.commitVisibleEditorDraft();
-    this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
+    if (this.commitVisibleEditorDraft() === "rejected") return;
+    if (this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId) === "rejected") return;
     this.saveButtonBusy = true;
     this.refreshBottomStatusBar();
     try {
@@ -1589,7 +1600,7 @@ export class MindTreeView extends TextFileView {
   private async saveImmediately(): Promise<void> {
     if (this.mutationLocked()) return;
     if (!this.document || this.parseError) return;
-    this.commitVisibleEditorDraft();
+    if (this.commitVisibleEditorDraft() === "rejected") return;
     await this.pendingTitleFileOperation;
     await this.saveFromStatusBar();
   }
@@ -2523,10 +2534,14 @@ export class MindTreeView extends TextFileView {
   }
 
   private async createNoteForNode(nodeId: NodeId): Promise<void> {
+    if (this.commitVisibleEditorDraft() === "rejected") return;
     const target = this.captureAssociationTarget(nodeId);
     if (!target) return;
     const node = this.document!.nodes[nodeId]!;
-    const create = (title: string): Promise<void> => this.fileAssociations.createOnce(`${target.documentSessionToken}:${nodeId}`, async () => {
+    const create = async (source: string): Promise<void> => {
+      const title = fileTitleFromNode(source);
+      if (title === undefined) { new Notice(t("title.codeOrMath")); return; }
+      await this.fileAssociations.createOnce(`${target.documentSessionToken}:${nodeId}`, async () => {
       let created: { file: TFile; reference: FileResourceRef } | undefined;
       try {
         // The optional title dialog may outlive the file or its unlinked node.
@@ -2560,6 +2575,7 @@ export class MindTreeView extends TextFileView {
         new Notice(t("notice.openCreatedFileFailed", { message: error instanceof Error ? error.message : String(error) }));
       }
     });
+    };
     if (node.title.trim()) await create(node.title);
     else new TextPromptModal(this.app, t("modal.createNote.title"), "", t("modal.createNote.placeholder"), t("action.create"), (value) => void create(value)).open();
   }
@@ -2796,18 +2812,24 @@ export class MindTreeView extends TextFileView {
   }
 
   private async enableTitleSync(nodeId: NodeId): Promise<void> {
+    if (this.commitVisibleEditorDraft() === "rejected") return;
     if (this.mutationLocked()) return;
     const node = this.document?.nodes[nodeId];
     if (node?.resource?.type !== "file") return;
     const resourceId = node.resource.resourceId;
+    const title = fileTitleFromNode(node.title);
+    if (title === undefined) { new Notice(t("title.codeOrMath")); return; }
+    const token = this.documentSessionToken;
+    const originalTitle = node.title;
     try {
-      const file = await this.plugin.resources.renameLinkedFile(node.resource, node.title);
+      const file = await this.plugin.resources.renameLinkedFile(node.resource, title);
       const current = this.document?.nodes[nodeId];
-      if (current?.resource?.type !== "file" || current.resource.resourceId !== resourceId) return;
+      if (token !== this.documentSessionToken || current?.resource?.type !== "file" || current.resource.resourceId !== resourceId || current.title !== originalTitle) return;
       this.commit((draft) => {
         const draftNode = getNode(draft, nodeId);
         if (draftNode.resource?.type !== "file" || draftNode.resource.resourceId !== resourceId) return;
         draftNode.resource.pathHint = file.path;
+        draftNode.title = linkedFileTitle(file.path);
         draftNode.titleSync = "bidirectional";
       });
       new Notice(t("notice.syncEnabled"));
@@ -3056,11 +3078,11 @@ export class MindTreeView extends TextFileView {
       );
       // Commit the previous field before changing editingNodeId. Its later blur
       // event becomes harmless because finishEdit also verifies the captured ID.
-      this.finishEdit(previousId, previousInput?.value ?? this.editingOriginalTitle);
+      if (this.finishEdit(previousId, previousInput?.value ?? this.editingDraftValue) === "rejected") return;
     }
     const node = this.document?.nodes[nodeId];
     if (!node) return;
-    this.sharedSession?.claimEditor(this.sharedParticipantId);
+    if (this.sharedSession?.claimEditor(this.sharedParticipantId) === "rejected") return;
     const layoutAnchor = this.captureLayoutViewportAnchor(nodeId);
     this.editingNodeId = nodeId;
     this.editingOriginalTitle = node.title;
@@ -3089,35 +3111,46 @@ export class MindTreeView extends TextFileView {
   }
 
   /** Read the DOM value before a lifecycle operation destroys the textarea. */
-  private commitVisibleEditorDraft(): void {
-    if (this.mutationLocked()) return;
+  private commitVisibleEditorDraft(): TitleCommitResult {
+    if (this.mutationLocked()) return "rejected";
     const nodeId = this.editingNodeId;
-    if (!nodeId) return;
+    if (!nodeId) return "committed";
     const editor = this.nodeLayerEl?.querySelector<HTMLTextAreaElement>(
       `.mtn-node[data-node-id="${CSS.escape(nodeId)}"] .mtn-title-input`
     );
-    this.finishEdit(nodeId, editor?.value ?? this.sharedSession?.draft?.value ?? this.editingOriginalTitle);
+    return this.finishEdit(nodeId, editor?.value ?? this.editingDraftValue);
   }
 
-  private finishEdit(nodeId: NodeId, value: string): void {
-    if (this.mutationLocked()) return;
+  private finishEdit(nodeId: NodeId, value: string): TitleCommitResult {
+    if (this.mutationLocked()) return "rejected";
     const document = this.document;
-    if (this.editingNodeId !== nodeId || !document) return;
+    if (this.editingNodeId !== nodeId || !document) return "committed";
+    const title = value.replace(/[\r\n]+/g, " ").trim() || t("node.untitled");
+    const node = document.nodes[nodeId];
+    if (!node) return "rejected";
+    const error = validateNodeTitle(title, node, nodeId === document.rootId);
+    if (error) {
+      this.updateEditDraft(nodeId, value);
+      new Notice(t(error));
+      // Preserve the actual textarea and its selection when blur attempted a commit.
+      queueMicrotask(() => {
+        if (this.editingNodeId !== nodeId || this.viewClosed) return;
+        this.nodeLayerEl.querySelector<HTMLTextAreaElement>(".mtn-title-input")?.focus({ preventScroll: true });
+      });
+      return "rejected";
+    }
     this.keyboardAvoidanceController?.end();
     this.editingNodeId = undefined;
     this.editingDraftValue = "";
     this.sharedSession?.releaseEditor(this.sharedParticipantId);
     // Empty edits become the visible default title instead of silently deleting
     // the node. This makes repeated Tab/Enter creation predictable.
-    const title = value.replace(/[\r\n]+/g, " ").trim() || t("node.untitled");
-    const node = document.nodes[nodeId];
-    if (!node) return;
     if (title === this.editingOriginalTitle) {
       this.render();
       const dirty = this.documentSession.dirty;
       this.setStatus(dirty ? t("status.unsaved") : t("status.saved"), dirty ? "dirty" : "saved");
       this.sharedSession?.notifyStatus(this.sharedParticipantId);
-      return;
+      return "committed";
     }
     const previousTitle = node.title;
     this.titleRenameNodeIds.add(nodeId);
@@ -3129,6 +3162,7 @@ export class MindTreeView extends TextFileView {
       const reference = updated.resource;
       this.queueTitleRename({ nodeId, value: title, originalTitle: previousTitle }, () => this.renameFileForEditedNode(nodeId, title, previousTitle, reference));
     } else this.titleRenameNodeIds.delete(nodeId);
+    return "committed";
   }
 
   /** Retain unfinished side effects in the frozen journal, never apply them to a new view session. */
@@ -3204,7 +3238,7 @@ export class MindTreeView extends TextFileView {
       // rename; a reload during that event must not restore the old title.
       await this.flushPendingSave();
       if (this.documentSessionToken !== token || this.mutationLocked()) return;
-      const newPath = buildLinkedResourcePath(file.path, title, document.documentId ?? document.rootId);
+      const newPath = buildLinkedResourcePath(file.path, fileTitleFromNode(title) ?? title, document.documentId ?? document.rootId);
       if (newPath !== file.path) await this.app.fileManager.renameFile(file, newPath);
     } catch (error) {
       const currentDocument = this.document;
@@ -3380,8 +3414,9 @@ export class MindTreeView extends TextFileView {
   }
 
   private commit(mutator: (draft: MindTreeDocument) => void, anchorNodeId = this.document?.rootId): void {
+    if (this.commitVisibleEditorDraft() === "rejected") return;
     if (this.mutationLocked()) return;
-    this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId);
+    if (this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId) === "rejected") return;
     if (!this.document || this.parseError) return;
     const layoutAnchor = this.captureLayoutViewportAnchor(anchorNodeId);
     this.document = this.documentSession.execute(this.document, mutator);

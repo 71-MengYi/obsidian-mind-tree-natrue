@@ -1,3 +1,4 @@
+import { nodeTitleMode } from "../format/node-title";
 import { getDepth } from "../domain/tree";
 import { getNodeResourceControls } from "./resource-controls";
 import type {
@@ -166,17 +167,18 @@ export function getNodeSize(
   nodeWrapWidth = DEFAULT_NODE_WRAP_WIDTH,
   horizontalInsets = NODE_HORIZONTAL_INSETS,
   textMeasurer: NodeTextMeasurer = fallbackNodeTextMeasurer,
-  trailingContentHeight = 0
+  trailingContentHeight = 0,
+  mode: "title" | "literal" = "title"
 ): { width: number; height: number } {
   const metrics = getDepthMetrics(depth, textMeasurer);
   const insets = Math.max(NODE_HORIZONTAL_INSETS, horizontalInsets);
   const maximumTextWidth = normalizeNodeWrapWidth(nodeWrapWidth);
-  const measurement = textMeasurer.measure(title, depth, maximumTextWidth);
+  const measurement = textMeasurer.measure(title, depth, maximumTextWidth, mode);
   // Ceil only at the glyph boundary. The former arbitrary width allowance was
   // visible as unused space, especially after strings of narrow glyphs such as 1.
   const desiredTextWidth = Math.min(maximumTextWidth, Math.max(1, measurement.width));
   const width = Math.ceil(desiredTextWidth) + insets;
-  const contentHeight = Math.max(measurement.lines.length * metrics.lineHeight, trailingContentHeight);
+  const contentHeight = Math.max(measurement.height ?? measurement.lines.length * metrics.lineHeight, trailingContentHeight);
   const height = Math.ceil(Math.max(metrics.minHeight, contentHeight + metrics.verticalPadding * 2));
   return { width, height };
 }
@@ -243,7 +245,8 @@ export function getNodeBoxSize(
     nodeWrapWidth,
     NODE_HORIZONTAL_INSETS,
     textMeasurer,
-    getNodeTrailingHeight(node, resourceBadges)
+    getNodeTrailingHeight(node, resourceBadges),
+    node ? nodeTitleMode(node, depth) : "title"
   );
   const trailingWidth = getNodeTrailingWidth(node, resourceBadges);
   const image = node ? imageNodes.resolve(node) : undefined;

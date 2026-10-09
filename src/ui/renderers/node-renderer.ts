@@ -1,3 +1,5 @@
+import { nodeTitleMode, type TitleCommitResult } from "../../format/node-title";
+import { renderRichTitleSvg } from "../rich-title";
 import { setIcon } from "obsidian";
 import {
   getVisibleNodeMarkers
@@ -38,7 +40,7 @@ export interface NodeRenderState {
 }
 
 export interface NodeRenderActions {
-  readonly finishEdit: (nodeId: NodeId, title: string) => void;
+  readonly finishEdit: (nodeId: NodeId, title: string) => TitleCommitResult;
   readonly updateEditDraft: (nodeId: NodeId, title: string) => void;
   readonly cancelEdit: () => void;
   readonly saveImmediately: () => void;
@@ -159,8 +161,17 @@ export class NodeRenderer {
     state: NodeRenderState
   ): void {
     const title = node.title || t("node.untitled");
-    const measurement = state.textMeasurer.measure(title, position.depth, state.nodeWrapWidth);
+    const measurement = state.textMeasurer.measure(title, position.depth, state.nodeWrapWidth, nodeTitleMode(node, position.depth));
     const titleElement = element.createDiv("mtn-node-title");
+    if (measurement.richLines) {
+      const owner = element.ownerDocument;
+      const Parser = owner.defaultView?.DOMParser ?? DOMParser;
+      const svg = new Parser().parseFromString(renderRichTitleSvg(measurement), "image/svg+xml").documentElement;
+      titleElement.classList.add("mtn-rich-title");
+      titleElement.setAttribute("aria-label", measurement.normalizedTitle);
+      titleElement.appendChild(owner.importNode(svg, true));
+      return;
+    }
     for (const line of measurement.lines) {
       titleElement.createSpan({ cls: "mtn-node-title-line", text: line });
     }
@@ -203,7 +214,7 @@ export class NodeRenderer {
       if (event.isComposing) return;
       if (event.key === "Enter" || event.key === "Tab") {
         event.preventDefault(); event.stopPropagation();
-        actions.finishEdit(node.id, input.value);
+        if (actions.finishEdit(node.id, input.value) === "rejected") return;
         actions.focusCanvas();
         actions.saveImmediately();
         return;

@@ -1,3 +1,4 @@
+import { measureRichTitle, type MeasuredTitleLine } from "./rich-title";
 /**
  * Font information that affects title geometry. Keeping it explicit lets the
  * SVG exporter reproduce the same wrapping as the live Obsidian view.
@@ -18,6 +19,8 @@ export interface NodeTextStyle {
 
 export interface NodeTitleMeasurement {
   readonly normalizedTitle: string;
+  readonly height?: number;
+  readonly richLines?: readonly MeasuredTitleLine[];
   readonly lines: readonly string[];
   readonly lineWidths: readonly number[];
   readonly width: number;
@@ -25,7 +28,7 @@ export interface NodeTitleMeasurement {
 }
 
 /** Saved titles and in-progress editor drafts intentionally use different whitespace rules. */
-export type NodeTextMeasureMode = "title" | "draft";
+export type NodeTextMeasureMode = "title" | "draft" | "literal";
 
 /** Layout depends on this small interface instead of browser DOM globals. */
 export interface NodeTextMeasurer {
@@ -71,7 +74,8 @@ function normalizeNodeDraft(title: string): string {
 }
 
 function prepareNodeText(title: string, mode: NodeTextMeasureMode): string {
-  return mode === "draft" ? normalizeNodeDraft(title) : normalizeNodeTitle(title);
+  if (mode === "draft") return normalizeNodeDraft(title);
+  return mode === "title" ? title.replace(/[\r\n]+/g, " ").trim() || "Untitled" : normalizeNodeTitle(title);
 }
 
 export function fallbackNodeTextStyle(depth: number): NodeTextStyle {
@@ -110,7 +114,7 @@ function measureWith(
   measureLine: (value: string) => number,
   mode: NodeTextMeasureMode = "title"
 ): NodeTitleMeasurement {
-  const normalizedTitle = prepareNodeText(title, mode);
+  const normalizedTitle = mode === "draft" ? normalizeNodeDraft(title) : normalizeNodeTitle(title);
   const safeWidth = Math.max(1, maximumWidth);
   const lines: string[] = [];
   const lineWidths: number[] = [];
@@ -164,6 +168,10 @@ export const fallbackNodeTextMeasurer: NodeTextMeasurer = {
   getStyle: fallbackNodeTextStyle,
   measure(title, depth, maximumWidth, mode = "title") {
     const style = fallbackNodeTextStyle(depth);
+    if (mode === "title") {
+      const rich = measureRichTitle(prepareNodeText(title, mode), maximumWidth, style, estimateFallbackTextWidth);
+      if (rich) return rich;
+    }
     return measureWith(
       title,
       depth,
@@ -225,42 +233,30 @@ export class BrowserNodeTextMeasurer implements NodeTextMeasurer {
     mode: NodeTextMeasureMode = "title"
   ): NodeTitleMeasurement {
     const style = this.getStyle(depth);
-    if (!this.context) {
-      return measureWith(
-        title,
-        depth,
-        maximumWidth,
-        style,
-        (line) => estimateFallbackTextWidth(line, style),
-        mode
-      );
-    }
     const normalized = prepareNodeText(title, mode);
     const width = Math.max(1, maximumWidth);
     const key = `${this.styleSignature}\u0000${mode}\u0000${depth <= 0 ? 0 : depth === 1 ? 1 : 2}\u0000${width}\u0000${normalized}`;
     const cached = this.cache.get(key);
     if (cached) return cached;
 
-    const context = this.context;
-    context.font = `${style.fontStyle} ${style.fontWeight} ${style.fontSize}px ${style.fontFamily}`;
-    const nativeLetterSpacing = setCanvasTextProperty(context, "letterSpacing", `${style.letterSpacing}px`);
-    const nativeWordSpacing = setCanvasTextProperty(context, "wordSpacing", `${style.wordSpacing}px`);
-    setCanvasTextProperty(context, "fontKerning", style.fontKerning);
-    setCanvasTextProperty(context, "fontStretch", style.fontStretch);
-    setCanvasTextProperty(context, "fontVariantCaps", style.fontVariantCaps);
-    setCanvasTextProperty(context, "textRendering", style.textRendering);
-    const measurement = measureWith(normalized, depth, width, style, (line) => {
+    const measureText = (line: string, textStyle: NodeTextStyle): number => {
+      const context = this.context;
+      if (!context) return estimateFallbackTextWidth(line, textStyle);
+      context.font = `${textStyle.fontStyle} ${textStyle.fontWeight} ${textStyle.fontSize}px ${textStyle.fontFamily}`;
+      const nativeLetterSpacing = setCanvasTextProperty(context, "letterSpacing", `${textStyle.letterSpacing}px`);
+      const nativeWordSpacing = setCanvasTextProperty(context, "wordSpacing", `${textStyle.wordSpacing}px`);
+      setCanvasTextProperty(context, "fontKerning", textStyle.fontKerning);
+      setCanvasTextProperty(context, "fontStretch", textStyle.fontStretch);
+      setCanvasTextProperty(context, "fontVariantCaps", textStyle.fontVariantCaps);
+      setCanvasTextProperty(context, "textRendering", textStyle.textRendering);
+      let value = context.measureText(line).width;
       const graphemes = splitGraphemes(line);
-      let measuredWidth = context.measureText(line).width;
-      // Recent Obsidian WebViews expose Canvas text spacing directly. Retain a
-      // property-level fallback for older WebViews without double-applying the
-      // spacing that a newer Canvas already included in TextMetrics.width.
-      if (!nativeLetterSpacing) measuredWidth += graphemes.length * style.letterSpacing;
-      if (!nativeWordSpacing) {
-        measuredWidth += graphemes.filter((grapheme) => /\s/u.test(grapheme)).length * style.wordSpacing;
-      }
-      return measuredWidth;
-    }, mode);
+      if (!nativeLetterSpacing) value += graphemes.length * textStyle.letterSpacing;
+      if (!nativeWordSpacing) value += graphemes.filter((g) => /\s/u.test(g)).length * textStyle.wordSpacing;
+      return value;
+    };
+    const rich = mode === "title" ? measureRichTitle(normalized, width, style, measureText) : undefined;
+    const measurement = rich ?? measureWith(normalized, depth, width, style, (line) => measureText(line, style), mode);
     if (this.cache.size >= MAX_MEASUREMENT_CACHE_ENTRIES) {
       const oldest = this.cache.keys().next().value as string | undefined;
       if (oldest !== undefined) this.cache.delete(oldest);
