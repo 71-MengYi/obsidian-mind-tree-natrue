@@ -2,6 +2,7 @@ export type SaveIndicatorState = "saved" | "dirty" | "error";
 
 export interface TopToolbarState {
   readonly zoom: number;
+  readonly hasSelection: boolean;
 }
 
 export interface BottomStatusBarState {

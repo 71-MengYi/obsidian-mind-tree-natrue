@@ -415,6 +415,7 @@ export class MindTreeView extends TextFileView {
     this.rootEl?.addClass("is-initializing-viewport");
     this.selectedIds.clear();
     this.primarySelectedId = undefined;
+    this.refreshTopToolbar();
     this.editingNodeId = undefined;
     this.editingDraftValue = "";
     this.attachSharedSession(file.path);
@@ -1031,6 +1032,7 @@ export class MindTreeView extends TextFileView {
     this.scannedFilePath = undefined;
     this.saveState = "saved";
     if (this.nodeLayerEl) this.nodeLayerEl.empty();
+    this.refreshTopToolbar();
   }
 
   getDocument(): MindTreeDocument | undefined { return this.document; }
@@ -1699,6 +1701,7 @@ export class MindTreeView extends TextFileView {
 
   private render(layoutAnchor?: LayoutViewportAnchor): void {
     if (!this.rootEl) return;
+    this.refreshTopToolbar();
     if (this.syncVersionPreview()) return;
     if (this.parseError) {
       this.nodeLayerEl.empty();
@@ -1779,7 +1782,6 @@ export class MindTreeView extends TextFileView {
       editorReady: (editor) => this.keyboardAvoidanceController?.watch(editor)
     });
     this.applyViewport();
-    this.shell?.toolbar.update({ zoom: this.viewport.zoom });
     this.refreshBottomStatusBar();
   }
 
@@ -3517,7 +3519,7 @@ export class MindTreeView extends TextFileView {
       this.worldEl.style.removeProperty("zoom");
       this.worldEl.style.transform = `scale(${this.viewport.zoom})`;
     }
-    this.shell?.toolbar.update({ zoom: this.viewport.zoom });
+    this.refreshTopToolbar();
   }
 
   /** Coalesce touch samples without delaying the authoritative view-only position. */
@@ -3588,11 +3590,20 @@ export class MindTreeView extends TextFileView {
   }
 
   private refreshSelectionStyles(): void {
+    this.refreshTopToolbar();
     if (!this.nodeLayerEl) return;
     for (const element of this.nodeLayerEl.querySelectorAll<HTMLElement>(".mtn-node")) {
       const nodeId = element.dataset.nodeId;
       element.toggleClass("is-selected", Boolean(nodeId && this.selectedIds.has(nodeId)));
     }
+  }
+
+  private refreshTopToolbar(): void {
+    const nodeId = this.primarySelectedId;
+    this.shell?.toolbar.update({
+      zoom: this.viewport.zoom,
+      hasSelection: Boolean(!this.parseError && nodeId && this.selectedIds.has(nodeId) && this.document?.nodes[nodeId])
+    });
   }
 
   private pruneSelection(): void {

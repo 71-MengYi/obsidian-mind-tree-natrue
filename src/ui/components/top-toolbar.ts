@@ -31,10 +31,11 @@ export interface TopToolbarActions {
   readonly showExportMenu: (event: MouseEvent) => void;
 }
 
-/** Stateless toolbar controls plus the one live zoom label. */
+/** Toolbar availability and zoom reflect the current view state. */
 export class TopToolbar extends DisposableUiObject {
   readonly element: HTMLElement;
   private readonly zoomElement: HTMLElement;
+  private readonly selectionButtons: HTMLButtonElement[] = [];
 
   constructor(parent: HTMLElement, labels: TopToolbarLabels, actions: TopToolbarActions) {
     super();
@@ -45,7 +46,7 @@ export class TopToolbar extends DisposableUiObject {
     this.addButton("tags", labels.markers, (event) => {
       const anchor = event.currentTarget as HTMLElement | null;
       if (anchor) actions.showMarkers(anchor);
-    });
+    }, true);
     this.addSeparator();
     this.addButton("maximize", labels.fit, () => actions.fit());
     this.addButton("minus", labels.zoomOut, () => actions.zoomOut());
@@ -54,20 +55,25 @@ export class TopToolbar extends DisposableUiObject {
     this.addButton("plus", labels.zoomIn, () => actions.zoomIn());
     this.addButton("search", labels.search, () => actions.search());
     this.addSeparator();
-    this.addButton("copy", labels.copy, actions.showCopyMenu);
+    this.addButton("copy", labels.copy, actions.showCopyMenu, true);
     this.addButton("upload", labels.importText, () => actions.importText());
-    this.addButton("download", labels.exportTree, actions.showExportMenu);
+    this.addButton("download", labels.exportTree, actions.showExportMenu, true);
   }
 
   update(state: TopToolbarState): void {
     this.zoomElement.setText(`${Math.round(state.zoom * 100)}%`);
+    for (const button of this.selectionButtons) button.disabled = !state.hasSelection;
   }
 
-  private addButton(icon: string, label: string, action: (event: MouseEvent) => void): void {
+  private addButton(icon: string, label: string, action: (event: MouseEvent) => void, requiresSelection = false): void {
     const button = this.element.createEl("button", {
       cls: "clickable-icon mtn-toolbar-button",
       attr: { type: "button", "aria-label": label }
     });
+    if (requiresSelection) {
+      button.disabled = true;
+      this.selectionButtons.push(button);
+    }
     setIcon(button, icon);
     this.listen(button, "click", action as EventListener);
   }

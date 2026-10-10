@@ -105,6 +105,8 @@ Once linked, node titles and file names stay in sync both ways. If you don't wan
 
 ### 4. Import and export
 
+The toolbar's **Node markers, Copy, and Export** buttons are disabled when no node is selected and become available as soon as you select a node.
+
 - **Import text** in the toolbar: paste list/indented text to rebuild hierarchy, or switch to the *multi-level headings* rule for nested lists. Both recognize Wiki links, Markdown note/attachment links, and HTTP/HTTPS URLs — a single link per line keeps its alias, and multiple links become separate sibling nodes in order.
 - **Export** in the toolbar: export the selected branch or the whole tree as a PNG.
 
