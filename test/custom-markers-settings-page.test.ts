@@ -482,26 +482,34 @@ test("picking an emoji appends it and the tag Add button appends the cleaned val
 
 test("the search field filters the emoji list live and reports the result count", () => {
   const h = fixture();
-  const all = h.pickerItems().length;
-  assert.ok(all > 0, "the picker starts with a default list");
-  assert.match(h.pickerStatus().text, new RegExp(String(all)));
+  // The whole catalogue is in the DOM, so browsing works without a query.
+  const all = h.pickerItems();
+  assert.equal(all.length, EMOJI_CATALOG.length);
+  assert.equal(all.filter((item) => item.hidden).length, 0, "nothing is hidden before a search");
+  assert.equal(h.pickerStatus().text,
+    translate("settings.customMarkers.emoji.total", "en", { count: EMOJI_CATALOG.length }));
   assert.equal(h.pickerEmpty().hidden, true);
+  // The last catalogue entry is reachable by scrolling, not only by searching.
+  assert.equal(all.at(-1)!.attributes.get("data-emoji"), EMOJI_CATALOG.at(-1)!.g);
 
   h.search("中国");
-  const filtered = h.pickerItems();
-  assert.ok(filtered.length > 0 && filtered.length < all, "the search narrows the list");
-  assert.equal(filtered[0]!.attributes.get("data-emoji"), "🇨🇳");
-  assert.equal(filtered[0]!.getAttribute("aria-label"), "flag China");
+  const visible = h.pickerItems().filter((item) => !item.hidden);
+  assert.equal(visible.length, 1);
+  assert.equal(visible[0]!.attributes.get("data-emoji"), "🇨🇳");
+  assert.equal(visible[0]!.getAttribute("aria-label"), "flag China");
+  assert.equal(h.pickerStatus().text,
+    translate("settings.customMarkers.emoji.showing", "en", { shown: 1, total: 1 }));
   assert.equal(h.pickerEmpty().hidden, true);
 
   h.search("zzzzzz");
-  assert.deepEqual(h.pickerItems(), []);
+  assert.equal(h.pickerItems().filter((item) => !item.hidden).length, 0);
   assert.equal(h.pickerEmpty().hidden, false);
   assert.equal(h.pickerEmpty().text,
     translate("settings.customMarkers.emoji.noResults", "en", { query: "zzzzzz" }));
 
   h.search("");
-  assert.equal(h.pickerItems().length, all, "clearing the query restores the default list");
+  assert.equal(h.pickerItems().filter((item) => !item.hidden).length, EMOJI_CATALOG.length,
+    "clearing the query restores the full list");
   assert.equal(h.pickerEmpty().hidden, true);
 });
 

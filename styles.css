@@ -2018,6 +2018,11 @@
   background: var(--background-modifier-hover);
 }
 
+/* The whole catalogue stays in the DOM so an empty query can show all of it;
+   filtering only toggles this attribute, which avoids rebuilding 1.3k buttons
+   on every keystroke. `display: flex` above would otherwise win over it. */
+.mtn-emoji-picker-item[hidden] { display: none; }
+
 .mtn-emoji-picker-item:focus-visible {
   outline: 2px solid var(--interactive-accent);
   outline-offset: -2px;

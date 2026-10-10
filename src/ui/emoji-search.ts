@@ -69,17 +69,6 @@ const HAYSTACK: readonly string[] = EMOJI_CATALOG.map((entry) => {
   return `${entry.g}\u0000${name}\u0000${wordPrefixes(name)}\u0000${entry.k}\u0000${aliasHaystack(entry)}`;
 });
 
-/**
- * Upper bound on rendered results. The picker is a scrollable grid, and a
- * thousand DOM buttons would make every keystroke reflow the settings pane;
- * 160 keeps a full screen of matches scrollable. Search is how a user reaches
- * anything beyond this slice.
- */
-export const EMOJI_PICKER_RESULT_LIMIT = 160;
-
-/** How many entries the popular list shows before any search input. */
-export const EMOJI_PICKER_DEFAULT_LIMIT = 120;
-
 /** Fold full-width characters and case so `ＡＢ` and `ab` match the same entry. */
 function normalizeQuery(value: string): string {
   return value.normalize("NFKC").trim().toLowerCase();
@@ -87,21 +76,22 @@ function normalizeQuery(value: string): string {
 
 /**
  * Entries matching every token of `query`, in catalogue order.
- * An empty or whitespace-only query returns the leading slice of the catalogue,
- * which the picker shows as the "popular" list.
+ * An empty or whitespace-only query returns the **whole** catalogue, because the
+ * picker is the browsing surface: a truncated "popular" list would hide entries
+ * the user cannot guess a keyword for.
  */
 export function searchEmoji(query: string): readonly EmojiCatalogEntry[] {
   const tokens = normalizeQuery(query).split(/\s+/).filter(Boolean);
-  const limit = tokens.length === 0 ? EMOJI_PICKER_DEFAULT_LIMIT : EMOJI_PICKER_RESULT_LIMIT;
+  if (tokens.length === 0) return EMOJI_CATALOG;
   const result: EmojiCatalogEntry[] = [];
-  for (let index = 0; index < EMOJI_CATALOG.length && result.length < limit; index += 1) {
+  for (let index = 0; index < EMOJI_CATALOG.length; index += 1) {
     const haystack = HAYSTACK[index]!;
     if (tokens.every((token) => haystack.includes(token))) result.push(EMOJI_CATALOG[index]!);
   }
   return result;
 }
 
-/** Total number of entries a query matches, ignoring the render limit. */
+/** How many entries a query matches. Exposed so the picker can label the list. */
 export function countEmojiMatches(query: string): number {
   const tokens = normalizeQuery(query).split(/\s+/).filter(Boolean);
   if (tokens.length === 0) return EMOJI_CATALOG.length;

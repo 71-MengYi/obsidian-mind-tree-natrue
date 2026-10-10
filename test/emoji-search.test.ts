@@ -5,8 +5,6 @@ import { EMOJI_CATALOG } from "../src/ui/emoji-data";
 import {
   countEmojiMatches,
   EMOJI_CATALOG_SIZE,
-  EMOJI_PICKER_DEFAULT_LIMIT,
-  EMOJI_PICKER_RESULT_LIMIT,
   searchEmoji
 } from "../src/ui/emoji-search";
 
@@ -30,10 +28,13 @@ test("every catalogue entry is exactly one emoji and carries a searchable name",
   assert.ok(EMOJI_CATALOG_SIZE > 1_000, "the catalogue should cover everyday emoji");
 });
 
-test("an empty query returns the popular head of the catalogue", () => {
-  assert.equal(searchEmoji("").length, EMOJI_PICKER_DEFAULT_LIMIT);
-  assert.equal(searchEmoji("   ").length, EMOJI_PICKER_DEFAULT_LIMIT);
+test("an empty query returns the entire catalogue so nothing is hidden", () => {
+  assert.equal(searchEmoji("").length, EMOJI_CATALOG_SIZE);
+  assert.equal(searchEmoji("   ").length, EMOJI_CATALOG_SIZE);
   assert.equal(searchEmoji("")[0]!.n, "grinning face");
+  // The last entry is reachable without searching, which is the point of the
+  // full list: a user must be able to browse to anything.
+  assert.equal(searchEmoji("").at(-1)!.g, EMOJI_CATALOG.at(-1)!.g);
   assert.equal(countEmojiMatches(""), EMOJI_CATALOG_SIZE);
 });
 
@@ -70,12 +71,12 @@ test("a query with no match returns nothing and reports zero", () => {
   assert.deepEqual(searchEmoji("🔥 说明"), []);
 });
 
-test("results are capped so typing stays cheap, and the count is exact", () => {
-  // `flag` matches every country, far more than one screen; the list must clip.
+test("every match is returned, including queries that hit most of the catalogue", () => {
+  // `flag` matches every country flag; the list must not be truncated, because
+  // a hidden result would look like a missing emoji.
   const matches = countEmojiMatches("flag");
-  assert.ok(matches > EMOJI_PICKER_RESULT_LIMIT, "the query matches more than the cap");
-  assert.equal(searchEmoji("flag").length, EMOJI_PICKER_RESULT_LIMIT);
-  // Every returned entry really matches the query.
+  assert.ok(matches > 100, "the query matches a lot of entries");
+  assert.equal(searchEmoji("flag").length, matches);
   for (const entry of searchEmoji("flag")) {
     assert.ok(entry.n.toLowerCase().includes("flag") || entry.k.includes("旗"), entry.n);
   }

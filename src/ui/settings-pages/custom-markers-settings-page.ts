@@ -14,6 +14,7 @@ import {
   type CustomMarkerValidationErrorCode
 } from "../../domain/custom-markers";
 import { t, type TranslationKey } from "../../i18n";
+import { EMOJI_CATALOG } from "../emoji-data";
 import { countEmojiMatches, searchEmoji } from "../emoji-search";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
 
@@ -327,34 +328,22 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
     };
 
     /**
-     * Render the emoji picker: a scrollable grid of catalogue entries filtered
-     * by the search box. Entries that are already added stay visible but
-     * disabled, so the palette doubles as the current state.
+     * Render the emoji picker: a scrollable grid of the whole catalogue,
+     * narrowed by the search box. Entries that are already added stay visible
+     * but disabled, so the palette doubles as the current state.
      */
     const renderPicker = (): void => {
       if (!pickerList || !pickerEmpty || !pickerStatus) return;
       const query = input.value.trim();
-      const entries = searchEmoji(query);
       const added = new Set(definitions().map((definition) => definition.value));
       pickerList.empty();
-      pickerEmpty.hidden = entries.length > 0;
-      pickerEmpty.toggleClass("is-visible", entries.length === 0);
-      pickerEmpty.setText(entries.length === 0
-        ? t("settings.customMarkers.emoji.noResults", { query })
-        : "");
-      pickerStatus.setText(t("settings.customMarkers.emoji.showing", {
-        shown: entries.length,
-        total: countEmojiMatches(query)
-      }));
-      for (const entry of entries) {
-        const alreadyAdded = added.has(entry.g);
+      for (const entry of EMOJI_CATALOG) {
         const item = pickerList.createEl("button", {
           cls: "mtn-emoji-picker-item",
           text: entry.g,
           attr: { type: "button", "data-emoji": entry.g, "aria-label": entry.n }
         });
-        item.disabled = alreadyAdded;
-        if (alreadyAdded) markPickerItemAdded(item, entry.n);
+        if (added.has(entry.g)) markPickerItemAdded(item, entry.n);
         item.addEventListener("click", (event) => {
           event.preventDefault();
           if (!addValue(entry.g)) return;
@@ -369,6 +358,33 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
           input.focus();
         });
       }
+      applyPickerFilter();
+    };
+
+    /**
+     * Narrow the already-built list to the current query.
+     *
+     * The DOM is built once and only visibility toggles afterwards: rebuilding
+     * 1.3k buttons on every keystroke would make typing visibly laggy, and the
+     * whole catalogue has to stay in the DOM so an empty query can show all of
+     * it without a second build pass.
+     */
+    const applyPickerFilter = (): void => {
+      if (!pickerList || !pickerEmpty || !pickerStatus) return;
+      const query = input.value.trim();
+      const visible = new Set(searchEmoji(query).map((entry) => entry.g));
+      for (const item of [...pickerList.children] as HTMLElement[]) {
+        item.hidden = !visible.has(item.getAttribute("data-emoji") ?? "");
+      }
+      const shown = visible.size;
+      pickerEmpty.hidden = shown > 0;
+      pickerEmpty.toggleClass("is-visible", shown === 0);
+      pickerEmpty.setText(shown === 0
+        ? t("settings.customMarkers.emoji.noResults", { query })
+        : "");
+      pickerStatus.setText(query.length === 0
+        ? t("settings.customMarkers.emoji.total", { count: countEmojiMatches("") })
+        : t("settings.customMarkers.emoji.showing", { shown, total: countEmojiMatches(query) }));
     };
 
     /**
@@ -435,13 +451,13 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
     });
 
     if (kind === "emoji") {
-      // Live filtering: every keystroke re-runs the search over the 1.3k-entry
-      // catalogue, which is a linear scan with a precomputed haystack.
+      // Live filtering: each keystroke only toggles visibility over the list
+      // that was already built, so typing stays responsive at 1.3k entries.
       input.addEventListener("input", () => {
         hideError();
-        renderPicker();
+        applyPickerFilter();
       });
-      input.addEventListener("search", () => renderPicker());
+      input.addEventListener("search", () => applyPickerFilter());
     } else {
       addButton?.addEventListener("click", (event) => {
         event.preventDefault();
