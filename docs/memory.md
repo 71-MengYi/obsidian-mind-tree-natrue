@@ -27,10 +27,11 @@
 - 用例数从基线 539 增至 618；其中 3 条既有断言的语义随需求更新（`markers.test.ts` 的 emoji 值现被接受、`resource-badges.test.ts` 的几何多了 `markers` 字段、两处「整表 64」改为「每组 64」），均已同步需求文案，不是放宽。
 
 **未完成 / 建议下一步**
-
 - 未在真实 Obsidian 内做视觉验收（仓库无浏览器环境）：建议人工确认 emoji 网格、悬浮 ×、拖拽落点高亮、文字 tag 在节点上的观感。
 - 移动端拖拽排序未验证：tile 已设 `touch-action: none`，但 HTML5 DnD 在触摸端不可用；如需移动端排序，应改为 pointer events 实现（`Alt+←/→` 键盘路径已可用）。
 - `aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"` 已加在 tile 上，未做屏幕阅读器实测。
+
+**后续修复（同日）**：Emoji 组一开始只校验长度，导致可以输入文字。现为「恰好一个 Emoji 字形」的硬规则（`isSingleEmojiValue`：`Intl.Segmenter` 按字素簇计数 + `\p{Extended_Pictographic}` / 区域指示符对判定），错误码 `not-emoji` → `settings.customMarkers.error.notEmoji`。两个必须记住的坑：① `cleanCustomMarkerValue(value, kind)` 现在按 kind 选择不可见字符表——Emoji 组必须**保留 U+200D**，否则 `👨‍👩‍👧‍👦` 会被拆成四个人；② 校验顺序是「超长 → 不可见字符 → 空 → 单 Emoji」，中途一次改动曾把 `\u200B` 判成 empty、family emoji 判成 not-emoji，测试已钉住。
 
 ## 2026-10-10 · 无选择时禁用节点工具栏操作（`fix`）
 

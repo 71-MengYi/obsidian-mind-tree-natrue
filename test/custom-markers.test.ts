@@ -70,30 +70,59 @@ test("only pictographic values are reported as emoji candidates", () => {
 test("validation reports empty for input that would render nothing", () => {
   assert.deepEqual(validateCustomMarkerValue("emoji", "", []), { ok: false, code: "empty" });
   assert.deepEqual(validateCustomMarkerValue("tag", "   ", []), { ok: false, code: "empty" });
-  assert.deepEqual(validateCustomMarkerValue("tag", "\u200B", []), { ok: false, code: "empty" });
+  // Typing only invisible characters is reported as unsafe rather than empty:
+  // the user did enter something, it just cannot be displayed.
+  assert.deepEqual(validateCustomMarkerValue("tag", "\u200B", []), { ok: false, code: "unsafe" });
   assert.deepEqual(validateCustomMarkerValue("emoji", "🔥", []), { ok: true, code: "ok" });
   assert.deepEqual(validateCustomMarkerValue("tag", "绘图", []), { ok: true, code: "ok" });
 });
 
-test("validation counts code points so surrogate pairs never shrink the limit", () => {
+test("validation keeps the code-point limit that only text tags can reach", () => {
+  // A single emoji is accepted no matter how many code points its cluster uses.
   assert.deepEqual(
-    validateCustomMarkerValue("emoji", "🔥".repeat(MAX_CUSTOM_EMOJI_LENGTH), []),
+    validateCustomMarkerValue("emoji", "👨‍👩‍👧‍👦", []),
     { ok: true, code: "ok" }
   );
-  assert.deepEqual(
-    validateCustomMarkerValue("emoji", "🔥".repeat(MAX_CUSTOM_EMOJI_LENGTH + 1), []),
-    { ok: false, code: "too-long" }
-  );
+  // Only text tags can exceed their cap, because an emoji group value must be
+  // one glyph and is rejected as `not-emoji` long before the cap matters.
   assert.deepEqual(
     validateCustomMarkerValue("tag", "绘".repeat(MAX_CUSTOM_TAG_LENGTH), []),
     { ok: true, code: "ok" }
   );
+  // Text tags also reach `too-long`: the whole group's cap is real for them.
   assert.deepEqual(
     validateCustomMarkerValue("tag", "绘".repeat(MAX_CUSTOM_TAG_LENGTH + 1), []),
     { ok: false, code: "too-long" }
   );
-  // 16 astral emoji are 32 UTF-16 units but only 16 code points.
+  // The emoji cap counts code points, not UTF-16 units: 16 astral emoji are 32
+  // units, so the same cluster budget must not be halved by the surrogate pairs.
   assert.equal("🔥".repeat(MAX_CUSTOM_EMOJI_LENGTH).length, 32);
+  assert.equal(Array.from("🔥".repeat(MAX_CUSTOM_EMOJI_LENGTH)).length, MAX_CUSTOM_EMOJI_LENGTH);
+});
+
+test("the Emoji group accepts exactly one emoji and rejects text or several glyphs", () => {
+  // ZWJ sequences, skin tones, flags, keycaps and a bare text-presentation
+  // glyph are all one grapheme, so all of them are valid single emoji.
+  for (const value of ["🔥", "⭐", "✅", "🇨🇳", "👍🏽", "❤️", "☺️", "👨‍👩‍👧‍👦", "🔥 ", "❤"]) {
+    assert.deepEqual(validateCustomMarkerValue("emoji", value, []), { ok: true, code: "ok" }, JSON.stringify(value));
+  }
+  for (const value of ["绘图", "abc", "v2", "🔥🔥", "a🔥", "1", "🔥 说明", "note", "🔥🔥🔥"]) {
+    assert.deepEqual(validateCustomMarkerValue("emoji", value, []), { ok: false, code: "not-emoji" }, JSON.stringify(value));
+  }
+  // A hidden character is still reported as unsafe, not as "not an emoji".
+  assert.deepEqual(
+    validateCustomMarkerValue("emoji", "🔥\u200B", []),
+    { ok: false, code: "unsafe" }
+  );
+  // The same strings stay valid in the text tag group: only Emoji is strict.
+  for (const value of ["绘图", "abc", "1"]) {
+    assert.deepEqual(validateCustomMarkerValue("tag", value, []), { ok: true, code: "ok" }, JSON.stringify(value));
+  }
+  // "not an emoji" wins over "duplicate" so the message names the real problem.
+  assert.deepEqual(
+    validateCustomMarkerValue("emoji", "绘图", ["绘图"]),
+    { ok: false, code: "not-emoji" }
+  );
 });
 
 test("validation rejects invisible, control and bidi characters as unsafe", () => {
@@ -309,30 +338,34 @@ test("normalizing keeps valid entries in order, cleans values and rebuilds unsaf
   for (const item of normalized) assert.equal(isSafeCustomMarkerId(item.id), true);
 });
 
-test("normalizing drops duplicate values after cleaning and keeps the first entry", () => {
+test("normalizing drops duplicate values after cleaning, keeps the first entry and rejects Emoji text", () => {
   const normalized = normalizeCustomMarkerDefinitions([
     definition("first", "tag", "绘图"),
     definition("second", "tag", "绘\u200B图"),
     definition("third", "tag", " 绘图 "),
-    definition("same-value-other-kind", "emoji", "绘图")
+    // Same text in the other group is a different value, not a duplicate.
+    definition("same-value-other-kind", "tag", "绘图"),
+    definition("emoji-as-text", "emoji", "绘图"),
+    definition("emoji-ok", "emoji", "🔥")
   ]);
   assert.deepEqual(normalized.map((item) => [item.id, item.kind, item.value]), [
     ["first", "tag", "绘图"],
-    ["same-value-other-kind", "emoji", "绘图"]
+    ["emoji-ok", "emoji", "🔥"]
   ]);
 });
 
-test("normalizing keeps only the first 64 entries", () => {
+test("normalizing keeps only the first 64 entries of a group", () => {
   const entries: unknown[] = [];
   for (let index = 0; index < MAX_CUSTOM_MARKER_ENTRIES; index += 1) {
-    entries.push(definition(`id-${index}`, "emoji", `value-${index}`));
+    entries.push(definition(`id-${index}`, "tag", `tag-${index}`));
   }
-  entries.push(definition("extra", "emoji", "value-extra"));
+  entries.push(definition("extra", "tag", "tag-extra"));
 
   const normalized = normalizeCustomMarkerDefinitions(entries);
   assert.equal(normalized.length, MAX_CUSTOM_MARKER_ENTRIES);
-  assert.equal(normalized[0]?.value, "value-0");
-  assert.equal(normalized.at(-1)?.value, `value-${MAX_CUSTOM_MARKER_ENTRIES - 1}`);
+  assert.equal(normalized[0]?.value, "tag-0");
+  assert.equal(normalized.at(-1)?.value, `tag-${MAX_CUSTOM_MARKER_ENTRIES - 1}`);
+  assert.equal(normalized.some((item) => item.id === "extra"), false);
 });
 
 test("a full group never consumes the other group's budget while loading", () => {
@@ -344,21 +377,21 @@ test("a full group never consumes the other group's budget while loading", () =>
     { id: "late", kind: "emoji", value: "🔥" }
   ]);
 
-  // Sixty-four emoji plus sixty-four tags is a valid full registry.
+  // Four distinct emoji plus a full tag list is a valid registry: both groups
+  // keep their own budget of MAX_CUSTOM_MARKER_ENTRIES.
   const full = [
-    ...Array.from({ length: MAX_CUSTOM_MARKER_ENTRIES }, (_unused, index) =>
-      definition(`emoji-${index}`, "emoji", `e${index}`)),
+    ...["🔥", "🎨", "⭐", "✅"].map((value, index) => definition(`emoji-${index}`, "emoji", value)),
     ...Array.from({ length: MAX_CUSTOM_MARKER_ENTRIES }, (_unused, index) =>
       definition(`tag-${index}`, "tag", `t${index}`))
   ];
   const normalized = normalizeCustomMarkerDefinitions(full);
-  assert.equal(normalized.length, MAX_CUSTOM_MARKER_ENTRIES * 2);
-  assert.equal(normalized.filter((entry) => entry.kind === "emoji").length, MAX_CUSTOM_MARKER_ENTRIES);
+  assert.equal(normalized.filter((entry) => entry.kind === "emoji").length, 4);
   assert.equal(normalized.filter((entry) => entry.kind === "tag").length, MAX_CUSTOM_MARKER_ENTRIES);
 
-  // One entry past a group's ceiling is dropped, and the other group survives.
-  const overflow = [...full, definition("emoji-extra", "emoji", "e-extra")];
+  // One entry past the tag group's ceiling is dropped, and Emoji still survives.
+  const overflow = [...full, definition("tag-extra", "tag", "t-extra")];
   const trimmed = normalizeCustomMarkerDefinitions(overflow);
-  assert.equal(trimmed.length, MAX_CUSTOM_MARKER_ENTRIES * 2);
-  assert.equal(trimmed.some((entry) => entry.id === "emoji-extra"), false);
+  assert.equal(trimmed.some((entry) => entry.id === "tag-extra"), false);
+  assert.equal(trimmed.filter((entry) => entry.kind === "tag").length, MAX_CUSTOM_MARKER_ENTRIES);
+  assert.equal(trimmed.filter((entry) => entry.kind === "emoji").length, 4);
 });

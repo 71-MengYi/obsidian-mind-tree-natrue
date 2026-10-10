@@ -30,6 +30,11 @@ export interface CustomMarkerDefinition {
  * the next `data.json` load.
  */
 export const MAX_CUSTOM_MARKER_ENTRIES = 64;
+/**
+ * Emoji entries are a single glyph, so this is the longest code point sequence a
+ * legitimate cluster can need (family ZWJ sequences and skin-tone modifiers
+ * reach double digits) rather than a free-text budget.
+ */
 export const MAX_CUSTOM_EMOJI_LENGTH = 16;
 export const MAX_CUSTOM_TAG_LENGTH = 24;
 export const MAX_CUSTOM_MARKER_ID_LENGTH = 64;
@@ -41,15 +46,24 @@ export const MAX_CUSTOM_MARKER_ID_LENGTH = 64;
  * points are deliberately allowed: emoji outside the BMP require them.
  */
 const DANGEROUS_MARKER_PATTERN = /[\u0000-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u;
+/**
+ * The same list without the zero-width joiner, which is a legitimate part of
+ * emoji ZWJ sequences such as 👨‍👩‍👧‍👦. Text tags keep the stricter list: a joiner
+ * there only hides characters between visible words.
+ */
+const DANGEROUS_EMOJI_PATTERN = /[\u0000-\u001F\u007F-\u009F\u200B\u200C\u200E\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/u;
 /** Any pictographic character makes the value a candidate emoji group value. */
 const PICTOGRAPHIC_PATTERN = /\p{Extended_Pictographic}/u;
+/** A regional indicator pair is a flag; regional indicators are not pictographic. */
+const FLAG_PATTERN = /\p{Regional_Indicator}{2}/u;
 
 export type CustomMarkerValidationErrorCode =
   | "empty"
   | "too-long"
   | "unsafe"
   | "duplicate"
-  | "limit";
+  | "limit"
+  | "not-emoji";
 
 export interface CustomMarkerValidation {
   readonly ok: boolean;
@@ -60,10 +74,13 @@ export interface CustomMarkerValidation {
 /**
  * Strip invisible characters and collapse whitespace. Called before saving and
  * before comparing, so `"  绘图  "` and `"绘图"` can never both be stored.
+ * `kind` selects the invisible-character list: the Emoji group keeps the
+ * zero-width joiner, because removing it would split 👨‍👩‍👧‍👦 into four people.
  */
-export function cleanCustomMarkerValue(value: string): string {
+export function cleanCustomMarkerValue(value: string, kind: CustomMarkerKind = "tag"): string {
+  const pattern = kind === "emoji" ? DANGEROUS_EMOJI_PATTERN : DANGEROUS_MARKER_PATTERN;
   return value
-    .replace(new RegExp(DANGEROUS_MARKER_PATTERN.source, "gu"), "")
+    .replace(new RegExp(pattern.source, "gu"), "")
     .replace(/\s+/gu, " ")
     .trim();
 }
@@ -72,12 +89,35 @@ export function customMarkerMaxLength(kind: CustomMarkerKind): number {
   return kind === "emoji" ? MAX_CUSTOM_EMOJI_LENGTH : MAX_CUSTOM_TAG_LENGTH;
 }
 
+/**
+ * One emoji and nothing else.
+ *
+ * The Emoji group is a grid of single square glyphs, so free text must never be
+ * accepted there (that is what the text tag group is for). A value is a single
+ * emoji only when it is exactly one grapheme cluster *and* one of:
+ * - contains an extended pictographic character (covers variation selectors,
+ *   skin-tone modifiers, ZWJ sequences and keycaps such as `1️⃣`);
+ * - is a regional indicator pair, which is how flags are encoded.
+/**
+ * Combining marks and other non-emoji graphemes therefore fail this test, and
+ * so does any multi-character text. The cleaned value is tested, so trailing
+ * whitespace cannot turn one emoji into a "valid" two-cluster value.
+ * Grapheme segmentation needs `Intl.Segmenter`, which Obsidian's desktop/mobile
+ * runtime and Node 20 provide.
+ */
+export function isSingleEmojiValue(value: string): boolean {
+  const graphemes = [...new Intl.Segmenter("en", { granularity: "grapheme" }).segment(value)];
+  if (graphemes.length !== 1) return false;
+  return PICTOGRAPHIC_PATTERN.test(value) || FLAG_PATTERN.test(value);
+}
+
+/** Any pictographic character; the loose check used before the strict rule. */
 export function isEmojiMarkerValue(value: string): boolean {
   return PICTOGRAPHIC_PATTERN.test(value);
 }
 
-export function hasDangerousMarkerCharacter(value: string): boolean {
-  return DANGEROUS_MARKER_PATTERN.test(value);
+export function hasDangerousMarkerCharacter(value: string, kind: CustomMarkerKind = "tag"): boolean {
+  return (kind === "emoji" ? DANGEROUS_EMOJI_PATTERN : DANGEROUS_MARKER_PATTERN).test(value);
 }
 
 /**
@@ -90,14 +130,22 @@ export function validateCustomMarkerValue(
   value: string,
   existing: readonly string[]
 ): CustomMarkerValidation {
-  const cleaned = cleanCustomMarkerValue(value);
-  if (cleaned.length === 0) return { ok: false, code: "empty" };
-  // Measure the typed value: invisible characters must not buy extra room.
+  const cleaned = cleanCustomMarkerValue(value, kind);
+  // Measure the typed value first: invisible characters must not buy extra room,
+  // and a length rejection is more actionable than the character-level one.
   if (Array.from(value.trim()).length > customMarkerMaxLength(kind)) {
     return { ok: false, code: "too-long" };
   }
-  if (hasDangerousMarkerCharacter(value)) return { ok: false, code: "unsafe" };
-  if (existing.some((candidate) => cleanCustomMarkerValue(candidate) === cleaned)) {
+  // A hidden character is reported as such even when cleaning would leave
+  // nothing behind: "you typed something invisible" is the actionable message.
+  // Emoji use the joiner-tolerant list so a family sequence stays valid.
+  if (hasDangerousMarkerCharacter(value, kind)) return { ok: false, code: "unsafe" };
+  if (cleaned.length === 0) return { ok: false, code: "empty" };
+  // The Emoji group accepts exactly one glyph. This runs before the duplicate
+  // check so `"绘图"` in that group reports "not an emoji" instead of a
+  // confusing duplicate message.
+  if (kind === "emoji" && !isSingleEmojiValue(cleaned)) return { ok: false, code: "not-emoji" };
+  if (existing.some((candidate) => cleanCustomMarkerValue(candidate, kind) === cleaned)) {
     return { ok: false, code: "duplicate" };
   }
   return { ok: true, code: "ok" };
@@ -130,19 +178,22 @@ export function addCustomMarkerDefinition(
   definition: CustomMarkerDefinition
 ): CustomMarkerDefinition[] {
   const id = definition.id.trim();
-  const value = cleanCustomMarkerValue(definition.value);
+  const value = cleanCustomMarkerValue(definition.value, definition.kind);
   if (!isSafeCustomMarkerId(id) || value.length === 0) return [...definitions];
   // Enforce the same cap as `data.json` loading: a value that normalization
   // would drop on the next start must never be accepted into a live session,
   // otherwise "adding" it would silently disappear after a reload.
   if (Array.from(value).length > customMarkerMaxLength(definition.kind)) return [...definitions];
+  // An Emoji entry is one glyph; a caller that bypasses the settings page must
+  // not be able to store text in the Emoji grid.
+  if (definition.kind === "emoji" && !isSingleEmojiValue(value)) return [...definitions];
   // Count only this group: Emoji and text tags are independent lists of up to
   // MAX_CUSTOM_MARKER_ENTRIES each, matching what the settings page promises.
   if (definitions.filter((candidate) => candidate.kind === definition.kind).length
     >= MAX_CUSTOM_MARKER_ENTRIES) return [...definitions];
   if (definitions.some((candidate) => candidate.id === id)) return [...definitions];
   if (definitions.some((candidate) =>
-    candidate.kind === definition.kind && cleanCustomMarkerValue(candidate.value) === value)) {
+    candidate.kind === definition.kind && cleanCustomMarkerValue(candidate.value, candidate.kind) === value)) {
     return [...definitions];
   }
   return [...definitions, { id, kind: definition.kind, value }];
@@ -224,9 +275,12 @@ export function normalizeCustomMarkerDefinitions(value: unknown): CustomMarkerDe
     if (typeof rawValue !== "string") continue;
     const kind: CustomMarkerKind = rawKind;
     if (countByKind[kind] >= MAX_CUSTOM_MARKER_ENTRIES) continue;
-    const cleaned = cleanCustomMarkerValue(rawValue);
+    const cleaned = cleanCustomMarkerValue(rawValue, kind);
     if (cleaned.length === 0) continue;
     if (Array.from(cleaned).length > customMarkerMaxLength(kind)) continue;
+    // `data.json` is untrusted: an Emoji entry that is not one glyph is dropped
+    // instead of being rendered as a text label inside the Emoji grid.
+    if (kind === "emoji" && !isSingleEmojiValue(cleaned)) continue;
     const valueKey = `${kind}\u0000${cleaned}`;
     if (usedValues.has(valueKey)) continue;
     const rawId = record["id"];

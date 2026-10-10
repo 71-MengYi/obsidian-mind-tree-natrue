@@ -397,16 +397,41 @@ test("the Add button and Enter append the cleaned value, clear the input and ref
 });
 
 test("blank input, whitespace and invisible-only values are rejected without writing", () => {
-  for (const value of ["", "   ", "\u200B", "\uFEFF", "\u200B\u200D"]) {
+  // Empty and whitespace-only inputs have nothing to store; a value made only
+  // of hidden characters is reported as unsafe, which is the exact problem.
+  const cases: ReadonlyArray<readonly [string, string]> = [
+    ["", "settings.customMarkers.error.empty"],
+    ["   ", "settings.customMarkers.error.empty"],
+    ["\u200B", "settings.customMarkers.error.unsafe"],
+    ["\uFEFF", "settings.customMarkers.error.unsafe"],
+    ["\u200B\u200D", "settings.customMarkers.error.unsafe"]
+  ];
+  for (const [value, errorKey] of cases) {
     const h = fixture();
     h.input("emoji").value = value;
     pressEnter(h, "emoji");
     assert.equal(h.settings.customMarkers.length, 0, JSON.stringify(value));
     assert.deepEqual(h.calls, [], JSON.stringify(value));
-    assert.equal(h.error("emoji").text, translate("settings.customMarkers.error.empty", "en"));
+    assert.equal(h.error("emoji").text, translate(errorKey as Parameters<typeof translate>[0], "en"), JSON.stringify(value));
     assert.equal(h.error("emoji").hasClass("is-visible"), true);
     assert.doesNotMatch(h.error("emoji").text, /\{\w+\}/);
   }
+});
+
+test("the Emoji group rejects words while the text tag group accepts them", () => {
+  const h = fixture();
+  h.input("emoji").value = "绘图";
+  pressEnter(h, "emoji");
+  assert.equal(h.settings.customMarkers.length, 0, "text must never enter the Emoji grid");
+  assert.deepEqual(h.calls, []);
+  assert.equal(h.error("emoji").text, translate("settings.customMarkers.error.notEmoji", "en"));
+  assert.doesNotMatch(h.error("emoji").text, /\{\w+\}/);
+  assert.equal(h.input("emoji").value, "绘图", "the typed text is kept for correction");
+
+  h.input("tag").value = "绘图";
+  pressEnter(h, "tag");
+  assert.deepEqual(valuesOf(h, "tag"), ["绘图"]);
+  assert.equal(h.settings.customMarkers.length, 1);
 });
 
 test("a duplicate value is rejected after cleaning while the typed text is kept", () => {

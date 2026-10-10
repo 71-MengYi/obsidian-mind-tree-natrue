@@ -26,6 +26,7 @@ function validationErrorKey(code: CustomMarkerValidationErrorCode | "ok"): Trans
     case "empty": return "settings.customMarkers.error.empty";
     case "too-long": return "settings.customMarkers.error.tooLong";
     case "unsafe": return "settings.customMarkers.error.unsafe";
+    case "not-emoji": return "settings.customMarkers.error.notEmoji";
     case "duplicate": return "settings.customMarkers.error.duplicate";
     case "limit": return "settings.customMarkers.error.limit";
     // "ok" has nothing to report; callers only ask after a failure.
@@ -94,7 +95,10 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
       type: "text",
       attr: {
         type: "text",
-        maxlength: String(maxLength * 4),
+        // The Emoji group accepts one glyph; a ZWJ family sequence needs up to
+        // 16 code points, so 32 leaves room for a paste before validation runs.
+        // Tags stay on their real character limit.
+        maxlength: String(kind === "emoji" ? 32 : maxLength * 4),
         placeholder: t(placeholderKey),
         "aria-label": t(placeholderKey)
       }

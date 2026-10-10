@@ -71,13 +71,16 @@ test("duplicate custom marker values normalize to one entry in first-seen order"
       customMarkers: [
         { id: "first", kind: "tag", value: "绘图" },
         { id: "second", kind: "tag", value: "绘\u200B图" },
-        { id: "other-kind", kind: "emoji", value: "绘图" }
+        // Same text as the tag, but the Emoji group only accepts one glyph, so
+        // this entry is dropped instead of being stored as an Emoji label.
+        { id: "text-as-emoji", kind: "emoji", value: "绘图" },
+        { id: "other-kind", kind: "emoji", value: "🔥" }
       ]
     }
   });
   assert.deepEqual(normalized.settings.customMarkers.map((item) => [item.id, item.kind, item.value]), [
     ["first", "tag", "绘图"],
-    ["other-kind", "emoji", "绘图"]
+    ["other-kind", "emoji", "🔥"]
   ]);
 });
 
