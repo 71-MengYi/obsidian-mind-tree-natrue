@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
 import {
   classifyFileSubtype,
+  getIconNodeMarkers,
+  getVisibleNodeMarkers,
   hasExcalidrawResourceMarker,
   hasMindTreeResourceMarker,
+  MAX_CUSTOM_NODE_MARKER_VALUE_LENGTH,
   normalizeNodeMarkers,
   removeNodeMarker,
   renderNodeMarkerSuffix,
@@ -78,6 +81,9 @@ test("markers round-trip in compressed JSON and appear after the outline label",
 });
 
 test("marker normalization rejects invalid values and keeps one value per category", () => {
+  // Custom emoji and tags are accepted as plain values: the live settings
+  // registry decides whether they render, so a disabled marker survives a
+  // round-trip instead of being silently deleted from the document.
   assert.deepEqual(normalizeNodeMarkers([
     { type: "progress", value: "todo" },
     { type: "progress", value: "done" },
@@ -86,7 +92,17 @@ test("marker normalization rejects invalid values and keeps one value per catego
     { type: "emoji", value: "🔥" }
   ]), [
     { type: "progress", value: "done" },
-    { type: "highlight", value: "#F37B6A" }
+    { type: "highlight", value: "#F37B6A" },
+    { type: "emoji", value: "🔥" }
+  ]);
+  assert.deepEqual(normalizeNodeMarkers([
+    { type: "tag", value: "绘图" },
+    { type: "tag", value: "思维树" },
+    { type: "emoji", value: "" },
+    { type: "emoji", value: 7 },
+    { type: "highlight", value: "not-a-color" }
+  ]), [
+    { type: "tag", value: "思维树" }
   ]);
 });
 
@@ -196,4 +212,95 @@ test("linked Excalidraw files derive a drawing badge and readable outline suffix
   node.resource.pathHint = "drawings/Suffix-only.excalidraw.md";
   assert.equal(hasExcalidrawResourceMarker(node), false);
   assert.equal(renderNodeMarkerSuffix(node), "");
+});
+
+test("custom emoji and tag categories stay independent from built-in marker categories", () => {
+  const document = createEmptyDocument("Markers");
+  const node = addNode(document, document.rootId, "Task");
+  setNodeMarker(node, { type: "progress", value: "todo" });
+  setNodeMarker(node, { type: "priority", value: "red" });
+  setNodeMarker(node, { type: "highlight", value: "#75ACA6" });
+  setNodeMarker(node, { type: "emoji", value: "🔥" });
+  setNodeMarker(node, { type: "tag", value: "绘图" });
+
+  assert.deepEqual(node.markers, [
+    { type: "progress", value: "todo" },
+    { type: "priority", value: "red" },
+    { type: "highlight", value: "#75ACA6" },
+    { type: "emoji", value: "🔥" },
+    { type: "tag", value: "绘图" }
+  ]);
+  // Only progress and priority reserve the fixed 18px icon box.
+  assert.deepEqual(getIconNodeMarkers(node), [
+    { type: "progress", value: "todo" },
+    { type: "priority", value: "red" }
+  ]);
+  assert.deepEqual(getVisibleNodeMarkers(node).map((marker) => marker.type), [
+    "progress", "priority", "emoji", "tag"
+  ]);
+
+  setNodeMarker(node, { type: "emoji", value: "🎨" });
+  assert.deepEqual(node.markers.map((marker) => `${marker.type}:${marker.value}`), [
+    "progress:todo", "priority:red", "highlight:#75ACA6", "emoji:🎨", "tag:绘图"
+  ]);
+  removeNodeMarker(node, "emoji");
+  assert.deepEqual(node.markers.map((marker) => marker.type), [
+    "progress", "priority", "highlight", "tag"
+  ]);
+  removeNodeMarker(node, "tag");
+  assert.deepEqual(node.markers.map((marker) => marker.type), ["progress", "priority", "highlight"]);
+});
+
+test("custom emoji and tag markers render neutral suffixes and survive compressed JSON", () => {
+  const document = createEmptyDocument("Markers");
+  const node = addNode(document, document.rootId, "任务");
+  setNodeMarker(node, { type: "emoji", value: "🔥" });
+  setNodeMarker(node, { type: "tag", value: "绘图" });
+
+  assert.equal(renderNodeMarkerSuffix(node), "〔emoji:🔥〕 〔tag:绘图〕");
+  assert.ok(renderOutline(document).includes("〔emoji:🔥〕 〔tag:绘图〕"));
+
+  const parsed = parseMindTreeFile(serializeMindTreeFile(document));
+  const restored = parsed.document.nodes[node.id];
+  assert.deepEqual(restored?.markers, [
+    { type: "emoji", value: "🔥" },
+    { type: "tag", value: "绘图" }
+  ]);
+  assert.equal(renderNodeMarkerSuffix(restored!), "〔emoji:🔥〕 〔tag:绘图〕");
+});
+
+test("custom marker normalization bounds the payload value and cleans invisible characters", () => {
+  const longest = "绘".repeat(MAX_CUSTOM_NODE_MARKER_VALUE_LENGTH);
+  assert.deepEqual(normalizeNodeMarkers([{ type: "tag", value: longest }]), [
+    { type: "tag", value: longest }
+  ]);
+  assert.deepEqual(normalizeNodeMarkers([
+    { type: "tag", value: `${longest}绘` }
+  ]), []);
+
+  assert.deepEqual(normalizeNodeMarkers([
+    { type: "emoji", value: " 🔥\u200B " },
+    { type: "tag", value: "\u200B" }
+  ]), [{ type: "emoji", value: "🔥" }]);
+
+  // The document keeps values beyond the settings-registry caps so a marker the
+  // user later re-enables still has something to render.
+  const seventeenEmoji = "🔥".repeat(17);
+  assert.deepEqual(normalizeNodeMarkers([{ type: "emoji", value: seventeenEmoji }]), [
+    { type: "emoji", value: seventeenEmoji }
+  ]);
+
+  assert.deepEqual(normalizeNodeMarkers([
+    { type: "emoji", value: "🔥" },
+    { type: "emoji", value: "🎨" }
+  ]), [{ type: "emoji", value: "🎨" }]);
+
+  // Custom categories always sort after the built-in palette entries.
+  assert.deepEqual(normalizeNodeMarkers([
+    { type: "tag", value: "绘图" },
+    { type: "emoji", value: "🔥" },
+    { type: "priority", value: "red" },
+    { type: "progress", value: "todo" },
+    { type: "highlight", value: "#f37b6a" }
+  ]).map((marker) => marker.type), ["progress", "priority", "highlight", "emoji", "tag"]);
 });

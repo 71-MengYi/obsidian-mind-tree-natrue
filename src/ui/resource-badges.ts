@@ -1,16 +1,28 @@
 import {
-  getVisibleNodeMarkers,
+  getIconNodeMarkers,
   hasExcalidrawResourceMarker,
   hasMindTreeResourceMarker
 } from "../domain/markers";
+import {
+  cleanCustomMarkerValue,
+  customMarkerDefinitionsByKind,
+  type CustomMarkerDefinition
+} from "../domain/custom-markers";
 import { isMarkdownPath, stripNonMarkdownResourceId } from "../format/resource-id";
 import type { MindTreeNode } from "../types";
 
-export type ResourceBadgeKind = "mind-tree" | "excalidraw" | "extension";
+/**
+ * Every trailing item a node can show. `emoji` and `tag` are user-managed
+ * custom markers, so they are resolved here rather than in `domain/markers`:
+ * only this presentation layer receives the global settings registry.
+ */
+export type ResourceBadgeKind = "mind-tree" | "excalidraw" | "extension" | "emoji" | "tag";
 
 export interface ResourceBadge {
   readonly kind: ResourceBadgeKind;
   readonly label: string;
+  /** Registry entry id; present on custom emoji and tag items only. */
+  readonly id?: string;
 }
 
 export interface ResourceBadgeSize {
@@ -31,6 +43,14 @@ export interface FileBadgeRules {
   readonly fileExtensionBadgeAliases: Readonly<Record<string, string>>;
 }
 
+/**
+ * Custom marker definitions are read from global settings, so the presentation
+ * receives a plain value list instead of the settings object itself.
+ */
+export interface CustomMarkerRules {
+  readonly customMarkers: readonly CustomMarkerDefinition[];
+}
+
 export interface ResourceBadgeMeasurer {
   measure(badge: Readonly<ResourceBadge>): ResourceBadgeSize;
 }
@@ -41,11 +61,39 @@ export interface ResourceBadgeMeasurer {
  * they never become node data or affect the generated Markdown outline.
  */
 export interface ResourceBadgePresentation {
+  /** Derived resource badges only: mind-tree, excalidraw and extension labels. */
   resolve(node: Readonly<MindTreeNode>): readonly ResourceBadge[];
   measure(badge: Readonly<ResourceBadge>): ResourceBadgeSize;
+  /**
+   * Custom emoji/tag categories that currently exist in the settings registry,
+   * in the node's category order. Removing a definition hides the marker on
+   * every node until the user adds that value again.
+   */
+  resolveCustomMarkerDisplays(node: Readonly<MindTreeNode>): readonly CustomMarkerDisplay[];
+  /** Localized fallback names for a custom value without its own definition. */
+  readonly customMarkerLabels: CustomMarkerLabels;
+}
+
+/**
+ * Custom emoji/tag categories that currently exist in the settings registry, in
+ * the node's category order. Removing a definition hides the marker on every
+ * node until the user adds that value again.
+ */
+export interface CustomMarkerDisplay {
+  readonly kind: "emoji" | "tag";
+  readonly value: string;
+  readonly id: string;
+}
+
+/** Accessible names for a custom value; the value itself is the visible label. */
+export interface CustomMarkerLabels {
+  readonly emoji: string;
+  readonly tag: string;
 }
 
 export interface NodeMarkerGeometry {
+  /** Ordered trailing items; `resourceBadges` is the legacy suffix-only view. */
+  readonly markers: readonly ResourceBadge[];
   readonly resourceBadges: readonly ResourceBadge[];
   readonly width: number;
   readonly height: number;
@@ -64,10 +112,12 @@ const VALID_EXTENSION_PATTERN = /^[a-z0-9+_-]+(?:\.[a-z0-9+_-]+)*$/i;
 const AUTO_EXTENSION_SEGMENT_PATTERN = /^[a-z0-9]+$/i;
 const UNSAFE_EXTENSION_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FALLBACK_BADGE_LABELS: ResourceBadgeLabels = { mindTree: "思维树", drawing: "绘图" };
+const FALLBACK_CUSTOM_MARKER_LABELS: CustomMarkerLabels = { emoji: "Emoji", tag: "Text tag" };
 const EMPTY_BADGE_RULES: FileBadgeRules = {
   ignoredFileBadgeExtensions: [],
   fileExtensionBadgeAliases: Object.freeze({})
 };
+const EMPTY_CUSTOM_MARKER_RULES: CustomMarkerRules = { customMarkers: [] };
 
 /** Normalize user-facing `.PDF` and `pdf` keys to one case-insensitive form. */
 export function normalizeFileBadgeExtension(value: string): string | undefined {
@@ -159,9 +209,10 @@ function resolveResourceBadgesFromLookups(
 }
 
 export function createResourceBadgePresentation(
-  rules: FileBadgeRules,
+  rules: FileBadgeRules & Partial<CustomMarkerRules>,
   labels: ResourceBadgeLabels,
-  measurer: ResourceBadgeMeasurer = fallbackResourceBadgeMeasurer
+  measurer: ResourceBadgeMeasurer = fallbackResourceBadgeMeasurer,
+  customLabels: CustomMarkerLabels = FALLBACK_CUSTOM_MARKER_LABELS
 ): ResourceBadgePresentation {
   // Normalize once for a render pass instead of rebuilding lookup tables for
   // every node in a large tree.
@@ -174,6 +225,19 @@ export function createResourceBadgePresentation(
     const normalizedAlias = normalizeFileBadgeAlias(value);
     if (normalizedKey && normalizedAlias) fileExtensionBadgeAliases.set(normalizedKey, normalizedAlias);
   }
+  const customByValue = new Map<string, CustomMarkerDefinition>();
+  for (const definition of customMarkerDefinitionsByKind(
+    rules.customMarkers ?? EMPTY_CUSTOM_MARKER_RULES.customMarkers,
+    "emoji"
+  )) {
+    customByValue.set(customMarkerKey("emoji", definition.value), definition);
+  }
+  for (const definition of customMarkerDefinitionsByKind(
+    rules.customMarkers ?? EMPTY_CUSTOM_MARKER_RULES.customMarkers,
+    "tag"
+  )) {
+    customByValue.set(customMarkerKey("tag", definition.value), definition);
+  }
   return {
     resolve: (node) => resolveResourceBadgesFromLookups(
       node,
@@ -181,33 +245,87 @@ export function createResourceBadgePresentation(
       fileExtensionBadgeAliases,
       labels
     ),
-    measure: (badge) => measurer.measure(badge)
+    measure: (badge) => measurer.measure(badge),
+    resolveCustomMarkerDisplays: (node) => customMarkerDisplays(node, customByValue),
+    customMarkerLabels: customLabels
   };
 }
 
-/** Combine fixed icon markers and measured text badges into one trailing box. */
+/**
+ * Resolve a node's custom marker categories against the current registry.
+ * Unknown values are skipped so a marker removed in settings stops rendering
+ * while the node keeps referencing it for a later re-enable.
+ */
+function customMarkerDisplays(
+  node: Readonly<MindTreeNode>,
+  definitions: ReadonlyMap<string, CustomMarkerDefinition>
+): readonly CustomMarkerDisplay[] {
+  const result: CustomMarkerDisplay[] = [];
+  for (const marker of node.markers ?? []) {
+    if (marker.type !== "emoji" && marker.type !== "tag") continue;
+    const definition = definitions.get(customMarkerKey(marker.type, marker.value));
+    if (!definition) continue;
+    result.push({ kind: marker.type, value: definition.value, id: definition.id });
+  }
+  return result;
+}
+
+function customMarkerKey(kind: "emoji" | "tag", value: string): string {
+  return `${kind}\u0000${cleanCustomMarkerValue(value)}`;
+}
+
+/**
+ * Combine fixed icon markers, custom emoji/text tags and derived resource
+ * badges into one trailing box. Built-in icons keep their fixed 18px square,
+ * while custom tags and file badges use their measured text width, so enabling
+ * a custom marker can never shrink or rewrap the node title, and a tag always
+ * reserves exactly the width its label renders at.
+ */
 export function getNodeMarkerGeometry(
   node: Readonly<MindTreeNode>,
   presentation: ResourceBadgePresentation = fallbackResourceBadgePresentation
 ): NodeMarkerGeometry {
-  const manualCount = getVisibleNodeMarkers(node).length;
+  const manualCount = getIconNodeMarkers(node).length;
+  const customMarkers = presentation.resolveCustomMarkerDisplays(node);
   const resourceBadges = presentation.resolve(node);
-  const badgeSizes = resourceBadges.map((badge) => presentation.measure(badge));
-  const itemCount = manualCount + resourceBadges.length;
-  if (itemCount === 0) return { resourceBadges, width: 0, height: 0 };
+  // Emoji are measured too: the measurer returns the same fixed 18px square for
+  // them, so the shared path stays correct while text tags get their real width.
+  const trailingSizes = [
+    ...customMarkers.map((custom) => presentation.measure({
+      kind: custom.kind,
+      label: custom.value,
+      id: custom.id
+    })),
+    ...resourceBadges.map((badge) => presentation.measure(badge))
+  ];
+  const itemCount = manualCount + trailingSizes.length;
+  if (itemCount === 0) return { markers: [], resourceBadges, width: 0, height: 0 };
+  const height = trailingSizes.reduce(
+    (tallest, size) => Math.max(tallest, size.height),
+    manualCount > 0 ? MANUAL_MARKER_SIZE : 0
+  );
   return {
+    markers: [
+      ...customMarkers.map((custom) => ({
+        kind: custom.kind,
+        label: custom.value,
+        id: custom.id
+      })),
+      ...resourceBadges
+    ],
     resourceBadges,
     width: NODE_MARKER_GAP
       + manualCount * MANUAL_MARKER_SIZE
-      + badgeSizes.reduce((sum, size) => sum + size.width, 0)
+      + trailingSizes.reduce((sum, size) => sum + size.width, 0)
       + (itemCount - 1) * NODE_MARKER_GAP,
-    height: Math.max(manualCount > 0 ? MANUAL_MARKER_SIZE : 0, ...badgeSizes.map((size) => size.height))
+    height
   };
 }
 
 /** Deterministic headless fallback; the live view uses measured DOM badges. */
 export const fallbackResourceBadgeMeasurer: ResourceBadgeMeasurer = {
   measure(badge) {
+    if (badge.kind === "emoji") return { width: MANUAL_MARKER_SIZE, height: MANUAL_MARKER_SIZE };
     const glyphWidth = Array.from(badge.label).reduce((sum, character) =>
       sum + (/^[\x00-\x7F]$/u.test(character) ? 6 : 10), 0);
     const border = badge.kind === "mind-tree" ? 2 : 0;
@@ -231,12 +349,16 @@ export class BrowserResourceBadgeMeasurer implements ResourceBadgeMeasurer {
     this.probes = {
       "mind-tree": this.createProbe("mind-tree"),
       excalidraw: this.createProbe("excalidraw"),
-      extension: this.createProbe("extension")
+      extension: this.createProbe("extension"),
+      // Emoji keep the fixed square marker box; only tags need a text probe.
+      emoji: this.createProbe("emoji"),
+      tag: this.createProbe("tag")
     };
     this.refreshStyles();
   }
 
   measure(badge: Readonly<ResourceBadge>): ResourceBadgeSize {
+    if (badge.kind === "emoji") return { width: MANUAL_MARKER_SIZE, height: MANUAL_MARKER_SIZE };
     const key = `${this.styleSignature}\u0000${badge.kind}\u0000${badge.label}`;
     const cached = this.cache.get(key);
     if (cached) return cached;

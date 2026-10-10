@@ -1,4 +1,5 @@
 import { normalizeConnectionStyle, normalizeNodeShape } from "./document-settings";
+import { normalizeCustomMarkerDefinitions } from "./domain/custom-markers";
 import { assertSafeRecordKey, createSafeRecord } from "./input-limits";
 import { normalizeNewNoteDefaultContent } from "./services/note-content";
 import {
@@ -47,6 +48,7 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
         settings?.["fileExtensionBadgeAliases"]
       ),
       titleSync: safeBoolean(settings?.["titleSync"], DEFAULT_SETTINGS.titleSync),
+      customMarkers: normalizeCustomMarkerDefinitions(settings?.["customMarkers"]),
       nonMarkdownIdSeparator: settings?.["nonMarkdownIdSeparator"] === "%" ? "%" : "@",
       resourceOpenMode: settings?.["resourceOpenMode"] === "split-right" ? "split-right" : "tab",
       newNoteOpenMode: normalizeNewNoteOpenMode(settings?.["newNoteOpenMode"]),

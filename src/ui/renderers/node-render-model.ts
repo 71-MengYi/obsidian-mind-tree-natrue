@@ -12,7 +12,8 @@ export interface NodeVisualState {
   readonly hasResourceControls: boolean;
   readonly titleSyncDisabled: boolean;
   readonly markerDisplayWidth: number;
-  readonly resourceBadges: readonly ResourceBadge[];
+  /** Ordered trailing items: custom markers and derived resource badges. */
+  readonly markers: readonly ResourceBadge[];
   readonly highlight?: string;
   readonly selected: boolean;
   readonly editing: boolean;
@@ -32,7 +33,7 @@ export function createNodeVisualState(
     hasResourceControls: controls.hasOpenButton,
     titleSyncDisabled: controls.titleSyncDisabled,
     markerDisplayWidth: markerGeometry.width,
-    resourceBadges: markerGeometry.resourceBadges,
+    markers: markerGeometry.markers,
     highlight: getNodeHighlightColor(node),
     selected,
     editing,

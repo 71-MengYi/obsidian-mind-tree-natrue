@@ -13,8 +13,8 @@ import type {
 } from "../types";
 import { collectBranchIds } from "../domain/tree";
 import {
-  getNodeHighlightColor,
-  getVisibleNodeMarkers
+  getIconNodeMarkers,
+  getNodeHighlightColor
 } from "../domain/markers";
 import {
   connectionPath,
@@ -52,6 +52,13 @@ import {
 } from "../ui/image-nodes";
 
 const PADDING = 36;
+
+/**
+ * Mirrors `.mtn-node-marker.is-emoji` in `styles.css`. An exported SVG is
+ * rendered outside the Obsidian document, so the emoji font stack has to travel
+ * with the markup or rasterized PNGs lose their color glyphs.
+ */
+const EMOJI_FONT_FAMILY = escapeXml("'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',system-ui,sans-serif");
 
 /**
  * Colors resolved by the live Obsidian view. This is intentionally a runtime
@@ -174,41 +181,8 @@ export function renderBranchSvg(
     const textX = shifted.x + NODE_HORIZONTAL_PADDING;
     const tspans = lines.map((line, index) =>
       `<tspan x="${textX}" y="${firstBaseline + index * lineHeight}">${escapeXml(line)}</tspan>`).join("");
-    const visibleMarkers = getVisibleNodeMarkers(node);
-    const markerGeometry = getNodeMarkerGeometry(node, resourceBadgePresentation);
-    const markerStartX = shifted.x
-      + NODE_HORIZONTAL_PADDING
-      + textWidth
-      + (markerGeometry.width > 0 ? NODE_MARKER_GAP : 0);
-    const markerCenterY = captionTop + captionHeight / 2;
-    const markerY = markerCenterY + 5;
-    const markerSvg = visibleMarkers.map((marker, index) => {
-      const symbol = marker.type === "priority"
-        ? "⚑"
-        : marker.value === "todo" ? "○" : marker.value === "inprogress" ? "◐" : marker.value === "done" ? "✓" : "×";
-      const color = marker.type === "priority"
-        ? marker.value === "red" ? "#dc2626" : marker.value === "yellow" ? "#d6a700" : "#2563eb"
-        : marker.value === "done" ? "#15803d" : marker.value === "cancelled" ? "#dc2626" : marker.value === "inprogress" ? "#2563eb" : palette.text;
-      return `<text x="${markerStartX + index * (MANUAL_MARKER_SIZE + NODE_MARKER_GAP) + MANUAL_MARKER_SIZE / 2}" y="${markerY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="${color}">${symbol}</text>`;
-    }).join("");
-    let resourceMarkerX = markerStartX
-      + visibleMarkers.length * (MANUAL_MARKER_SIZE + NODE_MARKER_GAP);
-    const extensionFill = mixHexColors(palette.text, palette.surface, 0.1);
-    const resourceMarkerSvg = markerGeometry.resourceBadges.map((badge) => {
-      const size = resourceBadgePresentation.measure(badge);
-      const svg = renderResourceBadgeSvg(
-        badge,
-        size,
-        resourceMarkerX,
-        markerCenterY,
-        extensionFill,
-        palette.text
-      );
-      resourceMarkerX += size.width + NODE_MARKER_GAP;
-      return svg;
-    }).join("");
-    const leafWithoutBorder = nodeShape === "borderless" && node.childIds.length === 0;
-    const radius = nodeShape === "square" ? 0 : 2;
+    // Title text and custom emoji share one body color, so the exported marker
+    // inherits exactly what the canvas span gets from `--mtn-node-text`.
     const textColor = highlight
       ? readableSvgTextColor(highlight)
       : position.depth === 0
@@ -216,6 +190,70 @@ export function renderBranchSvg(
         : tierPalette
           ? position.depth === 1 ? levelOneTextColor : descendantTextColor
           : position.depth === 1 ? "#ffffff" : palette.text;
+    // Custom emoji and text tags live in the global settings registry, so only
+    // the presentation can decide whether they still exist; built-in icons are
+    // still read from the domain. `geometry.markers` repeats the canvas DOM's
+    // trailing order: custom items first, then derived resource badges.
+    const iconMarkers = getIconNodeMarkers(node);
+    const markerGeometry = getNodeMarkerGeometry(node, resourceBadgePresentation);
+    // The marker column (canvas `.mtn-node-markers`) starts at `nodeX +
+    // NODE_HORIZONTAL_PADDING + titleWidth`; its first box starts one
+    // NODE_MARKER_GAP later (that rule's `padding-left`), and its last box ends
+    // exactly at `markerColumnLeft + markerGeometry.width`. Never add another
+    // gap here: the leading 2px is already this one.
+    const markerColumnLeft = shifted.x + NODE_HORIZONTAL_PADDING + textWidth;
+    const markerStartX = markerColumnLeft + (markerGeometry.width > 0 ? NODE_MARKER_GAP : 0);
+    const markerCenterY = captionTop + captionHeight / 2;
+    const markerY = markerCenterY + 5;
+    const extensionFill = mixHexColors(palette.text, palette.surface, 0.1);
+    // One cursor walks the complete trailing list - built-in icons, custom
+    // emoji/tags, then derived badges. It mirrors the canvas CSS exactly (a 2px
+    // padded flex column with `gap: 2px`), so every box keeps one
+    // NODE_MARKER_GAP and the rendered extent equals the reserved width.
+    let cursor = markerStartX;
+    let placedMarkers = 0;
+    const gapBeforeMarker = (): void => {
+      if (placedMarkers > 0) cursor += NODE_MARKER_GAP;
+    };
+    const iconMarkerSvg = iconMarkers.map((marker) => {
+      gapBeforeMarker();
+      const centerX = cursor + MANUAL_MARKER_SIZE / 2;
+      cursor += MANUAL_MARKER_SIZE;
+      placedMarkers += 1;
+      const symbol = marker.type === "priority"
+        ? "⚑"
+        : marker.value === "todo" ? "○" : marker.value === "inprogress" ? "◐" : marker.value === "done" ? "✓" : "×";
+      const color = marker.type === "priority"
+        ? marker.value === "red" ? "#dc2626" : marker.value === "yellow" ? "#d6a700" : "#2563eb"
+        : marker.value === "done" ? "#15803d" : marker.value === "cancelled" ? "#dc2626" : marker.value === "inprogress" ? "#2563eb" : palette.text;
+      return `<text x="${centerX}" y="${markerY}" text-anchor="middle" font-family="system-ui,sans-serif" font-size="15" fill="${color}">${symbol}</text>`;
+    }).join("");
+    const trailingMarkerSvg = markerGeometry.markers.map((item) => {
+      gapBeforeMarker();
+      const startX = cursor;
+      if (item.kind === "emoji") {
+        // Emoji keep the fixed 18px icon box and inherit the node's body color,
+        // exactly like the canvas span they replace.
+        cursor += MANUAL_MARKER_SIZE;
+        placedMarkers += 1;
+        return `<text x="${startX + MANUAL_MARKER_SIZE / 2}" y="${markerY}" font-size="15" text-anchor="middle" font-family="${EMOJI_FONT_FAMILY}" fill="${textColor}">${escapeXml(item.label)}</text>`;
+      }
+      // Tags and file badges share one measured box, so layout and export can
+      // never disagree about where the marker column ends.
+      const size = resourceBadgePresentation.measure(item);
+      cursor += size.width;
+      placedMarkers += 1;
+      return renderResourceBadgeSvg(
+        item,
+        size,
+        startX,
+        markerCenterY,
+        extensionFill,
+        palette.text
+      );
+    }).join("");
+    const leafWithoutBorder = nodeShape === "borderless" && node.childIds.length === 0;
+    const radius = nodeShape === "square" ? 0 : 2;
     const nodeShadow = leafWithoutBorder
       ? "none"
       : position.depth === 0 ? tierPalette?.rootShadow : tierPalette?.shadow;
@@ -227,7 +265,7 @@ export function renderBranchSvg(
       ? `<g transform="translate(${textX} ${captionTop + (captionHeight - measurement.height!) / 2})" color="${textColor}">${renderRichTitleSvg(measurement)}</g>`
       : undefined;
     const titleSvg = richTitle ?? `<text text-anchor="start" font-family="${escapeXml(textStyle.fontFamily)}" font-size="${fontSize}" font-style="${escapeXml(textStyle.fontStyle)}" font-weight="${escapeXml(textStyle.fontWeight)}" letter-spacing="${textStyle.letterSpacing}" word-spacing="${textStyle.wordSpacing}" font-kerning="${textStyle.fontKerning}" font-stretch="${textStyle.fontStretch}" font-variant-caps="${textStyle.fontVariantCaps}" text-rendering="${textStyle.textRendering}" fill="${textColor}">${tspans}</text>`;
-    return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/>${imageSvg}${titleSvg}${markerSvg}${resourceMarkerSvg}</g>`;
+    return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/>${imageSvg}${titleSvg}${iconMarkerSvg}${trailingMarkerSvg}</g>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${canvasColor}"/>${paths}${nodes}</svg>`;
 }
@@ -355,11 +393,16 @@ function renderResourceBadgeSvg(
   extensionText: string
 ): string {
   const y = centerY - size.height / 2;
+  // Text tags reuse the quiet file-badge treatment: `styles.css` gives
+  // `.mtn-node-marker.is-tag` the same hover surface and muted text as an
+  // extension badge, only with its own class name inside the standalone SVG.
   const appearance = badge.kind === "mind-tree"
     ? { className: "mtn-mind-tree-marker", fill: "#dff4e7", stroke: "#a8d5b8", text: "#2f6b49" }
     : badge.kind === "excalidraw"
       ? { className: "mtn-excalidraw-marker", fill: "#7d4fbe", stroke: "none", text: "#ffffff" }
-      : { className: "mtn-extension-marker", fill: extensionFill, stroke: "none", text: extensionText };
+      : badge.kind === "tag"
+        ? { className: "mtn-tag-marker", fill: extensionFill, stroke: "none", text: extensionText }
+        : { className: "mtn-extension-marker", fill: extensionFill, stroke: "none", text: extensionText };
   return `<g class="${appearance.className}"><rect x="${x}" y="${y}" width="${size.width}" height="${size.height}" rx="5" fill="${appearance.fill}" stroke="${appearance.stroke}"/><text x="${x + size.width / 2}" y="${centerY}" dominant-baseline="middle" text-anchor="middle" font-family="${escapeXml(size.fontFamily ?? "system-ui,sans-serif")}" font-size="${size.fontSize ?? 10}" font-weight="${escapeXml(size.fontWeight ?? "600")}" fill="${appearance.text}">${escapeXml(badge.label)}</text></g>`;
 }
 

@@ -642,6 +642,23 @@
   color: var(--text-muted);
 }
 
+/* Custom emoji keep the fixed square icon box shared with the built-in
+   markers, so enabling one never re-measures the title column. */
+.mtn-node-marker.is-emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 14px;
+  line-height: 1;
+}
+
+/* Custom text tags reuse the measured file-badge treatment: the box grows with
+   the content and the title anchor never moves. */
+.mtn-node-marker.is-tag {
+  border: 0;
+  border-radius: 5px;
+  background: var(--background-modifier-hover);
+  color: var(--text-muted);
+}
+
 /* Badge probes retain the exact visible badge CSS without entering layout. */
 .mtn-resource-badge-measure-probe {
   position: fixed !important;
@@ -737,6 +754,26 @@
 .mtn-marker-choice.is-progress:nth-child(2) { color: #2563eb; }
 .mtn-marker-choice.is-progress:nth-child(3) { color: #15803d; }
 .mtn-marker-choice.is-progress:nth-child(4) { color: #dc2626; }
+
+/* Custom values are text inside the same 30px touch target. The fixed content
+   box only leaves 18px, so an emoji needs its own line box and a text tag has
+   to grow with its label instead of being clipped by the base rule. */
+.mtn-marker-choices .mtn-marker-choice.is-emoji {
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 18px;
+  line-height: 1;
+}
+
+.mtn-marker-choices .mtn-marker-choice.is-tag {
+  width: auto;
+  min-width: 30px;
+  max-width: 100%;
+  padding: 0 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-size: var(--font-ui-smaller);
+}
 
 .mtn-node-controls {
   grid-column: 3;
@@ -1768,6 +1805,146 @@
 }
 
 .mtn-setting-inline-error.is-visible { display: block; }
+
+/* ── Manage markers: emoji grid and text tag grid ─────────────────────────── */
+
+/* An empty grid collapses completely, so the section keeps no reserved space. */
+.mtn-custom-marker-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 10px;
+}
+
+.mtn-custom-marker-grid:empty { display: none; }
+
+/* Past the last tile there is no item to push back, so the whole grid is the
+   insertion target. */
+.mtn-custom-marker-grid.is-drop-end {
+  border-bottom: 2px solid var(--interactive-accent);
+}
+
+.mtn-custom-marker-tile {
+  position: relative;
+  box-sizing: border-box;
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+  cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.mtn-custom-marker-tile:active { cursor: grabbing; }
+
+/* Tiles are focusable because Alt+Arrow reorders them, so the focus ring is
+   what tells a keyboard user which tile the shortcut will move. */
+.mtn-custom-marker-tile:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* Reordering feedback: the source fades, the insertion target is accented. */
+.mtn-custom-marker-tile.is-dragging { opacity: 0.45; }
+
+.mtn-custom-marker-tile.is-drop-target {
+  border-color: var(--interactive-accent);
+  box-shadow: inset 2px 0 0 0 var(--interactive-accent);
+}
+
+.mtn-custom-marker-tile.is-emoji {
+  width: 34px;
+  height: 34px;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 18px;
+  line-height: 1;
+}
+
+/* Text tags mirror the node badge: 10px/600 on a 12px line box with 2px rings.
+   The remove button is absolutely positioned, so ordinary symmetric padding
+   keeps the label centered instead of shifting it left. */
+.mtn-custom-marker-tile.is-tag {
+  min-width: 34px;
+  min-height: 34px;
+  padding: 4px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 12px;
+  white-space: nowrap;
+}
+
+.mtn-custom-marker-tile-label {
+  max-width: 18ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* The remove affordance only occupies space while the user hovers the tile. */
+.mtn-custom-marker-remove {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  min-width: 16px;
+  min-height: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--background-secondary);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 28%);
+  color: var(--text-muted);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease-in-out;
+}
+
+.mtn-custom-marker-remove svg { width: 11px; height: 11px; }
+
+.mtn-custom-marker-tile:hover .mtn-custom-marker-remove,
+.mtn-custom-marker-tile:focus-within .mtn-custom-marker-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.mtn-custom-marker-tile:hover .mtn-custom-marker-remove:hover {
+  background: var(--background-modifier-error);
+  color: var(--text-on-accent);
+}
+
+.mtn-custom-marker-remove:focus-visible {
+  opacity: 1;
+  pointer-events: auto;
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 1px;
+}
+
+/* Empty-state text stays outside the grid so an empty grid stays truly empty. */
+.mtn-custom-marker-empty {
+  margin: 0 0 10px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-custom-marker-add {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 18px;
+}
+
+.mtn-custom-marker-add > input[type="text"] { flex: 1 1 auto; min-width: 0; }
 
 .mtn-file-badge-rule-list {
   display: grid;

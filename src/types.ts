@@ -67,11 +67,18 @@ export type NodeHighlightColor =
   | "#99723C"
   | "#E0CA9D";
 
-/** Each marker category stores at most one value; categories remain independent. */
+/**
+ * Each marker category stores at most one value; categories remain independent.
+ * Built-in progress/priority/highlight are fixed product markers, while
+ * `emoji` and `tag` reference the user-managed definitions in global settings
+ * by their bare value (never by id), so a `.mtn.md` never duplicates settings.
+ */
 export type NodeMarker =
   | { type: "progress"; value: NodeProgress }
   | { type: "priority"; value: NodePriority }
-  | { type: "highlight"; value: NodeHighlightColor };
+  | { type: "highlight"; value: NodeHighlightColor }
+  | { type: "emoji"; value: string }
+  | { type: "tag"; value: string };
 
 export interface NodeStyle {
   color?: string;

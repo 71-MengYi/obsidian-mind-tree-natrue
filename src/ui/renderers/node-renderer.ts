@@ -2,12 +2,17 @@ import { nodeTitleMode, type TitleCommitResult } from "../../format/node-title";
 import { renderRichTitleSvg } from "../rich-title";
 import { setIcon } from "obsidian";
 import {
-  getVisibleNodeMarkers
+  getVisibleNodeMarkers,
+  isCustomMarkerCategory
 } from "../../domain/markers";
 import { t } from "../../i18n";
 import type { MindTreeDocument, MindTreeNode, NodeId, PositionedNode } from "../../types";
 import type { FoldDirection } from "../fold-direction";
 import { SHARE_SQUARE_ICON } from "../icons";
+import {
+  getNodeMarkerGeometry,
+  type ResourceBadgePresentation
+} from "../resource-badges";
 import {
   getNodeSizeClass,
   getNodeTitleEditorSize,
@@ -15,7 +20,6 @@ import {
 } from "../layout";
 import { branchColorCss } from "../presentation";
 import type { NodeTextMeasurer } from "../text-measurer";
-import type { ResourceBadge, ResourceBadgePresentation } from "../resource-badges";
 import type { ImageNodePresentation, ImageNodeVisual } from "../image-nodes";
 import { createNodeVisualState, type NodeVisualState } from "./node-render-model";
 
@@ -127,7 +131,7 @@ export class NodeRenderer {
     if (image) this.renderImage(element, node, image, actions, state.readOnly);
     if (state.editingNodeId === node.id) this.renderEditor(element, node, position, state, actions, image);
     else this.renderTitle(element, node, position, state);
-    this.renderMarkers(element, node, visual.resourceBadges);
+    this.renderMarkers(element, node, state.resourceBadgePresentation);
     this.renderResourceControls(element, node, visual, actions);
     this.renderFoldControl(element, node, state.foldDirections.get(node.id) ?? "right", actions);
 
@@ -312,15 +316,26 @@ export class NodeRenderer {
     });
   }
 
+  /**
+   * Custom emoji and text tags are global definitions, so they are resolved
+   * through the presentation profile that also measured this node. Built-in
+   * icon markers keep their SVG identity and fixed square box.
+   */
   private renderMarkers(
     element: HTMLElement,
     node: MindTreeNode,
-    resourceBadges: readonly ResourceBadge[]
+    presentation: ResourceBadgePresentation
   ): void {
     const markers = getVisibleNodeMarkers(node);
-    if (markers.length === 0 && resourceBadges.length === 0) return;
+    const customMarkers = presentation.resolveCustomMarkerDisplays(node);
+    const resourceBadges = presentation.resolve(node)
+      .filter((badge) => badge.kind === "mind-tree" || badge.kind === "excalidraw" || badge.kind === "extension");
+    if (markers.length === 0 && customMarkers.length === 0 && resourceBadges.length === 0) return;
+    const markerWidth = getNodeMarkerGeometry(node, presentation).width;
     const container = element.createDiv("mtn-node-markers");
+    container.style.width = `${markerWidth}px`;
     for (const marker of markers) {
+      if (isCustomMarkerCategory(marker.type)) continue;
       const markerElement = container.createSpan({
         cls: `mtn-node-marker is-${marker.type} is-${marker.value}`,
         attr: { role: "img", "aria-label": markerLabel(marker.type, marker.value) }
@@ -328,6 +343,23 @@ export class NodeRenderer {
       setIcon(markerElement, marker.type === "priority" ? "flag" : marker.value === "todo"
         ? "circle" : marker.value === "inprogress" ? "loader-circle"
           : marker.value === "done" ? "circle-check" : "circle-x");
+    }
+    for (const custom of customMarkers) {
+      if (custom.kind === "emoji") {
+        container.createSpan({
+          cls: "mtn-node-marker is-emoji",
+          text: custom.value,
+          attr: { role: "img", "aria-label": t("marker.custom.emojiValue", { value: custom.value }) }
+        });
+        continue;
+      }
+      // Text tags reuse the measured file-badge treatment: a rounded label that
+      // grows with its content instead of a fixed square icon box.
+      container.createSpan({
+        cls: "mtn-node-marker is-resource-badge is-tag",
+        text: custom.value,
+        attr: { role: "img", "aria-label": t("marker.custom.tagValue", { value: custom.value }) }
+      });
     }
     for (const badge of resourceBadges) container.createSpan({
       cls: `mtn-node-marker is-resource-badge is-${badge.kind}`,

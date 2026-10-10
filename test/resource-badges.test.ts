@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
+import type { CustomMarkerDefinition } from "../src/domain/custom-markers";
 import { renderOutline } from "../src/format/outline";
 import { renderBranchSvg } from "../src/services/export";
 import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
@@ -8,8 +9,11 @@ import { layoutTree } from "../src/ui/layout";
 import {
   createResourceBadgePresentation,
   deriveFileBadgeExtension,
+  fallbackResourceBadgeMeasurer,
   fileBadgeExtensionCandidates,
   getNodeMarkerGeometry,
+  MANUAL_MARKER_SIZE,
+  NODE_MARKER_GAP,
   normalizeFileBadgeAlias,
   normalizeFileBadgeExtension,
   resolveResourceBadges,
@@ -280,17 +284,19 @@ test("marker geometry uses measured badge boxes and adds gaps only for visible i
   const document = createEmptyDocument("Badges");
   const node = addNode(document, document.rootId, "File");
   assert.deepEqual(getNodeMarkerGeometry(node, presentation), {
-    resourceBadges: [], width: 0, height: 0
+    markers: [], resourceBadges: [], width: 0, height: 0
   });
 
   node.resource = { type: "file", resourceId: "pdf", pathHint: "files/File.chapter_one.pdf", fileKind: "attachment" };
   assert.deepEqual(getNodeMarkerGeometry(node, presentation), {
+    markers: [{ kind: "extension", label: "PDF" }],
     resourceBadges: [{ kind: "extension", label: "PDF" }],
     width: 25,
     height: 16
   });
   node.markers = [{ type: "progress", value: "todo" }];
   assert.deepEqual(getNodeMarkerGeometry(node, presentation), {
+    markers: [{ kind: "extension", label: "PDF" }],
     resourceBadges: [{ kind: "extension", label: "PDF" }],
     width: 45,
     height: 18
@@ -339,4 +345,157 @@ test("layout and export retain the same badge geometry after excluding filename 
   assert.match(svg, />TAR\.GZ<\/text>/);
   assert.doesNotMatch(svg, /CHAPTER_ONE/);
   assert.deepEqual(document, originalDocument, "Derived badges must not modify persisted node data");
+});
+
+function customMarkerRules(
+  customMarkers: readonly CustomMarkerDefinition[]
+): FileBadgeRules & { readonly customMarkers: readonly CustomMarkerDefinition[] } {
+  return { ignoredFileBadgeExtensions: [], fileExtensionBadgeAliases: {}, customMarkers };
+}
+
+/** Emoji keep the real fallback box; text and file badges use stub widths. */
+const customMarkerMeasurer: ResourceBadgeMeasurer = {
+  measure: (badge) => badge.kind === "tag"
+    ? { width: 44, height: 16 }
+    : badge.kind === "extension"
+      ? { width: 23, height: 16 }
+      : fallbackResourceBadgeMeasurer.measure(badge)
+};
+
+test("registered custom markers render before derived resource badges in measured geometry", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "File");
+  node.resource = { type: "file", resourceId: "pdf", pathHint: "files/File.pdf", fileKind: "attachment" };
+  node.markers = [
+    { type: "progress", value: "todo" },
+    { type: "emoji", value: "🔥" },
+    { type: "tag", value: "绘图" }
+  ];
+  const presentation = createResourceBadgePresentation(customMarkerRules([
+    { id: "mtn-emoji-1", kind: "emoji", value: "🔥" },
+    { id: "mtn-tag-1", kind: "tag", value: "绘图" }
+  ]), labels, customMarkerMeasurer);
+
+  assert.deepEqual(presentation.resolveCustomMarkerDisplays(node), [
+    { kind: "emoji", value: "🔥", id: "mtn-emoji-1" },
+    { kind: "tag", value: "绘图", id: "mtn-tag-1" }
+  ]);
+  const geometry = getNodeMarkerGeometry(node, presentation);
+  assert.deepEqual(geometry.markers, [
+    { kind: "emoji", label: "🔥", id: "mtn-emoji-1" },
+    { kind: "tag", label: "绘图", id: "mtn-tag-1" },
+    { kind: "extension", label: "PDF" }
+  ]);
+  assert.deepEqual(geometry.resourceBadges, [{ kind: "extension", label: "PDF" }]);
+
+  const itemCount = 1 + 2 + 1;
+  assert.equal(
+    geometry.width,
+    NODE_MARKER_GAP
+      + 1 * MANUAL_MARKER_SIZE
+      + (MANUAL_MARKER_SIZE + 44 + 23)
+      + (itemCount - 1) * NODE_MARKER_GAP
+  );
+  assert.equal(geometry.width, 111);
+  assert.equal(geometry.height, MANUAL_MARKER_SIZE);
+});
+
+test("a single text tag reserves its measured box instead of a fixed icon square", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "Tagged");
+  node.markers = [{ type: "tag", value: "绘图" }];
+  const definitions = [{ id: "mtn-tag-1", kind: "tag" as const, value: "绘图" }];
+
+  const stub = createResourceBadgePresentation(customMarkerRules(definitions), labels, {
+    measure: () => ({ width: 99, height: 30 })
+  });
+  assert.deepEqual(getNodeMarkerGeometry(node, stub), {
+    markers: [{ kind: "tag", label: "绘图", id: "mtn-tag-1" }],
+    resourceBadges: [],
+    width: NODE_MARKER_GAP + 99,
+    height: 30
+  });
+
+  // The headless fallback measures CJK text at 10px per code point plus padding.
+  const fallback = createResourceBadgePresentation(customMarkerRules(definitions), labels);
+  assert.equal(getNodeMarkerGeometry(node, fallback).width, NODE_MARKER_GAP + 24);
+  assert.equal(getNodeMarkerGeometry(node, fallback).height, 16);
+});
+
+test("custom emoji keep the fixed square box that measures 18 by 18", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "Emoji");
+  node.markers = [{ type: "emoji", value: "🔥" }];
+  const presentation = createResourceBadgePresentation(customMarkerRules([
+    { id: "mtn-emoji-1", kind: "emoji", value: "🔥" }
+  ]), labels, customMarkerMeasurer);
+
+  assert.deepEqual(presentation.measure({ kind: "emoji", label: "🔥", id: "mtn-emoji-1" }), {
+    width: MANUAL_MARKER_SIZE,
+    height: MANUAL_MARKER_SIZE
+  });
+  assert.deepEqual(getNodeMarkerGeometry(node, presentation), {
+    markers: [{ kind: "emoji", label: "🔥", id: "mtn-emoji-1" }],
+    resourceBadges: [],
+    width: NODE_MARKER_GAP + MANUAL_MARKER_SIZE,
+    height: MANUAL_MARKER_SIZE
+  });
+});
+
+test("custom markers missing from the registry render nothing and never rewrite the node", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "Tagged");
+  node.resource = { type: "file", resourceId: "pdf", pathHint: "files/File.pdf", fileKind: "attachment" };
+  node.markers = [{ type: "tag", value: "绘图" }];
+  const original = structuredClone(document);
+
+  const noRegistry = createResourceBadgePresentation(customMarkerRules([]), labels, customMarkerMeasurer);
+  const otherValue = createResourceBadgePresentation(customMarkerRules([
+    { id: "mtn-tag-2", kind: "tag", value: "草稿" }
+  ]), labels, customMarkerMeasurer);
+
+  for (const presentation of [noRegistry, otherValue]) {
+    assert.deepEqual(presentation.resolveCustomMarkerDisplays(node), []);
+    const geometry = getNodeMarkerGeometry(node, presentation);
+    assert.deepEqual(geometry.markers, [{ kind: "extension", label: "PDF" }]);
+    assert.equal(geometry.width, NODE_MARKER_GAP + 23);
+    assert.equal(geometry.height, 16);
+  }
+  assert.deepEqual(node.markers, [{ type: "tag", value: "绘图" }]);
+  assert.deepEqual(document, original);
+
+  const restored = createResourceBadgePresentation(customMarkerRules([
+    { id: "mtn-tag-1", kind: "tag", value: "绘图" }
+  ]), labels, customMarkerMeasurer);
+  assert.deepEqual(restored.resolveCustomMarkerDisplays(node), [
+    { kind: "tag", value: "绘图", id: "mtn-tag-1" }
+  ]);
+  assert.deepEqual(getNodeMarkerGeometry(node, restored).markers, [
+    { kind: "tag", label: "绘图", id: "mtn-tag-1" },
+    { kind: "extension", label: "PDF" }
+  ]);
+  assert.deepEqual(document, original);
+});
+
+test("an empty custom marker registry keeps the previous marker geometry unchanged", () => {
+  const document = createEmptyDocument("Badges");
+  const node = addNode(document, document.rootId, "File");
+  node.resource = { type: "file", resourceId: "pdf", pathHint: "files/File.pdf", fileKind: "attachment" };
+  node.markers = [
+    { type: "progress", value: "todo" },
+    { type: "priority", value: "blue" },
+    { type: "highlight", value: "#75ACA6" }
+  ];
+  const original = structuredClone(document);
+  const legacyRules = createResourceBadgePresentation(emptyRules, labels, customMarkerMeasurer);
+  const emptyRegistry = createResourceBadgePresentation(customMarkerRules([]), labels, customMarkerMeasurer);
+
+  assert.deepEqual(getNodeMarkerGeometry(node, legacyRules), {
+    markers: [{ kind: "extension", label: "PDF" }],
+    resourceBadges: [{ kind: "extension", label: "PDF" }],
+    width: 65,
+    height: 18
+  });
+  assert.deepEqual(getNodeMarkerGeometry(node, emptyRegistry), getNodeMarkerGeometry(node, legacyRules));
+  assert.deepEqual(document, original);
 });

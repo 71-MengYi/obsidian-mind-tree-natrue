@@ -55,3 +55,15 @@ test("legacy synced indexes are ignored instead of becoming trusted ownership hi
   assert.deepEqual(Object.keys(normalized), ["settings"]);
   assert.equal(Object.hasOwn(normalized, "resourceIndex"), false);
 });
+
+test("normalized custom markers are an independent array that cannot mutate plugin defaults", () => {
+  const first = normalizePluginData({
+    settings: { customMarkers: [{ id: "mtn-emoji-a", kind: "emoji", value: "🔥" }] }
+  });
+  first.settings.customMarkers.push({ id: "mtn-tag-b", kind: "tag", value: "绘图" });
+  assert.deepEqual(first.settings.customMarkers.map((item) => item.id), ["mtn-emoji-a", "mtn-tag-b"]);
+
+  const second = normalizePluginData({ settings: {} });
+  assert.deepEqual(second.settings.customMarkers, []);
+  assert.deepEqual(DEFAULT_SETTINGS.customMarkers, []);
+});

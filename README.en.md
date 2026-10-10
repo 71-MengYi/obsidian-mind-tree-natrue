@@ -107,8 +107,19 @@ Once linked, node titles and file names stay in sync both ways. If you don't wan
 
 The toolbar's **Node markers, Copy, and Export** buttons are disabled when no node is selected and become available as soon as you select a node.
 
+- **Node markers**: the toolbar button and the node's context menu open the same marker panel with the built-in Progress / Priority / Highlight groups (one value per group; each group's delete button clears only itself). The panel also shows the custom **Emoji** and **Text tags** groups you add under **Settings → Mind Tree Nature → Manage markers**: click an unselected item to select it and replace that group's value, and click it again to clear the group. Nodes show trailing items in the order custom emoji → text tags / file badges, and text tags use the same label style as file-type badges.
 - **Import text** in the toolbar: paste list/indented text to rebuild hierarchy, or switch to the *multi-level headings* rule for nested lists. Both recognize Wiki links, Markdown note/attachment links, and HTTP/HTTPS URLs — a single link per line keeps its alias, and multiple links become separate sibling nodes in order.
 - **Export** in the toolbar: export the selected branch or the whole tree as a PNG.
+
+### 5. Manage custom markers
+
+**Settings → Mind Tree Nature → Manage markers** only manages the markers you add yourself; the built-in Progress / Priority / Highlight groups are product rules and are not affected:
+
+- **Emoji**: added emoji are laid out as a grid of square icons. Hover an icon (or focus it with the keyboard) to reveal a small delete button in its top-right corner, and drag an icon to reorder it — the drop position and everything after it shift back. With no emoji added, the grid takes no UI space. The input box and **Add** button below create new entries; pressing Enter does the same. Up to 64 emoji, 16 characters each.
+- **Text tags**: managed exactly like emoji, but displayed as word labels such as “Drawing” or “Mind tree”. Up to 64 tags, 24 characters each. Text tags appear after the node title with that same label style.
+- With the keyboard, `Alt + ←/→` moves the focused item one place left or right. Deleting a marker stops it from being displayed immediately, while nodes keep the reference — add the same marker again to restore it.
+- These settings only affect display: open mind trees refresh at once, no `.mtn.md` file is modified, and no undo entry is created.
+- Like the built-in markers, the custom markers a node actually uses are mirrored into the Markdown outline as a readable suffix, for example `- Node title 〔emoji:🔥〕 〔tag:Drawing〕`, so the outline always states which markers a node carries.
 
 ## File format and privacy
 

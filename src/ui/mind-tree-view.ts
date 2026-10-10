@@ -2463,6 +2463,9 @@ export class MindTreeView extends TextFileView {
     this.markerPopover = openMarkerPopover({
       ownerDocument: this.rootEl.ownerDocument,
       position,
+      // Read the registry lazily: the settings tab can add or remove a custom
+      // marker while this tree stays open, and the next render must see it.
+      settings: () => this.plugin.settings,
       readNode: () => this.document?.nodes[nodeId],
       updateNode: (mutator) => this.commit((draft) => {
         const node = getNode(draft, nodeId);
@@ -2908,13 +2911,19 @@ export class MindTreeView extends TextFileView {
     if (targetNodeIds.length > 0) this.openDeleteDialog(targetNodeIds, topicNodeIds, "branch");
   }
 
-  /** Build one immutable badge rule set for the current render/export pass. */
+  /**
+   * Build one immutable trailing-item profile for the current render/export
+   * pass. It carries the file-badge rules, the user-managed custom marker
+   * registry and the localized accessible names, so every node resolves its
+   * emoji, text tags and file badges from the same snapshot.
+   */
   private getResourceBadgePresentation(): ResourceBadgePresentation {
     this.resourceBadgeMeasurer?.refreshStyles();
     return createResourceBadgePresentation(
       this.plugin.settings,
       { mindTree: t("node.mindTreeMarker"), drawing: t("node.drawingMarker") },
-      this.resourceBadgeMeasurer ?? fallbackResourceBadgeMeasurer
+      this.resourceBadgeMeasurer ?? fallbackResourceBadgeMeasurer,
+      { emoji: t("marker.category.emoji"), tag: t("marker.category.tag") }
     );
   }
 

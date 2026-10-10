@@ -2,7 +2,7 @@ import { App, PluginSettingTab } from "obsidian";
 import { t, type TranslationKey } from "./i18n";
 import type MindTreeNaturePlugin from "./main";
 import type { ResourceIndexProgress } from "./services/resource-catalog";
-import { BasicSettingsPage, MindMapSettingsPage, TopicNoteSettingsPage } from "./ui/settings-pages";
+import { BasicSettingsPage, CustomMarkersSettingsPage, MindMapSettingsPage, TopicNoteSettingsPage } from "./ui/settings-pages";
 import type { SettingsPageObject, SettingsPagePort } from "./ui/settings-pages/ports";
 import { AdaptiveTooltipController } from "./ui/adaptive-tooltip";
 export { DEFAULT_SETTINGS } from "./settings-model";
@@ -13,12 +13,13 @@ export type { MindTreeSettings } from "./settings-model";
  * shape preferences are runtime defaults for trees without their own value;
  * active values live per document.
  */
-type SettingsPage = "basic" | "mind-map" | "topic-notes";
+type SettingsPage = "basic" | "mind-map" | "topic-notes" | "custom-markers";
 
 const SETTINGS_PAGES: ReadonlyArray<{ id: SettingsPage; label: TranslationKey }> = [
   { id: "basic", label: "settings.tabs.basic" },
   { id: "mind-map", label: "settings.tabs.mindMap" },
-  { id: "topic-notes", label: "settings.tabs.topicNotes" }
+  { id: "topic-notes", label: "settings.tabs.topicNotes" },
+  { id: "custom-markers", label: "settings.tabs.customMarkers" }
 ];
 
 export class MindTreeSettingTab extends PluginSettingTab {
@@ -55,7 +56,8 @@ export class MindTreeSettingTab extends PluginSettingTab {
     };
     if (this.activePage === "basic") this.page = new BasicSettingsPage(panel, port);
     else if (this.activePage === "mind-map") this.page = new MindMapSettingsPage(panel, port);
-    else this.page = new TopicNoteSettingsPage(panel, port);
+    else if (this.activePage === "topic-notes") this.page = new TopicNoteSettingsPage(panel, port);
+    else this.page = new CustomMarkersSettingsPage(panel, port);
     this.tooltips = new AdaptiveTooltipController(containerEl);
   }
 

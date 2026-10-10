@@ -1,12 +1,19 @@
 import { setIcon } from "obsidian";
 import {
+  customMarkerDefinitionsByKind,
+  type CustomMarkerDefinition,
+  type CustomMarkerKind
+} from "../domain/custom-markers";
+import {
   getNodeMarker,
+  isCustomMarkerCategory,
   NODE_HIGHLIGHT_COLORS,
   removeNodeMarker,
   setNodeMarker,
   type NodeMarkerCategory
 } from "../domain/markers";
 import { t, type TranslationKey } from "../i18n";
+import type { MindTreeSettings } from "../settings-model";
 import type { MindTreeNode, NodeMarker } from "../types";
 import { AdaptiveTooltipController } from "./adaptive-tooltip";
 
@@ -24,6 +31,8 @@ export interface MarkerPopoverHandle {
 export interface MarkerPopoverOptions {
   ownerDocument: Document;
   position: { x: number; y: number };
+  /** Live custom marker registry; read on every render so settings apply at once. */
+  settings: () => MindTreeSettings;
   readNode: () => MindTreeNode | undefined;
   updateNode: (mutator: (node: MindTreeNode) => void) => void;
   onClose?: () => void;
@@ -107,26 +116,101 @@ export function openMarkerPopover(options: MarkerPopoverOptions): MarkerPopoverH
 
     const choicesRow = category.createDiv("mtn-marker-choices");
     for (const choice of choices) {
-      const selected = current?.value === choice.marker.value;
       const valueLabel = choice.labelKey
         ? t(choice.labelKey)
         : t("marker.highlight.color", { color: choice.marker.value });
-      const button = choicesRow.createEl("button", {
-        cls: `clickable-icon mtn-marker-choice is-${choice.marker.type}${selected ? " is-active" : ""}`,
-        attr: {
-          type: "button",
-          "aria-label": valueLabel,
-          "aria-pressed": String(selected)
-        }
+      renderOption(choicesRow, choice.marker, current?.value, valueLabel, choice.icon, choice.color);
+    }
+  };
+
+  /**
+   * One selectable value. A category holds at most one value, so choosing a
+   * value only ever replaces the current one; unselecting goes through the
+   * category's own delete button (and, for custom groups, the selected chip).
+   */
+  const renderOption = (
+    parent: HTMLElement,
+    marker: NodeMarker,
+    currentValue: string | undefined,
+    valueLabel: string,
+    icon: string | undefined,
+    color: string | undefined
+  ): void => {
+    const selected = currentValue === marker.value;
+    const button = parent.createEl("button", {
+      cls: `clickable-icon mtn-marker-choice is-${marker.type}${selected ? " is-active" : ""}`,
+      attr: {
+        type: "button",
+        "aria-label": valueLabel,
+        "aria-pressed": String(selected)
+      }
+    });
+    if (color) button.style.setProperty("--mtn-marker-choice-color", color);
+    // Custom values are user text, so they are rendered as text instead of an
+    // icon lookup that would silently render nothing for an unknown name.
+    if (icon) setIcon(button, icon);
+    else button.textContent = marker.value;
+    button.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      options.updateNode((draftNode) => {
+        // Clicking the selected custom chip clears its category, which is the
+        // only way to unset the value from this row without hunting for the
+        // small delete button. Built-in categories keep the single-click
+        // "select again replaces" behavior users already know.
+        if (selected && isCustomMarkerCategory(marker.type)) removeNodeMarker(draftNode, marker.type);
+        else setNodeMarker(draftNode, marker);
       });
-      if (choice.color) button.style.setProperty("--mtn-marker-choice-color", choice.color);
-      setIcon(button, choice.icon);
-      button.addEventListener("click", (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        options.updateNode((draftNode) => setNodeMarker(draftNode, choice.marker));
-        render();
+      render();
+    });
+  };
+
+  /**
+   * Append one user-managed group. `settings.customMarkers` is read on every
+   * render, so a marker added in the settings tab appears the next time this
+   * palette is drawn without reopening it. An empty group renders nothing at
+   * all: a heading with no choices would only look like a broken control.
+   */
+  const renderCustomCategory = (parent: HTMLElement, kind: CustomMarkerKind): void => {
+    const definitions: CustomMarkerDefinition[] =
+      customMarkerDefinitionsByKind(options.settings().customMarkers, kind);
+    if (definitions.length === 0) return;
+    const node = options.readNode();
+    if (!node) { close(); return; }
+    const current = getNodeMarker(node, kind);
+    const categoryLabel = t(kind === "emoji" ? "marker.category.emoji" : "marker.category.tag");
+    const category = parent.createDiv("mtn-marker-category");
+    const header = category.createDiv("mtn-marker-category-header");
+    header.createSpan({ cls: "mtn-marker-category-name", text: categoryLabel });
+    const removeButton = header.createEl("button", {
+      cls: "clickable-icon mtn-marker-category-remove",
+      attr: {
+        type: "button",
+        "aria-label": t("marker.removeCategory", { category: categoryLabel })
+      }
+    });
+    setIcon(removeButton, "trash-2");
+    removeButton.disabled = !current;
+    removeButton.addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      options.updateNode((draftNode) => removeNodeMarker(draftNode, kind));
+      render();
+    });
+
+    const choicesRow = category.createDiv("mtn-marker-choices");
+    for (const definition of definitions) {
+      const valueLabel = t(kind === "emoji" ? "marker.custom.emojiValue" : "marker.custom.tagValue", {
+        value: definition.value
       });
+      renderOption(
+        choicesRow,
+        { type: kind, value: definition.value },
+        current?.value,
+        valueLabel,
+        undefined,
+        undefined
+      );
     }
   };
 
@@ -138,6 +222,10 @@ export function openMarkerPopover(options: MarkerPopoverOptions): MarkerPopoverH
     renderCategory(panel, "progress", t("marker.category.progress"), PROGRESS_CHOICES);
     renderCategory(panel, "priority", t("marker.category.priority"), PRIORITY_CHOICES);
     renderCategory(panel, "highlight", t("marker.category.highlight"), HIGHLIGHT_CHOICES);
+    // Custom groups follow the three built-ins; each stays invisible until the
+    // user defines at least one entry for that kind.
+    renderCustomCategory(panel, "emoji");
+    renderCustomCategory(panel, "tag");
   };
 
   render();

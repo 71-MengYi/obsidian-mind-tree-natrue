@@ -2,6 +2,7 @@ import {
   DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR,
   type NonMarkdownResourceIdSeparator
 } from "./format/resource-id";
+import type { CustomMarkerDefinition } from "./domain/custom-markers";
 import type {
   MindTreeCollectionMode,
   MindTreeConnectionStyle,
@@ -25,6 +26,12 @@ export interface MindTreeSettings {
   /** Case-insensitive extension keys mapped to user-facing badge labels. */
   fileExtensionBadgeAliases: Record<string, string>;
   titleSync: boolean;
+  /**
+   * User-managed marker palette entries, in display order. The node payload
+   * only stores a marker's value, so this list is the single source of truth
+   * for which custom markers are currently available.
+   */
+  customMarkers: CustomMarkerDefinition[];
   nonMarkdownIdSeparator: NonMarkdownResourceIdSeparator;
   resourceOpenMode: "tab" | "split-right";
   newNoteOpenMode: "split-right" | "tab" | "current" | "window";
@@ -48,6 +55,7 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   ignoredFileBadgeExtensions: [],
   fileExtensionBadgeAliases: {},
   titleSync: true,
+  customMarkers: [],
   nonMarkdownIdSeparator: DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR,
   resourceOpenMode: "tab",
   newNoteOpenMode: "split-right",
