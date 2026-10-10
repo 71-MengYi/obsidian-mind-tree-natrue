@@ -14,6 +14,7 @@ import {
   type CustomMarkerValidationErrorCode
 } from "../../domain/custom-markers";
 import { t, type TranslationKey } from "../../i18n";
+import { countEmojiMatches, searchEmoji } from "../emoji-search";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
 
 /**
@@ -43,6 +44,24 @@ function sameCustomMarkerOrder(
     && left.every((definition, index) => definition.id === right[index]?.id
       && definition.kind === right[index]?.kind
       && definition.value === right[index]?.value);
+}
+
+/** The picker's search field, with the magnifier inside the field box. */
+function createEmojiSearchInput(parent: HTMLElement): HTMLInputElement {
+  const box = parent.createDiv("mtn-emoji-search");
+  const icon = box.createSpan("mtn-emoji-search-icon");
+  setIcon(icon, "search");
+  icon.setAttribute("aria-hidden", "true");
+  return box.createEl("input", {
+    type: "search",
+    attr: {
+      type: "search",
+      placeholder: t("settings.customMarkers.emoji.search"),
+      "aria-label": t("settings.customMarkers.emoji.search"),
+      autocomplete: "off",
+      spellcheck: "false"
+    }
+  });
 }
 
 /**
@@ -90,23 +109,38 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
     const empty = parent.createDiv({ cls: "mtn-custom-marker-empty", text: t(emptyKey) });
     const error = parent.createDiv({ cls: "mtn-setting-inline-error", attr: { role: "status", "aria-live": "polite" } });
 
-    const addRow = parent.createDiv({ cls: "mtn-custom-marker-add" });
-    const input = addRow.createEl("input", {
-      type: "text",
-      attr: {
+    const addRow = parent.createDiv({ cls: `mtn-custom-marker-add is-${kind}` });
+    // The Emoji group is a searchable picker; text tags keep a plain text field.
+    const input: HTMLInputElement = kind === "emoji"
+      ? createEmojiSearchInput(addRow)
+      : addRow.createEl("input", {
         type: "text",
-        // The Emoji group accepts one glyph; a ZWJ family sequence needs up to
-        // 16 code points, so 32 leaves room for a paste before validation runs.
-        // Tags stay on their real character limit.
-        maxlength: String(kind === "emoji" ? 32 : maxLength * 4),
-        placeholder: t(placeholderKey),
-        "aria-label": t(placeholderKey)
-      }
-    });
-    const addButton = addRow.createEl("button", {
-      text: t("settings.customMarkers.add"),
-      attr: { type: "button" }
-    });
+        attr: {
+          type: "text",
+          maxlength: String(maxLength * 4),
+          placeholder: t(placeholderKey),
+          "aria-label": t(placeholderKey)
+        }
+      });
+    // A picker choice adds immediately, so only free-text tags need Add.
+    const addButton = kind === "tag"
+      ? addRow.createEl("button", {
+        text: t("settings.customMarkers.add"),
+        attr: { type: "button" }
+      })
+      : undefined;
+    const pickerList = kind === "emoji"
+      ? addRow.createDiv({
+        cls: "mtn-emoji-picker-list",
+        attr: { role: "listbox", "aria-label": t("settings.customMarkers.emoji.search") }
+      })
+      : undefined;
+    const pickerEmpty = kind === "emoji"
+      ? addRow.createDiv({ cls: "mtn-emoji-picker-empty", attr: { role: "status", "aria-live": "polite" } })
+      : undefined;
+    const pickerStatus = kind === "emoji"
+      ? addRow.createDiv({ cls: "mtn-emoji-picker-status", attr: { "aria-live": "polite" } })
+      : undefined;
 
     let dragId: string | undefined;
 
@@ -122,32 +156,42 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
       customMarkerDefinitionsByKind(this.port.settings.customMarkers, kind);
 
     /**
-     * An open-tree refresh must never cost the user a settings write: `save()`
-     * persists every setting, so a canvas that fails to re-render must not skip
-     * it. Both failures are reported; a failed refresh is called out separately
-     * because the change did reach `data.json` and only the canvas is stale.
+     * Append one value; returns false when it was rejected.
      */
-    const persist = async (): Promise<void> => {
-      try {
-        this.port.refreshOpenLayouts();
-      } catch {
-        showError("settings.customMarkers.error.refresh");
+    const addValue = (raw: string): boolean => {
+      const kindDefinitions = definitions();
+      const validation = validateCustomMarkerValue(
+        kind,
+        raw,
+        kindDefinitions.map((definition) => definition.value)
+      );
+      if (!validation.ok) {
+        const key = validationErrorKey(validation.code);
+        if (key === undefined) return false;
+        // Only `too-long` takes a variable; every other message is rendered
+        // without one so no unreplaced `{...}` can reach the user.
+        showError(key, validation.code === "too-long" ? { length: maxLength } : undefined);
+        return false;
       }
-      try {
-        await this.port.save();
-      } catch {
-        showError("settings.customMarkers.error.save");
+      // The cap is per group, so only this group's length can block an add; the
+      // other group keeps its own budget of MAX_CUSTOM_MARKER_ENTRIES entries.
+      if (kindDefinitions.length >= MAX_CUSTOM_MARKER_ENTRIES) {
+        showError("settings.customMarkers.error.limit", { count: MAX_CUSTOM_MARKER_ENTRIES });
+        return false;
       }
-    };
-
-    const commit = (next: CustomMarkerDefinition[]): void => {
-      // A drop on the tile's own slot resolves to the unchanged order. Skipping
-      // the write keeps `data.json` untouched, so an accidental drag cannot
-      // dirty the settings file or cost an extra save.
-      if (sameCustomMarkerOrder(this.port.settings.customMarkers, next)) return;
-      this.port.settings.customMarkers = next;
-      render();
-      void persist();
+      const value = cleanCustomMarkerValue(raw, kind);
+      const next = addCustomMarkerDefinition(this.port.settings.customMarkers, {
+        id: createCustomMarkerId(kind, value, this.port.settings.customMarkers),
+        kind,
+        value
+      });
+      if (next.length === this.port.settings.customMarkers.length) {
+        showError("settings.customMarkers.error.duplicate");
+        return false;
+      }
+      hideError();
+      commit(next);
+      return true;
     };
 
     /** Drop target index is computed on the list without the dragged entry. */
@@ -177,8 +221,8 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
     };
 
     /**
-     * Focus the tile that now holds `index`, or the add input when the group is
-     * empty. Deleting a tile destroys the focused element, and a browser moves
+     * Focus the tile that now holds `index`, or the group's input when the group
+     * is empty. Deleting a tile destroys the focused element, and a browser moves
      * focus to the document body in that case, which would send the next Tab
      * back to the top of the dialog.
      */
@@ -271,6 +315,97 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
       }
     };
 
+    /**
+     * Switch one picker entry to its "already added" state in place.
+     * Re-rendering the whole 1.3k-entry list after every pick would rebuild
+     * hundreds of buttons and make adding several emoji feel sluggish.
+     */
+    const markPickerItemAdded = (item: HTMLButtonElement, name: string): void => {
+      item.addClass("is-added");
+      item.disabled = true;
+      item.setAttribute("aria-label", t("settings.customMarkers.emoji.added", { value: name }));
+    };
+
+    /**
+     * Render the emoji picker: a scrollable grid of catalogue entries filtered
+     * by the search box. Entries that are already added stay visible but
+     * disabled, so the palette doubles as the current state.
+     */
+    const renderPicker = (): void => {
+      if (!pickerList || !pickerEmpty || !pickerStatus) return;
+      const query = input.value.trim();
+      const entries = searchEmoji(query);
+      const added = new Set(definitions().map((definition) => definition.value));
+      pickerList.empty();
+      pickerEmpty.hidden = entries.length > 0;
+      pickerEmpty.toggleClass("is-visible", entries.length === 0);
+      pickerEmpty.setText(entries.length === 0
+        ? t("settings.customMarkers.emoji.noResults", { query })
+        : "");
+      pickerStatus.setText(t("settings.customMarkers.emoji.showing", {
+        shown: entries.length,
+        total: countEmojiMatches(query)
+      }));
+      for (const entry of entries) {
+        const alreadyAdded = added.has(entry.g);
+        const item = pickerList.createEl("button", {
+          cls: "mtn-emoji-picker-item",
+          text: entry.g,
+          attr: { type: "button", "data-emoji": entry.g, "aria-label": entry.n }
+        });
+        item.disabled = alreadyAdded;
+        if (alreadyAdded) markPickerItemAdded(item, entry.n);
+        item.addEventListener("click", (event) => {
+          event.preventDefault();
+          if (!addValue(entry.g)) return;
+          // Only this entry changes state, and the group limit may now be
+          // reached for every remaining entry.
+          markPickerItemAdded(item, entry.n);
+          if (definitions().length >= MAX_CUSTOM_MARKER_ENTRIES) {
+            for (const candidate of pickerList.querySelectorAll<HTMLButtonElement>(".mtn-emoji-picker-item")) {
+              candidate.disabled = true;
+            }
+          }
+          input.focus();
+        });
+      }
+    };
+
+    /**
+     * An open-tree refresh must never cost the user a settings write: `save()`
+     * persists every setting, so a canvas that fails to re-render must not skip
+     * it. Both failures are reported; a failed refresh is called out separately
+     * because the change did reach `data.json` and only the canvas is stale.
+     */
+    const persist = async (): Promise<void> => {
+      try {
+        this.port.refreshOpenLayouts();
+      } catch {
+        showError("settings.customMarkers.error.refresh");
+      }
+      try {
+        await this.port.save();
+      } catch {
+        showError("settings.customMarkers.error.save");
+      }
+    };
+
+    /**
+     * Store a new list and refresh everything that shows the old one. It is
+     * declared after `renderPicker` only because both are `const` arrow
+     * functions; `addValue` runs later, so the temporal ordering is safe.
+     */
+    const commit = (next: CustomMarkerDefinition[]): void => {
+      // A drop on the tile's own slot resolves to the unchanged order. Skipping
+      // the write keeps `data.json` untouched, so an accidental drag cannot
+      // dirty the settings file or cost an extra save.
+      if (sameCustomMarkerOrder(this.port.settings.customMarkers, next)) return;
+      this.port.settings.customMarkers = next;
+      render();
+      renderPicker();
+      void persist();
+    };
+
     grid.addEventListener("dragover", (event) => {
       if (!dragId) return;
       event.preventDefault();
@@ -299,55 +434,29 @@ export class CustomMarkersSettingsPage implements SettingsPageObject {
       clearDropTargets();
     });
 
-    const addValue = (): void => {
-      const raw = input.value;
-      const kindDefinitions = definitions();
-      const validation = validateCustomMarkerValue(
-        kind,
-        raw,
-        kindDefinitions.map((definition) => definition.value)
-      );
-      if (!validation.ok) {
-        const key = validationErrorKey(validation.code);
-        if (key === undefined) return;
-        // Only `too-long` takes a variable; every other message is rendered
-        // without one so no unreplaced `{...}` can reach the user.
-        showError(key, validation.code === "too-long" ? { length: maxLength } : undefined);
-        return;
-      }
-      // The cap is per group, so only this group's length can block an add; the
-      // other group keeps its own budget of MAX_CUSTOM_MARKER_ENTRIES entries.
-      if (kindDefinitions.length >= MAX_CUSTOM_MARKER_ENTRIES) {
-        showError("settings.customMarkers.error.limit", { count: MAX_CUSTOM_MARKER_ENTRIES });
-        return;
-      }
-      const value = cleanCustomMarkerValue(raw);
-      const next = addCustomMarkerDefinition(this.port.settings.customMarkers, {
-        id: createCustomMarkerId(kind, value, this.port.settings.customMarkers),
-        kind,
-        value
+    if (kind === "emoji") {
+      // Live filtering: every keystroke re-runs the search over the 1.3k-entry
+      // catalogue, which is a linear scan with a precomputed haystack.
+      input.addEventListener("input", () => {
+        hideError();
+        renderPicker();
       });
-      if (next.length === this.port.settings.customMarkers.length) {
-        showError("settings.customMarkers.error.duplicate");
-        return;
-      }
-      input.value = "";
-      hideError();
-      commit(next);
-    };
-
-    addButton.addEventListener("click", (event) => {
-      event.preventDefault();
-      addValue();
-    });
-    input.addEventListener("keydown", (event) => {
-      // Enter also confirms an IME candidate. Adding there would store a
-      // half-composed value, so only a plain Enter adds.
-      if (event.key !== "Enter" || event.isComposing) return;
-      event.preventDefault();
-      addValue();
-    });
-    input.addEventListener("input", hideError);
+      input.addEventListener("search", () => renderPicker());
+    } else {
+      addButton?.addEventListener("click", (event) => {
+        event.preventDefault();
+        if (addValue(input.value)) input.value = "";
+      });
+      input.addEventListener("keydown", (event) => {
+        // Enter also confirms an IME candidate. Adding there would store a
+        // half-composed value, so only a plain Enter adds.
+        if (event.key !== "Enter" || event.isComposing) return;
+        event.preventDefault();
+        if (addValue(input.value)) input.value = "";
+      });
+      input.addEventListener("input", hideError);
+    }
     render();
+    renderPicker();
   }
 }

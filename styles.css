@@ -1946,6 +1946,101 @@
 
 .mtn-custom-marker-add > input[type="text"] { flex: 1 1 auto; min-width: 0; }
 
+/* ── Emoji picker: search field + scrollable grid ─────────────────────────── */
+
+.mtn-custom-marker-add.is-emoji {
+  display: block;
+  margin-bottom: 0;
+}
+
+.mtn-emoji-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+  margin: 0 0 8px;
+}
+
+.mtn-emoji-search-icon {
+  position: absolute;
+  left: 9px;
+  display: flex;
+  align-items: center;
+  pointer-events: none;
+  color: var(--text-muted);
+}
+
+.mtn-emoji-search-icon svg { width: 15px; height: 15px; }
+
+.mtn-emoji-search > input[type="search"] {
+  width: 100%;
+  padding-left: 30px;
+}
+
+/* The list scrolls vertically; 236px shows six rows of 36px cells plus gaps. */
+.mtn-emoji-picker-list {
+  box-sizing: border-box;
+  max-height: 236px;
+  margin: 0 0 6px;
+  padding: 4px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 8px;
+  display: grid;
+  /* `auto-fill` keeps the cell size stable and just changes the column count as
+     the settings pane is resized, instead of stretching the emoji. */
+  grid-template-columns: repeat(auto-fill, 36px);
+  gap: 2px;
+  justify-content: space-between;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.mtn-emoji-picker-list:empty { display: none; }
+
+.mtn-emoji-picker-item {
+  box-sizing: border-box;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 7px;
+  background: transparent;
+  box-shadow: none;
+  cursor: pointer;
+  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
+  font-size: 22px;
+  line-height: 1;
+}
+
+.mtn-emoji-picker-item:hover:not(:disabled) {
+  background: var(--background-modifier-hover);
+}
+
+.mtn-emoji-picker-item:focus-visible {
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: -2px;
+}
+
+/* Already-added entries stay visible so the palette also shows current state. */
+.mtn-emoji-picker-item.is-added {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.mtn-emoji-picker-empty {
+  margin: 0 0 6px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-emoji-picker-status {
+  margin: 0 0 18px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+}
+
 .mtn-file-badge-rule-list {
   display: grid;
   gap: 4px;

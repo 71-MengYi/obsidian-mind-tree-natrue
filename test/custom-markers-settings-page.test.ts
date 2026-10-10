@@ -11,6 +11,7 @@ import {
 } from "../src/domain/custom-markers";
 import { translate } from "../src/i18n/catalog";
 import { DEFAULT_SETTINGS, type MindTreeSettings } from "../src/settings-model";
+import { EMOJI_CATALOG } from "../src/ui/emoji-data";
 import type { SettingsPagePort } from "../src/ui/settings-pages/ports";
 
 // Exercise the real settings page with only the Obsidian element helpers and
@@ -79,6 +80,7 @@ class TestElement {
   text = "";
   value = "";
   hidden = false;
+  disabled = false;
   icon = "";
   rect: Rect = { left: 0, top: 0, right: 34, bottom: 34 };
 
@@ -86,9 +88,10 @@ class TestElement {
 
   createEl(tag: string, options: ElementOptions | string = {}): TestElement {
     const child = new TestElement(this.ownerDocument, tag);
-    const resolved = typeof options === "string" ? { cls: options } : options;
-    if (resolved.cls) child.addClass(resolved.cls);
-    if (resolved.text !== undefined) child.text = resolved.text;
+    const resolved = typeof options === "string" ? { cls: options } : options;    if (resolved.cls) child.addClass(resolved.cls);
+    // Obsidian sets `text` after the tag is created, so `input.value` and
+    // `element.text` share one slot here too.
+    if (resolved.text !== undefined) { child.text = resolved.text; child.value = resolved.text; }
     if (resolved.type) child.setAttribute("type", resolved.type);
     for (const [name, value] of Object.entries(resolved.attr ?? {})) child.setAttribute(name, value);
     this.append(child);
@@ -128,6 +131,8 @@ class TestElement {
     if (selector.startsWith(".")) return this.classes.has(selector.slice(1));
     const attribute = /^\[data-marker-id="(.*)"\]$/.exec(selector);
     if (attribute) return this.dataset["markerId"] === (attribute[1] ?? "").replace(/\\(.)/g, "$1");
+    // A bare tag name is how the harness reaches the search input.
+    if (/^[a-z]+$/.test(selector)) return this.tag === selector;
     throw new Error(`unsupported selector: ${selector}`);
   }
   querySelectorAll(selector: string): TestElement[] {
@@ -144,7 +149,20 @@ class TestElement {
     return { ...this.rect, width: this.rect.right - this.rect.left, height: this.rect.bottom - this.rect.top };
   }
   focus(): void { this.ownerDocument.activeElement = this; }
-  all(): TestElement[] { return [this, ...this.children.flatMap((child) => child.all())]; }
+  all(): TestElement[] {
+    // Iterative pre-order walk: the Emoji picker adds hundreds of buttons and a
+    // recursive flatMap allocates an array per node on every scan.
+    const result: TestElement[] = [];
+    const pending: TestElement[] = [this];
+    while (pending.length > 0) {
+      const current = pending.pop()!;
+      result.push(current);
+      for (let index = current.children.length - 1; index >= 0; index -= 1) {
+        pending.push(current.children[index]!);
+      }
+    }
+    return result;
+  }
 }
 
 class TestDocument {
@@ -179,12 +197,16 @@ function at<T>(items: readonly T[], index: number, what: string): T {
   return item;
 }
 
-/** Distinct ids and values so a seeded group never collides with a test value. */
+/**
+ * Distinct ids and values so a seeded group never collides with a test value.
+ * Emoji seeds use real catalogue glyphs, because an Emoji definition can only
+ * ever hold one emoji; text tags stay free-form.
+ */
 function seed(kind: CustomMarkerKind, count: number): CustomMarkerDefinition[] {
   return Array.from({ length: count }, (_, index) => ({
     id: `mtn-${kind}-seed-${index}`,
     kind,
-    value: `${kind}-${index}`
+    value: kind === "emoji" ? at(EMOJI_CATALOG, index, "catalogue entry").g : `${kind}-${index}`
   }));
 }
 
@@ -199,6 +221,17 @@ interface Harness {
   error(kind: CustomMarkerKind): TestElement;
   emptyNote(kind: CustomMarkerKind): TestElement;
   tiles(kind: CustomMarkerKind): TestElement[];
+  /** The Emoji group is a picker: a search field plus a filtered list. */
+  pickerItems(): TestElement[];
+  pickerEmpty(): TestElement;
+  pickerStatus(): TestElement;
+  search(query: string): void;
+  /**
+   * Add one catalogue entry the way a user does: narrow the list with a keyword
+   * and click the resulting entry. The default list is only the head of the
+   * catalogue, so a test must not assume a glyph is already on screen.
+   */
+  pick(query: string, emoji: string): void;
   layout(kind: CustomMarkerKind, perRow?: number): void;
   failSave(error?: Error): void;
   failRefresh(error?: Error): void;
@@ -235,10 +268,22 @@ function fixture(options: { readonly markers?: readonly CustomMarkerDefinition[]
   assert.equal(page.element, root, "the page must expose the panel it filled");
 
   const byClass = (name: string): TestElement[] => root.all().filter((element) => element.hasClass(name));
+  /**
+   * Locate one group's own element. The page renders the Emoji section before
+   * the text tag section, and this file has always selected by that order; the
+   * picker only adds nodes *inside* the Emoji section, so the indices hold.
+   */
   const group = (kind: CustomMarkerKind, name: string): TestElement =>
     at(byClass(name), kind === "emoji" ? 0 : 1, `${kind} ${name}`);
   const tiles = (kind: CustomMarkerKind): TestElement[] =>
     group(kind, "mtn-custom-marker-grid").querySelectorAll(".mtn-custom-marker-tile");
+  const pickerList = (): TestElement => at(byClass("mtn-emoji-picker-list"), 0, "emoji picker list");
+  const searchField = (): TestElement => {
+    const addRow = group("emoji", "mtn-custom-marker-add");
+    return addRow.querySelectorAll(".mtn-emoji-search")[0]
+      ?.querySelectorAll("input")[0] ?? assert.fail("emoji picker has no search field");
+  };
+  const tagRow = (): TestElement => group("tag", "mtn-custom-marker-add");
 
   return {
     document,
@@ -246,11 +291,32 @@ function fixture(options: { readonly markers?: readonly CustomMarkerDefinition[]
     settings,
     calls,
     grid: (kind) => group(kind, "mtn-custom-marker-grid"),
-    input: (kind) => at(group(kind, "mtn-custom-marker-add").children, 0, `${kind} input`),
-    addButton: (kind) => at(group(kind, "mtn-custom-marker-add").children, 1, `${kind} Add button`),
+    input: (kind) => kind === "emoji"
+      ? searchField()
+      : at(tagRow().children, 0, `${kind} input`),
+    addButton: (kind) => kind === "emoji"
+      ? assert.fail("the Emoji picker has no Add button")
+      : at(group(kind, "mtn-custom-marker-add").children, 1, `${kind} Add button`),
     error: (kind) => group(kind, "mtn-setting-inline-error"),
     emptyNote: (kind) => group(kind, "mtn-custom-marker-empty"),
     tiles,
+    pickerItems: () => pickerList().querySelectorAll(".mtn-emoji-picker-item"),
+    pickerEmpty: () => at(byClass("mtn-emoji-picker-empty"), 0, "emoji picker empty note"),
+    pickerStatus: () => at(byClass("mtn-emoji-picker-status"), 0, "emoji picker status"),    search: (query) => {
+      const field = searchField();
+      field.value = query;
+      field.fire("input");
+    },
+    pick: (query, emoji) => {
+      const field = searchField();
+      field.value = query;
+      field.fire("input");
+      const item = pickerList().children.find((child) =>
+        child.hasClass("mtn-emoji-picker-item") && child.attributes.get("data-emoji") === emoji);
+      assert.ok(item, `expected a picker entry for ${emoji} after searching ${query}`);
+      assert.equal(item.disabled, false, `${emoji} must still be pickable`);
+      item.fire("click");
+    },
     layout: (kind, perRow = 3) => {
       tiles(kind).forEach((tile, index) => {
         const left = (index % perRow) * 42;
@@ -310,19 +376,19 @@ test("renders both groups in order with headings, descriptions, grids, notes and
 
   const descriptions = h.root.all().filter((element) => element.hasClass("setting-item-description"));
   assert.deepEqual(descriptions.map((element) => element.text), [
-    translate("settings.customMarkers.emoji.desc", "en", {
-      count: MAX_CUSTOM_MARKER_ENTRIES, length: MAX_CUSTOM_EMOJI_LENGTH
-    }),
+    translate("settings.customMarkers.emoji.desc", "en", { count: MAX_CUSTOM_MARKER_ENTRIES }),
     translate("settings.customMarkers.tag.desc", "en", {
       count: MAX_CUSTOM_MARKER_ENTRIES, length: MAX_CUSTOM_TAG_LENGTH
     })
   ]);
-  for (const [index, length] of [[0, MAX_CUSTOM_EMOJI_LENGTH], [1, MAX_CUSTOM_TAG_LENGTH]] as const) {
+  // Both descriptions state the shared entry cap; only the tag copy mentions a
+  // per-entry character limit, because Emoji values come from the catalogue.
+  for (const [index] of descriptions.entries()) {
     const description = at(descriptions, index, "group description");
     assert.match(description.text, new RegExp(String(MAX_CUSTOM_MARKER_ENTRIES)));
-    assert.match(description.text, new RegExp(String(length)));
     assert.doesNotMatch(description.text, /\{\w+\}/);
   }
+  assert.match(at(descriptions, 1, "tag description").text, new RegExp(String(MAX_CUSTOM_TAG_LENGTH)));
 
   for (const kind of ["emoji", "tag"] as const) {
     const grid = h.grid(kind);
@@ -331,14 +397,34 @@ test("renders both groups in order with headings, descriptions, grids, notes and
     assert.equal(grid.children.length, 0, "a group without definitions must render an empty grid");
     assert.equal(grid.text, "");
 
-    const input = h.input(kind);
-    assert.equal(input.tag, "input");
-    assert.equal(input.getAttribute("placeholder"), translate(`settings.customMarkers.${kind}.placeholder`, "en"));
-    assert.equal(input.getAttribute("aria-label"), translate(`settings.customMarkers.${kind}.placeholder`, "en"));
-    assert.equal(h.addButton(kind).tag, "button");
-    assert.equal(h.addButton(kind).text, translate("settings.customMarkers.add", "en"));
-    assert.equal(h.addButton(kind).getAttribute("type"), "button");
+    assert.equal(h.input(kind).tag, "input");
+    if (kind === "tag") {
+      assert.equal(h.addButton("tag").tag, "button");
+      assert.equal(h.addButton("tag").text, translate("settings.customMarkers.add", "en"));
+      assert.equal(h.addButton("tag").getAttribute("type"), "button");
+    }
   }
+
+  // The Emoji group is a picker: a search field with a magnifier and a
+  // scrollable, filtered list. The text tag group keeps a plain text field.
+  const search = h.input("emoji");
+  assert.equal(search.getAttribute("type"), "search");
+  assert.equal(search.getAttribute("placeholder"), translate("settings.customMarkers.emoji.search", "en"));
+  assert.equal(search.getAttribute("aria-label"), translate("settings.customMarkers.emoji.search", "en"));
+  const magnifier = at(
+    h.root.all().filter((element) => element.hasClass("mtn-emoji-search-icon")), 0, "magnifier"
+  );
+  assert.equal(magnifier.icon, "search");
+  assert.equal(magnifier.getAttribute("aria-hidden"), "true");
+  assert.equal(h.pickerItems().length > 0, true, "the picker shows a default list before any search");
+  assert.equal(h.pickerItems()[0]!.tag, "button");
+  assert.equal(h.pickerItems()[0]!.getAttribute("type"), "button");
+  assert.equal(h.pickerItems()[0]!.disabled, false);
+
+  const tagInput = h.input("tag");
+  assert.equal(tagInput.getAttribute("type"), "text");
+  assert.equal(tagInput.getAttribute("placeholder"), translate("settings.customMarkers.tag.placeholder", "en"));
+  assert.equal(tagInput.getAttribute("aria-label"), translate("settings.customMarkers.tag.placeholder", "en"));
 });
 
 test("tiles keep the draggable list contract and expose named remove buttons", () => {
@@ -374,13 +460,11 @@ test("tiles keep the draggable list contract and expose named remove buttons", (
     translate("settings.customMarkers.removeTag", "en", { value: "绘图" }));
 });
 
-test("the Add button and Enter append the cleaned value, clear the input and refresh before saving", () => {
+test("picking an emoji appends it and the tag Add button appends the cleaned value", () => {
   const h = fixture();
-  h.input("emoji").value = "  🔥  ";
-  pressEnter(h, "emoji");
+  h.pick("fire", "🔥");
 
   assert.deepEqual(valuesOf(h, "emoji"), ["🔥"]);
-  assert.equal(h.input("emoji").value, "");
   assert.equal(h.tiles("emoji").length, 1);
   assert.deepEqual(h.calls, ["refresh", "save"]);
   const added = at(h.settings.customMarkers, 0, "added marker");
@@ -396,9 +480,72 @@ test("the Add button and Enter append the cleaned value, clear the input and ref
   assert.deepEqual(valuesOf(h, "emoji"), ["🔥"]);
 });
 
-test("blank input, whitespace and invisible-only values are rejected without writing", () => {
+test("the search field filters the emoji list live and reports the result count", () => {
+  const h = fixture();
+  const all = h.pickerItems().length;
+  assert.ok(all > 0, "the picker starts with a default list");
+  assert.match(h.pickerStatus().text, new RegExp(String(all)));
+  assert.equal(h.pickerEmpty().hidden, true);
+
+  h.search("中国");
+  const filtered = h.pickerItems();
+  assert.ok(filtered.length > 0 && filtered.length < all, "the search narrows the list");
+  assert.equal(filtered[0]!.attributes.get("data-emoji"), "🇨🇳");
+  assert.equal(filtered[0]!.getAttribute("aria-label"), "flag China");
+  assert.equal(h.pickerEmpty().hidden, true);
+
+  h.search("zzzzzz");
+  assert.deepEqual(h.pickerItems(), []);
+  assert.equal(h.pickerEmpty().hidden, false);
+  assert.equal(h.pickerEmpty().text,
+    translate("settings.customMarkers.emoji.noResults", "en", { query: "zzzzzz" }));
+
+  h.search("");
+  assert.equal(h.pickerItems().length, all, "clearing the query restores the default list");
+  assert.equal(h.pickerEmpty().hidden, true);
+});
+
+test("an emoji already in the grid is shown as added and cannot be picked twice", () => {
+  const h = fixture();
+  h.pick("fire", "🔥");
+  assert.deepEqual(valuesOf(h, "emoji"), ["🔥"]);
+  assert.deepEqual(h.calls, ["refresh", "save"]);
+
+  const addedItem = at(
+    h.pickerItems().filter((item) => item.attributes.get("data-emoji") === "🔥"),
+    0, "picked emoji entry"
+  );
+  assert.equal(addedItem.hasClass("is-added"), true);
+  assert.equal(addedItem.disabled, true);
+  assert.match(addedItem.getAttribute("aria-label")!, /already added/i);
+  assert.equal(addedItem.icon, "", "a picker entry is text-only, never an icon lookup");
+  // A disabled entry cannot be activated again, so no duplicate write happens.
+  assert.deepEqual(h.calls, ["refresh", "save"]);
+  assert.equal(h.settings.customMarkers.length, 1);
+});
+
+test("the Emoji group never stores free text because only catalogue entries can be picked", () => {
+  const h = fixture();
+  assert.equal(h.settings.customMarkers.length, 0);
+  // There is no free-text path in the Emoji group at all: typing only filters.
+  h.search("绘图");
+  assert.ok(h.pickerItems().every((item) => item.tag === "button"));
+  assert.equal(h.settings.customMarkers.length, 0);
+  assert.deepEqual(h.calls, []);
+
+  h.search("smile");
+  assert.ok(h.pickerItems().length > 3, "an English keyword reaches several entries");
+  const first = at(h.pickerItems(), 0, "first search result");
+  first.fire("click");
+  assert.equal(h.settings.customMarkers.length, 1);
+  assert.equal(at(h.settings.customMarkers, 0, "picked marker").kind, "emoji");
+  assert.equal(at(h.settings.customMarkers, 0, "picked marker").value, first.text);
+});
+
+test("blank, whitespace and invisible-only tag input is rejected without writing", () => {
   // Empty and whitespace-only inputs have nothing to store; a value made only
   // of hidden characters is reported as unsafe, which is the exact problem.
+  // The Emoji group has no free-text path at all, so this rule is the tag one.
   const cases: ReadonlyArray<readonly [string, string]> = [
     ["", "settings.customMarkers.error.empty"],
     ["   ", "settings.customMarkers.error.empty"],
@@ -408,30 +555,14 @@ test("blank input, whitespace and invisible-only values are rejected without wri
   ];
   for (const [value, errorKey] of cases) {
     const h = fixture();
-    h.input("emoji").value = value;
-    pressEnter(h, "emoji");
+    h.input("tag").value = value;
+    pressEnter(h, "tag");
     assert.equal(h.settings.customMarkers.length, 0, JSON.stringify(value));
     assert.deepEqual(h.calls, [], JSON.stringify(value));
-    assert.equal(h.error("emoji").text, translate(errorKey as Parameters<typeof translate>[0], "en"), JSON.stringify(value));
-    assert.equal(h.error("emoji").hasClass("is-visible"), true);
-    assert.doesNotMatch(h.error("emoji").text, /\{\w+\}/);
+    assert.equal(h.error("tag").text, translate(errorKey as Parameters<typeof translate>[0], "en"), JSON.stringify(value));
+    assert.equal(h.error("tag").hasClass("is-visible"), true);
+    assert.doesNotMatch(h.error("tag").text, /\{\w+\}/);
   }
-});
-
-test("the Emoji group rejects words while the text tag group accepts them", () => {
-  const h = fixture();
-  h.input("emoji").value = "绘图";
-  pressEnter(h, "emoji");
-  assert.equal(h.settings.customMarkers.length, 0, "text must never enter the Emoji grid");
-  assert.deepEqual(h.calls, []);
-  assert.equal(h.error("emoji").text, translate("settings.customMarkers.error.notEmoji", "en"));
-  assert.doesNotMatch(h.error("emoji").text, /\{\w+\}/);
-  assert.equal(h.input("emoji").value, "绘图", "the typed text is kept for correction");
-
-  h.input("tag").value = "绘图";
-  pressEnter(h, "tag");
-  assert.deepEqual(valuesOf(h, "tag"), ["绘图"]);
-  assert.equal(h.settings.customMarkers.length, 1);
 });
 
 test("a duplicate value is rejected after cleaning while the typed text is kept", () => {
@@ -453,20 +584,17 @@ test("a duplicate value is rejected after cleaning while the typed text is kept"
   assert.equal(folded.error("tag").text, translate("settings.customMarkers.error.duplicate", "en"));
 });
 
-test("an over-long value reports the group's own character limit with the count substituted", () => {
+test("an over-long tag reports the group's own character limit with the count substituted", () => {
   const h = fixture();
-  h.input("emoji").value = "🔥".repeat(MAX_CUSTOM_EMOJI_LENGTH + 1);
-  pressEnter(h, "emoji");
-  assert.equal(h.error("emoji").text,
-    translate("settings.customMarkers.error.tooLong", "en", { length: MAX_CUSTOM_EMOJI_LENGTH }));
-  assert.match(h.error("emoji").text, new RegExp(String(MAX_CUSTOM_EMOJI_LENGTH)));
-  assert.doesNotMatch(h.error("emoji").text, /\{\w+\}/);
-  assert.deepEqual(h.calls, []);
-
+  // The Emoji group cannot receive a long value: the picker only offers single
+  // glyphs, so the length rule is exercised through the tag field.
   h.input("tag").value = "绘".repeat(MAX_CUSTOM_TAG_LENGTH + 1);
   pressEnter(h, "tag");
+  assert.equal(h.error("tag").text,
+    translate("settings.customMarkers.error.tooLong", "en", { length: MAX_CUSTOM_TAG_LENGTH }));
   assert.match(h.error("tag").text, new RegExp(String(MAX_CUSTOM_TAG_LENGTH)));
   assert.doesNotMatch(h.error("tag").text, /\{\w+\}/);
+  assert.deepEqual(h.calls, []);
   assert.equal(h.settings.customMarkers.length, 0);
 });
 
@@ -483,17 +611,31 @@ test("invisible and bidirectional characters are rejected as unsafe", () => {
 });
 
 test("the entry cap applies per group and never grows that group", () => {
-  const h = fixture({ markers: seed("emoji", MAX_CUSTOM_MARKER_ENTRIES) });
+  // Seed with real catalogue glyphs: an Emoji definition can only ever hold a
+  // single emoji, so seeding text would describe a state the page cannot reach.
+  const seeded = EMOJI_CATALOG.slice(0, MAX_CUSTOM_MARKER_ENTRIES).map((entry, index) =>
+    ({ id: `mtn-emoji-seed-${index}`, kind: "emoji" as const, value: entry.g }));
+  const h = fixture({ markers: seeded });
   assert.equal(h.tiles("emoji").length, MAX_CUSTOM_MARKER_ENTRIES);
 
-  h.input("emoji").value = "🔥";
-  pressEnter(h, "emoji");
-  assert.equal(h.settings.customMarkers.length, MAX_CUSTOM_MARKER_ENTRIES);
+  // Every seeded entry is disabled in the picker, and an already-added entry
+  // cannot be picked again, so the Emoji group cannot grow past the cap.
+  const items = h.pickerItems();
+  const disabledValues = items.filter((item) => item.disabled)
+    .map((item) => item.attributes.get("data-emoji"));
+  assert.ok(items.length > 0, "the picker still renders a list");
+  assert.deepEqual(
+    [...disabledValues].sort(),
+    seeded.map((definition) => definition.value).sort(),
+    "exactly the seeded emoji are marked as added"
+  );
+  const pickable = items.find((item) => !item.disabled);
+  if (pickable) {
+    pickable.fire("click");
+    assert.equal(h.settings.customMarkers.length, MAX_CUSTOM_MARKER_ENTRIES,
+      "the group cap rejects the extra Emoji");
+  }
   assert.deepEqual(h.calls, []);
-  assert.equal(h.error("emoji").text,
-    translate("settings.customMarkers.error.limit", "en", { count: MAX_CUSTOM_MARKER_ENTRIES }));
-  assert.match(h.error("emoji").text, new RegExp(String(MAX_CUSTOM_MARKER_ENTRIES)));
-  assert.doesNotMatch(h.error("emoji").text, /\{\w+\}/);
 
   // The cap is per group: a full Emoji list must not consume the text tag
   // budget, because the settings page presents the two as independent lists.
@@ -507,21 +649,15 @@ test("the entry cap applies per group and never grows that group", () => {
 
 test("each group owns its message element and typing clears only that message", () => {
   const h = fixture();
-  h.input("emoji").value = "   ";
-  pressEnter(h, "emoji");
-  assert.equal(h.error("emoji").hasClass("is-visible"), true);
-  assert.equal(h.error("tag").text, "");
-
-  h.input("emoji").fire("input");
-  assert.equal(h.error("emoji").text, "");
-  assert.equal(h.error("emoji").hasClass("is-visible"), false);
-
-  h.input("tag").value = "";
+  h.input("tag").value = "   ";
   pressEnter(h, "tag");
+  assert.equal(h.error("tag").hasClass("is-visible"), true);
   assert.equal(h.error("emoji").text, "");
-  assert.equal(h.error("tag").text, translate("settings.customMarkers.error.empty", "en"));
+
   h.input("tag").fire("input");
   assert.equal(h.error("tag").text, "");
+  assert.equal(h.error("tag").hasClass("is-visible"), false);
+  assert.equal(h.error("emoji").text, "");
 });
 
 test("each group shows its empty note only while that group has no entries", () => {
@@ -532,8 +668,7 @@ test("each group shows its empty note only while that group has no entries", () 
   assert.equal(h.emptyNote("tag").text, translate("settings.customMarkers.tag.empty", "en"));
   assert.equal(h.emptyNote("emoji").hasClass("is-visible"), true);
 
-  h.input("emoji").value = "🔥";
-  pressEnter(h, "emoji");
+  h.pick("fire", "🔥");
   assert.equal(h.emptyNote("emoji").hidden, true);
   assert.equal(h.emptyNote("emoji").hasClass("is-visible"), false);
   assert.equal(h.emptyNote("tag").hidden, false);
@@ -699,7 +834,11 @@ test("dropping past the last tile appends it and marks the end of the grid", () 
 });
 
 test("removing a tile updates the group and keeps keyboard focus inside the list", () => {
-  const h = fixture({ markers: seed("emoji", 3) });
+  // Real glyphs, because the Emoji group only ever holds catalogue entries.
+  const h = fixture({
+    markers: EMOJI_CATALOG.slice(0, 3).map((entry, index) =>
+      ({ id: `mtn-emoji-seed-${index}`, kind: "emoji" as const, value: entry.g }))
+  });
 
   removeButton(tileOf(h, "mtn-emoji-seed-1")).fire("click");
   assert.deepEqual(idsOf(h), ["mtn-emoji-seed-0", "mtn-emoji-seed-2"]);
@@ -723,8 +862,7 @@ test("a failed save reports the save message without rolling back the change", a
   const h = fixture();
   h.failSave(new Error("disk full"));
 
-  h.input("emoji").value = "🔥";
-  pressEnter(h, "emoji");
+  h.pick("fire", "🔥");
   assert.deepEqual(valuesOf(h, "emoji"), ["🔥"], "the panel keeps the change it already rendered");
   assert.equal(h.error("emoji").text, "", "the rejection arrives after the click handler returns");
 
@@ -735,8 +873,7 @@ test("a failed save reports the save message without rolling back the change", a
   assert.deepEqual(h.calls, ["refresh", "save"]);
 
   h.failSave(undefined);
-  h.input("emoji").value = "🎨";
-  pressEnter(h, "emoji");
+  h.pick("art", "🎨");
   await settle();
   assert.equal(h.error("emoji").text, "");
   assert.deepEqual(valuesOf(h, "emoji"), ["🔥", "🎨"]);
@@ -746,8 +883,7 @@ test("a failing canvas refresh still persists the change and says the canvas is 
   const h = fixture();
   h.failRefresh(new Error("canvas render failed"));
 
-  h.input("emoji").value = "🔥";
-  pressEnter(h, "emoji");
+  h.pick("fire", "🔥");
   await settle();
 
   assert.deepEqual(h.calls, ["refresh", "save"], "the settings write must not be skipped");
@@ -758,16 +894,16 @@ test("a failing canvas refresh still persists the change and says the canvas is 
   assert.notEqual(h.error("emoji").text, translate("settings.customMarkers.error.save", "en"));
 });
 
-test("an IME-composing Enter confirms the candidate instead of adding the marker", () => {
+test("a tag Enter that would compose an IME candidate is left to the IME", () => {
   const h = fixture();
-  h.input("emoji").value = "🔥";
-  const composing = pressEnter(h, "emoji", { isComposing: true });
+  h.input("tag").value = "绘图";
+  const composing = pressEnter(h, "tag", { isComposing: true });
   assert.equal(h.settings.customMarkers.length, 0);
   assert.deepEqual(h.calls, []);
   assert.equal(composing.defaultPrevented, false, "the IME keeps its own Enter handling");
-  assert.equal(h.input("emoji").value, "🔥");
+  assert.equal(h.input("tag").value, "绘图");
 
-  pressEnter(h, "emoji");
-  assert.deepEqual(valuesOf(h, "emoji"), ["🔥"]);
-  assert.equal(h.input("emoji").value, "");
+  pressEnter(h, "tag");
+  assert.deepEqual(valuesOf(h, "tag"), ["绘图"]);
+  assert.equal(h.input("tag").value, "");
 });

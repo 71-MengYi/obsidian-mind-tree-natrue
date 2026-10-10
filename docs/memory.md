@@ -31,7 +31,16 @@
 - 移动端拖拽排序未验证：tile 已设 `touch-action: none`，但 HTML5 DnD 在触摸端不可用；如需移动端排序，应改为 pointer events 实现（`Alt+←/→` 键盘路径已可用）。
 - `aria-keyshortcuts="Alt+ArrowLeft Alt+ArrowRight"` 已加在 tile 上，未做屏幕阅读器实测。
 
-**后续修复（同日）**：Emoji 组一开始只校验长度，导致可以输入文字。现为「恰好一个 Emoji 字形」的硬规则（`isSingleEmojiValue`：`Intl.Segmenter` 按字素簇计数 + `\p{Extended_Pictographic}` / 区域指示符对判定），错误码 `not-emoji` → `settings.customMarkers.error.notEmoji`。两个必须记住的坑：① `cleanCustomMarkerValue(value, kind)` 现在按 kind 选择不可见字符表——Emoji 组必须**保留 U+200D**，否则 `👨‍👩‍👧‍👦` 会被拆成四个人；② 校验顺序是「超长 → 不可见字符 → 空 → 单 Emoji」，中途一次改动曾把 `\u200B` 判成 empty、family emoji 判成 not-emoji，测试已钉住。
+**后续修复（同日）**：Emoji 组一开始只校验长度，导致可以输入文字。现改为「只能从内置离线目录中选取」，因此**不存在输入文字的路径**：
+
+- `src/ui/emoji-data.ts` 由 `scripts/generate-emoji-data.mjs` 生成（约 1300 项，字段 `g` 字形 / `n` 英文名 / `k` 中英关键词 / `c` 分类）。改目录必须改生成脚本再重跑，不要手改产物。
+- `src/ui/emoji-search.ts`：空查询返回前 120 项（`EMOJI_PICKER_DEFAULT_LIMIT`），有查询时上限 160 项（`EMOJI_PICKER_RESULT_LIMIT`）。haystack = 字形 + 小写名 + 每词 4 字符前缀 + 关键词 + 分类英文别名；前缀是**追加**而非替换，否则 `smiling face` 会把查询 `smile` 弄丢；`smile`→`smiling` 这类跨词形靠 `CATEGORY_ALIAS_TERMS` 显式补。查询 NFKC 归一 + 逐词交集，可直接粘贴 Emoji 查找。
+- `isSingleEmojiValue`（`Intl.Segmenter` 字素簇 + `\p{Extended_Pictographic}` / 区域指示符对）仍保留为 `data.json` 与 `addCustomMarkerDefinition` 的兜底；`cleanCustomMarkerValue(value, kind)` 按 kind 选不可见字符表，**Emoji 组必须保留 U+200D**，否则 `👨‍👩‍👧‍👦` 会被拆成四个人。
+
+**测试踩坑（会浪费大量时间，务必记住）**：
+- `test/custom-markers-settings-page.test.ts` 的 DOM 桩保留 `parent` 链，**对元素做 `assert.deepEqual` 会遍历环形对象图**，一条断言就能把单测从 0.4s 拖到 90s。比较派生出的字符串数组，不要比较元素本身。
+- 该文件的 `group(kind, name)` 必须按「第 0 个 = Emoji 段、第 1 个 = 文字标记段」取值；用 contains/文档序推断会挑错元素，表现为「标签组的 handler 一个都没注册」。
+- Emoji 组的 fixture 值必须是真实 Emoji 字形（测试里用 `EMOJI_CATALOG` 前 N 项），否则 picker 认不出「已添加」，`data.json` 规范化也会丢弃这些值——这是真实不可达状态。
 
 ## 2026-10-10 · 无选择时禁用节点工具栏操作（`fix`）
 
