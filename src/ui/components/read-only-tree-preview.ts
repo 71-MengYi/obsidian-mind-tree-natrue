@@ -13,6 +13,7 @@ import { centerViewportOnRect, pinchViewport, viewportToCssPresentation, wheelDe
 import { DisposableUiObject } from "./ui-object";
 import { createCanvasLabelId } from "./canvas-shell";
 import { previewDocument } from "./version-preview-model";
+import { applyMindTreeThemeDataset } from "../theme-dataset";
 
 export interface TreePreviewOptions extends FileBadgeRules {
   readonly nodeWrapWidth: number;
@@ -148,12 +149,8 @@ export class ReadOnlyTreePreview extends DisposableUiObject {
     if (!this.document || this.cleanup.isDisposed) return;
     const document = previewDocument(this.document, this.folds);
     const settings = document.settings;
-    this.element.dataset.mtnTheme = settings.theme;
-    this.element.dataset.mtnNodeShape = settings.nodeShape;
-    this.element.dataset.mtnLayout = settings.layoutMode;
-    this.element.dataset.mtnConnectionStyle = settings.connectionStyle;
-    this.text.refreshStyles(); this.badges.refreshStyles();
-    const badges = createResourceBadgePresentation(this.options,
+    applyMindTreeThemeDataset(this.element, settings);
+    this.text.refreshStyles(); this.badges.refreshStyles();    const badges = createResourceBadgePresentation(this.options,
       { mindTree: t("node.mindTreeMarker"), drawing: t("node.drawingMarker") }, this.badges);
     const layout = layoutTree(document, document.rootId, true, this.options.nodeWrapWidth,
       settings.layoutMode, this.options.nodeAlignment, this.text, badges, this.images);

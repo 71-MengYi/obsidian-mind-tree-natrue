@@ -5,8 +5,33 @@ import { COLLECTION_MODE_OPTIONS, CONNECTION_OPTIONS, LAYOUT_OPTIONS, NODE_SHAPE
 import { ReadOnlyTreePreview, type TreePreviewOptions } from "./read-only-tree-preview";
 import { DisposableUiObject } from "./ui-object";
 import { changedVersionSettings } from "./version-preview-model";
-import { DocumentSafetyPanel } from "./document-safety-panel";
 import { AdaptiveTooltipController } from "../adaptive-tooltip";
+
+/** Safety failures are actionable diagnostics, not two disabled version choices. */
+export class DocumentSafetyPanel extends DisposableUiObject {
+  readonly element: HTMLElement;
+  private readonly identity: HTMLElement;
+  private readonly restore: HTMLButtonElement;
+
+  constructor(parent: HTMLElement, restoreIdentity: () => void) {
+    super();
+    this.element = parent.createDiv("mtn-document-safety");
+    this.identity = this.element.createDiv({ attr: { role: "status" } });
+    this.restore = this.element.createEl("button", {
+      text: t("conflict.restoreIdentity"), attr: { type: "button" }
+    });
+    this.listen(this.restore, "click", restoreIdentity);
+  }
+
+  update(state: VersionPreviewState): void {
+    this.element.hidden = state.mode !== "identity";
+    this.identity.setText(t("conflict.identityValues", {
+      original: state.originalId ?? t("conflict.identityMissing"),
+      current: state.currentId ?? t("conflict.identityMissing")
+    }));
+    this.restore.disabled = !state.canRestoreIdentity;
+  }
+}
 
 function settingDescription(key: keyof MindTreeDocumentSettings, settings: MindTreeDocumentSettings): string {
   const catalogs = { layoutMode: LAYOUT_OPTIONS, theme: THEME_OPTIONS, nodeShape: NODE_SHAPE_OPTIONS,

@@ -2,13 +2,28 @@ import type { BottomStatusBarActions, BottomStatusBarLabels } from "./bottom-sta
 import { BottomStatusBar } from "./bottom-status-bar";
 import type { CanvasShellActions, CanvasShellLabels } from "./canvas-shell";
 import { CanvasShell } from "./canvas-shell";
-import { StatusIndicator } from "./status-indicator";
+import type { StatusMessageState } from "./models";
 import type { TopToolbarActions, TopToolbarLabels } from "./top-toolbar";
 import { TopToolbar } from "./top-toolbar";
-import { DisposerBag } from "./ui-object";
+import { DisposableUiObject, DisposerBag } from "./ui-object";
 import type { ViewMenuBarActions, ViewMenuBarLabels } from "./view-menu-bar";
 import { ViewMenuBar } from "./view-menu-bar";
 import { AdaptiveTooltipController } from "../adaptive-tooltip";
+
+/** Non-modal warning/error text layered above the canvas. */
+export class StatusIndicator extends DisposableUiObject {
+  readonly element: HTMLElement;
+
+  constructor(parent: HTMLElement) {
+    super();
+    this.element = parent.createDiv("mtn-status");
+  }
+
+  update(state: StatusMessageState): void {
+    this.element.setText(state.message);
+    this.element.className = state.kind === "normal" ? "mtn-status" : `mtn-status is-${state.kind}`;
+  }
+}
 
 export interface MindTreeViewShellLabels {
   readonly menu: ViewMenuBarLabels;
