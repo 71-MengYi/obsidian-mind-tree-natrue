@@ -1,5 +1,5 @@
 import { nodeTitleMode, type TitleCommitResult } from "../../format/node-title";
-import { renderRichTitleSvg } from "../rich-title";
+import { renderRichTitleSvg } from "../text-measurer";
 import { setIcon } from "obsidian";
 import {
   getVisibleNodeMarkers,

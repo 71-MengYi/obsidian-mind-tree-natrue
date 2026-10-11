@@ -1,6 +1,5 @@
 import { nodeTitleMode } from "../format/node-title";
 import { getDepth } from "../domain/tree";
-import { getNodeResourceControls } from "./resource-controls";
 import type {
   MindTreeDocument,
   MindTreeLayoutMode,
@@ -19,6 +18,7 @@ import {
 import {
   fallbackResourceBadgePresentation,
   getNodeMarkerGeometry,
+  getNodeResourceControls,
   type ResourceBadgePresentation
 } from "./resource-badges";
 import {

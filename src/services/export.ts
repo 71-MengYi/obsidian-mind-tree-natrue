@@ -1,5 +1,5 @@
 import { nodeTitleMode } from "../format/node-title";
-import { renderRichTitleSvg } from "../ui/rich-title";
+import { renderRichTitleSvg } from "../ui/text-measurer";
 import type {
   MindTreeConnectionStyle,
   MindTreeDocument,

@@ -4,7 +4,7 @@ import { parseNodeTitle, fileTitleFromNode, validateNodeTitle, nodeTitleMode } f
 import { createEmptyDocument, addNode } from "../src/domain/tree";
 import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
 import { renderInlineMath } from "../src/ui/inline-math";
-import { renderRichTitleSvg } from "../src/ui/rich-title";
+import { renderRichTitleSvg } from "../src/ui/text-measurer";
 import { renderBranchSvg } from "../src/services/export";
 import { renderBranchMarkdown } from "../src/format/outline";
 import { scanTextLinkSpans } from "../src/services/text-url";

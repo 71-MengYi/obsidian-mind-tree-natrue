@@ -203,6 +203,22 @@
   注意 Windows 下 `--import` 必须传 `file:///C:/...` URL，否则报 `ERR_UNSUPPORTED_ESM_URL_SCHEME`。
 - 该替代命令偶发额外失败（曾见 `text-import.test.ts` 2 条、`plugin-updates.test.ts` 1 条、`identity-repair.test.ts` 1 条，单独或按文件重跑必过），属替代运行时的非确定性，不是仓库回归：同一命令连跑 6 次，5 次为 481/483、1 次多出 2 条无关失败。判定回归前先单独重跑该文件。
 
+## 2026-10-11 · 自定义标记 ZWJ 缺陷 + 节点文本/资源模块合并（`fix` + `refactor`）
+
+**缺陷（`fix`）**：`cleanCustomMarkerValue(value, kind = "tag")` 全仓 7 个调用点里 5 个正确传 `kind`，只有 `src/domain/markers.ts` 的 `normalizeNodeMarkers` 与 `src/ui/resource-badges.ts` 的 `customMarkerKey` 漏传 → `kind="emoji"` 误用 tag 的严格 pattern（`\u200B-\u200F` **含零宽连接符 U+200D**）→ 家庭 emoji 👨‍👩‍👧‍👦 被剥成 4 个独立字形。
+
+**纠正根因叙述（重要）**：1.1.7 的 `customMarkerKey` 与 `normalizeNodeMarkers` 用的是**同一个** cleaner，两侧键一致，**所以 1.1.7 徽标并不消失**；1.1.7 的真实症状是**载入时值与 Markdown 大纲被静默降级（ZWJ 丢失）并写回**。"徽标消失"是**修复之后**对**已被 1.1.7 降级过的存量文件**才出现的新现象——因为注册表键变成保留 ZWJ，而降级值没有 ZWJ。修这类问题**必须同时考虑存量降级数据的兼容**，否则修好"新数据"却打坏"旧数据"。
+
+**落点**：`markers.ts` 传 `category`；`resource-badges.ts` 的 `customMarkerKey` 传 `kind`；并新增 `legacyCustomMarkerKey` + `lookupCustomMarker` 双键回退，`createResourceBadgePresentation` 建注册表时**同时登记 kind-aware 键与旧键**（`registerCustom`），使存量降级值仍能解析（不回写、不猜测、不误伤新值）。
+
+**合并（`refactor`，纯搬迁）**：`src/ui/rich-title.ts`(104 行) → `text-measurer.ts`(503 行)，顺带把重复的 grapheme 分段器合一（复用 `splitGraphemes`，`Intl.Segmenter` 实例 2→1）；`src/ui/resource-controls.ts`(29 行) → `resource-badges.ts`。`src` 文件数 135 → 133。两者都只改 import 路径，**零测试断言改动**（仅 2 行 import 路径 + 3 行测试 import 合并）。
+
+**等价性验证方法（可复用）**：`.audit/fingerprint.ts` —— 对 33 组纯函数输出做 sha256 行为指纹，合并前后 digest 必须逐字节相同。本轮的 digest 演变（复现假阴性时需要分清）：原始 blind harness（两段盲段都在）= `32c0ecc1…de86`，**修复前后完全相同 → 假阴性**；修好第一段后 = `939e39a0…5f02`（T2/T3/T4 三态一致，即合并等价性的可信证据）；两段都修好后 = `7afde70c…d51e11`（兼容性回退前后亦相同）。**该工具本身踩过两个坑**：① `normalizeNodeMarkers()` 收**marker 数组**、返回**marker 数组**，harness 曾把返回数组当 node 用 → 该段恒空、对 digest 零信号（**假阴性，已修**）；② `nodeTitleMode(value)` 把字符串当 node 传 → 该段恒 `"title"`（**仍有弱段，未修**）。另：指纹**绕过 settings→registry 归一化**，所以它**对兼容性修复完全盲**（pre/post fallback 同 digest）——**兼容性必须靠端到端往返测试**（审计员用 `.audit/t1/roundtrip.mjs` 复现 1.1.7 首存 / 降级重存 / 1.1.8 读取三种文件，并用 `probe-fallback.mjs` 九格矩阵验误报安全）。
+
+**环境坑（本轮新增，重要）**：**禁止用 shell（`Set-Content`/`Out-File`）重写仓库内源文件**。本仓库中文文案极多，PowerShell 往返编码会把 `markers.ts`/`resource-badges.ts` 写成 U+FFFD 与 mojibake；本轮发生过一次，靠 `git checkout --` + edit 工具重做修复。判断 mojibake 必须看**字节**（`TextDecoder("utf-8",{fatal:true})` + U+FFFD 计数），不要看 Console 呈现（会出现假警报）。
+
+**验证**：`npm run check` 0 错误；`npm test` **735 tests / 735 pass / 0 fail**（新增 3 条 ZWJ 相关回归：`markers.test.ts`、`export-custom-markers.test.ts` ×2，含"已被降级的旧值仍能解析"）。`manifest.json` 1.1.7 → 1.1.8 是**开工前既有的工作区改动，不是本轮产物**，需发布方确认。
+
 ## 2026-10-09 · 未决冲突记录的孤儿清理（`feature`）
 
 **问题**：源文件被删除/移动后，`pending-conflicts/<本机标识>/*.json` 记录会永久保留，启动时反复提示"无法确定已保存版本对应的文件"，且活动会话的冲突锁（`mutationLocked`）因 `requireFile()` 抛 `file.missing` 而无法通过"保留版本"按钮解开。

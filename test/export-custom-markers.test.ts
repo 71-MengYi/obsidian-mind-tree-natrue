@@ -8,11 +8,11 @@ import { serializeMindTreeFile } from "../src/format/document";
 import { renderBranchSvg } from "../src/services/export";
 import type { MindTreeDocument, MindTreeNode } from "../src/types";
 import { getNodeBoxSize, NODE_HORIZONTAL_INSETS, NODE_HORIZONTAL_PADDING } from "../src/ui/layout";
-import { getNodeResourceControls } from "../src/ui/resource-controls";
 import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
 import {
   createResourceBadgePresentation,
   getNodeMarkerGeometry,
+  getNodeResourceControls,
   MANUAL_MARKER_SIZE,
   NODE_MARKER_GAP,
   type FileBadgeRules,

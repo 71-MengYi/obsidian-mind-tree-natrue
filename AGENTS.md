@@ -158,9 +158,9 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `ConnectionRenderer` | `renderers/connection-renderer.ts` | 连线 SVG 几何与主题样式 |
 | `createNodeVisualState` | `renderers/node-render-model.ts` | 纯函数：节点 → 视觉状态 |
 | `layoutTree` / `connectionPath` / `getNodeSize` | `layout.ts` | 五种布局、节点尺寸与路径计算 |
-| `BrowserNodeTextMeasurer` | `text-measurer.ts` | 用 Canvas 实测标题宽度（画布与 PNG/SVG 导出共用） |
-| `BrowserResourceBadgeMeasurer` | `resource-badges.ts` | 扩展名/专用徽标测量与派生 |
-| `getNodeResourceControls` | `resource-controls.ts` | 节点尾部控件（打开按钮、同步关闭标志）统一来源 |
+| `BrowserNodeTextMeasurer` / `measureRichTitle` / `renderRichTitleSvg` | `text-measurer.ts` | 用 Canvas 实测标题宽度并按富文本（markdown/行内公式）切行（画布与 PNG/SVG 导出共用） |
+| `BrowserResourceBadgeMeasurer` / `getNodeMarkerGeometry` | `resource-badges.ts` | 扩展名/专用徽标/自定义标记的测量与派生 |
+| `getNodeResourceControls` | `resource-badges.ts` | 节点尾部控件（打开按钮、同步关闭标志）统一来源 |
 | `MindTreeThemePreset` / `getBranchColorSlots` | `theme-presets.ts` / `presentation.ts` | 十套主题、十二色分支色槽 |
 | `ViewportState` 工具集 | `viewport.ts` | 缩放/平移（**会话状态，绝不写盘**） |
 

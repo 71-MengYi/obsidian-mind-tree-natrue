@@ -1,9 +1,9 @@
 import { getNodeHighlightColor } from "../../domain/markers";
 import type { MindTreeNode } from "../../types";
-import { getNodeResourceControls } from "../resource-controls";
 import {
   fallbackResourceBadgePresentation,
   getNodeMarkerGeometry,
+  getNodeResourceControls,
   type ResourceBadge,
   type ResourceBadgePresentation
 } from "../resource-badges";
