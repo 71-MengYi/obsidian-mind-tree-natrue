@@ -135,14 +135,6 @@ export function getNodeLineHeight(depth: number, textMeasurer: NodeTextMeasurer 
 }
 
 /**
- * Compatibility helper for headless callers. The live view injects its Canvas
- * measurer and therefore does not use this character-ratio fallback.
- */
-export function estimateTextWidth(value: string, fontSize: number): number {
-  return estimateFallbackTextWidth(value, { ...fallbackNodeTextStyle(2), fontSize, letterSpacing: 0 });
-}
-
-/**
  * Split a title with the same injected measurer used by getNodeSize. The browser
  * uses overflow-wrap:anywhere, so grapheme-level wrapping is predictable and can
  * be reused by SVG export.

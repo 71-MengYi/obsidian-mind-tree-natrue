@@ -51,10 +51,6 @@ export class ThemePreviewPanel extends DisposableUiObject {
     this.own(() => this.preview?.destroy());
   }
 
-  get visible(): boolean {
-    return this.shown && !this.cleanup.isDisposed;
-  }
-
   /** Create the sample tree on first use; later calls only swap theme and position. */
   show(theme: MindTreeTheme, anchor: ThemePreviewRect): void {
     if (this.cleanup.isDisposed) return;

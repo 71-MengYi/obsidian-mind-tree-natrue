@@ -93,13 +93,7 @@ export function searchEmoji(query: string): readonly EmojiCatalogEntry[] {
 
 /** How many entries a query matches. Exposed so the picker can label the list. */
 export function countEmojiMatches(query: string): number {
-  const tokens = normalizeQuery(query).split(/\s+/).filter(Boolean);
-  if (tokens.length === 0) return EMOJI_CATALOG.length;
-  let matches = 0;
-  for (const haystack of HAYSTACK) {
-    if (tokens.every((token) => haystack.includes(token))) matches += 1;
-  }
-  return matches;
+  return searchEmoji(query).length;
 }
 
 /** The catalogue size, used by tests and by the empty-state copy. */
