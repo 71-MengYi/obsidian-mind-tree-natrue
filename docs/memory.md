@@ -1,5 +1,19 @@
 # memory
 
+## 2026-10-11 · 行内公式与二元运算符重叠（`fix`）
+
+**问题**：节点标题写 `$abccccc+a$` 这类含运算符的公式会错位——`+` 压住第一个 `a`，末尾 `a` 叠在 `c` 上并被放大。
+
+**根因**：MathJax 默认给**每个二元运算符**插入行内断行机会（SVG 输出 `linebreaks.inline`），`handleInlineBreaks` 把一条公式拆成**多个兄弟 `<svg>`**（中间夹 `<mjx-break>`）。`src/ui/inline-math.ts` 当时用贪婪的 `/<svg\b[\s\S]*<\/svg>/` 从第一个 `<svg>` 取到最后一个 `</svg>`，把两段拼进一个字符串，且只按**第一段**的 viewBox 算宽高。调用方随后只给一个 `viewBox`：SVG 没有流式排版，第二段 `<svg>`（保留自己的 `width="3.46ex"`）默认落在 (0,0) 并按 ex 缩放，于是重叠且看起来更大；测得宽度也只覆盖第一段（`abccccc+a` 实测 3.123em，真实 4.874em）。
+
+**落点**：`src/ui/inline-math.ts`
+- `new SVG({ ..., linebreaks: { inline: false } })`：标题里一条公式就是一个原子 run，必须一次排完（顺带保住 `a + b` 的二元运算符间距；`gathered`/`matrix`/`aligned` 等环境不受影响）。
+- 弃用正则切 markup，改为从容器 `adaptor.childNodes()` 取**直接子级** `<svg>`：`\overbrace` 的拉伸括号是**嵌套** svg，不能算多段；直接子级 ≠ 1 段时返回 `undefined` 走源码兜底（宁可不渲染也不输出重叠 markup）。
+- 宽度护栏 `MAX_INLINE_FORMULA_EM_WIDTH = 1024`：行内 `\\` / `\newline` 会把行宽撑到容器（实测 viewBox 宽 1e8 单位），照它缩放会变成看不见的小点，此时显示 `$x\\y$` 源码。
+- 属性清理改用 `adaptor.removeAttribute(root, "width"/"height"/"style")`；画布、预览、PNG/SVG 导出共用同一条路径，一处修复三处生效。
+
+**验证**：`test/node-title.test.ts` 新增 2 条（单段 + 运算符间距 + `\overbrace` 嵌套 + 测量宽度 = 公式宽 × 字号 + 富文本 SVG 里只有 2 个 `svg` 根；以及 `x\\y` 源码兜底）。`npm run check` 0 错误；沙箱替代测试 **678 tests / 673 pass / 5 fail**（5 条仍是 esbuild `spawn EPERM` 既有环境失败）。用 headless Edge 渲染了修复前/后对照图人工确认。
+
 ## 2026-10-11 · Ctrl/Cmd+F 右侧搜索窗口（`feat`，团队协作）
 
 **需求**：`Ctrl/Cmd+F` 或工具栏「搜索」打开视图**右侧**搜索窗口（不是中央悬浮弹窗）。并行接口契约是 `docs/search-sidebar-spec.md`（临时文件，本轮完成后可删）；`docs/` 产品基线优先于它。

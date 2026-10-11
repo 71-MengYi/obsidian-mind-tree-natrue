@@ -71,6 +71,45 @@ test("math produces independent offline SVG with real height and invalid TeX sta
   assert.equal(invalid.richLines?.flatMap((line) => line.runs).map((run) => run.text).join(""), String.raw`$\notARealCommand{x}$`);
 });
 
+test("formulas with operators stay one atomic SVG piece with their real spacing", () => {
+  // MathJax marks every binary operator as an inline break opportunity. Those sibling
+  // pieces used to be concatenated into a single SVG string, so every piece after the
+  // first landed on top of the first one and the measured width stopped at the break.
+  for (const source of ["abccccc+a", "a+b", "1+2+3+4+5+6+7+8"]) {
+    const math = renderInlineMath(source);
+    assert.ok(math, source);
+    assert.equal((math.svg.match(/<svg\b/g) ?? []).length, 1, source);
+    assert.doesNotMatch(math.svg, /mjx-break/, source);
+    assert.doesNotMatch(math.svg, / (?:width|height|style)="/, source);
+  }
+  const formula = renderInlineMath("abccccc+a")!;
+  assert.ok(formula.width > renderInlineMath("abccccc")!.width);
+  // The medium space around a binary operator survives only inside one laid-out line.
+  assert.ok(renderInlineMath("a+b")!.width > renderInlineMath("ab")!.width);
+  // A stretched brace is a nested SVG inside the single root, not a second piece.
+  const decorated = renderInlineMath(String.raw`\overbrace{a+b}^{n}`);
+  assert.ok(decorated);
+  assert.equal((decorated.svg.match(/<svg\b/g) ?? []).length, 3);
+
+  const measurement = fallbackNodeTextMeasurer.measure("$abccccc+a$", 1, 240);
+  const runs = measurement.richLines?.flatMap((line) => line.runs) ?? [];
+  assert.equal(runs.length, 1);
+  assert.equal(runs[0]?.math?.svg, formula.svg);
+  assert.equal(runs[0]?.width, formula.width * measurement.style.fontSize);
+  assert.ok(measurement.width <= 240);
+  const svg = renderRichTitleSvg(measurement);
+  assert.equal((svg.match(/<svg\b/g) ?? []).length, 2);
+  assert.doesNotMatch(svg, /mjx-break/);
+});
+
+test("a forced line break inside inline math falls back to the TeX source", () => {
+  // Such a line box is sized to the container; scaling it into a node would make the
+  // formula invisible, so the literal source is the honest result.
+  assert.equal(renderInlineMath(String.raw`x\\y`), undefined);
+  const measurement = fallbackNodeTextMeasurer.measure(String.raw`$x\\y$`, 1, 240);
+  assert.equal(measurement.richLines?.flatMap((line) => line.runs).map((run) => run.text).join(""), String.raw`$x\\y$`);
+});
+
 test("rich wrapping and exports share glyphs, dimensions, and source formatting", () => {
   const doc = createEmptyDocument("**Root**");
   const source = String.raw`**长标题 bold** ==marked== ~~removed~~ ` + "`code` " + String.raw`$\frac{1}{2}$`;
