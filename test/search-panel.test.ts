@@ -27,6 +27,7 @@ const LABELS = {
   title: "Search",
   placeholder: "Search nodes, file names and Markdown content",
   close: "Close search",
+  clear: "Clear search",
   count: "{count} matches",
   empty: "No matches",
   loading: "Searching…",
@@ -279,6 +280,7 @@ interface CardOptions {
   readonly titleHit?: Extract<SearchHit, { source: "title" }>;
   readonly resourceId?: string;
   readonly path?: string;
+  readonly nodePath?: readonly string[];
   readonly fileName?: string;
   readonly hits?: readonly SearchHit[];
   readonly hitsLimited?: boolean;
@@ -291,6 +293,7 @@ function card(nodeId: string, title: string, options: CardOptions = {}): SearchC
     titleHit: options.titleHit,
     resourceId: options.resourceId,
     path: options.path,
+    nodePath: options.nodePath,
     fileName: options.fileName,
     hits: options.hits ?? [],
     hitsLimited: options.hitsLimited
@@ -299,6 +302,16 @@ function card(nodeId: string, title: string, options: CardOptions = {}): SearchC
 
 function titleHitOf(text: string, ranges: readonly SearchRange[]): Extract<SearchHit, { source: "title" }> {
   return { source: "title", line: 1, text, ranges };
+}
+
+/** Name the part of a card a direct child is, so child order can be asserted. */
+function childKind(child: TestElement): string {
+  if (child.hasClass("mtn-search-card-title")) return "title";
+  if (child.hasClass("mtn-search-card-path")) return "path";
+  if (child.hasClass("mtn-search-card-hit")) return "hit";
+  if (child.hasClass("mtn-search-card-truncated")) return "note";
+  if (child.tag === "hr") return "separator";
+  return "other";
 }
 
 interface Harness {
@@ -311,13 +324,20 @@ interface Harness {
   readonly jumps: string[];
   readonly opened: Array<[string, number]>;
   readonly notified: boolean[];
+  /** Every id the panel asked `nodeTitle` to resolve, in call order. */
+  readonly titleQueries: string[];
   input(): TestElement;
   count(): TestElement;
   results(): TestElement;
   closeButton(): TestElement;
+  clearButton(): TestElement;
+  icon(): TestElement;
   cards(): TestElement[];
   hits(cardElement: TestElement): TestElement[];
   marks(row: TestElement): TestElement[];
+  pathRow(cardElement: TestElement): TestElement | undefined;
+  pathLinks(row: TestElement): TestElement[];
+  pathArrows(row: TestElement): TestElement[];
   empty(): TestElement | undefined;
   typeQuery(value: string): void;
 }
@@ -325,6 +345,7 @@ interface Harness {
 function fixture(options: {
   readonly search?: (query: string) => Promise<SearchResult | undefined>;
   readonly debounceMs?: number;
+  readonly nodeTitle?: (nodeId: string) => string | undefined;
 } = {}): Harness {
   const ownerDocument = new TestDocument();
   const mount = ownerDocument.createElement("div");
@@ -333,7 +354,11 @@ function fixture(options: {
   const jumps: string[] = [];
   const opened: Array<[string, number]> = [];
   const notified: boolean[] = [];
+  const titleQueries: string[] = [];
   const search = options.search ?? (async (): Promise<SearchResult> => ({ cards: [], hitCount: 0 }));
+  // Absent when the test does not supply a resolver, so the fallback path (no
+  // `nodeTitle` at all) stays exercised rather than always calling a stub.
+  const resolveTitle = options.nodeTitle;
 
   const panel = new MindTreeSearchPanel(mount as unknown as HTMLElement, LABELS, {
     search: (query) => {
@@ -342,7 +367,13 @@ function fixture(options: {
     },
     jumpToNode: (nodeId) => { jumps.push(nodeId); },
     openFileAtLine: (path, line) => { opened.push([path, line]); },
-    visibilityChanged: (open) => { notified.push(open); }
+    visibilityChanged: (open) => { notified.push(open); },
+    ...(resolveTitle === undefined ? {} : {
+      nodeTitle: (nodeId: string) => {
+        titleQueries.push(nodeId);
+        return resolveTitle(nodeId);
+      }
+    })
   }, { debounceMs: options.debounceMs, clock });
   const root = panel.element as unknown as TestElement;
 
@@ -359,13 +390,19 @@ function fixture(options: {
     jumps,
     opened,
     notified,
+    titleQueries,
     input,
     count: () => at(root.querySelectorAll(".mtn-search-panel-count"), 0, "count"),
     results,
     closeButton: () => at(root.querySelectorAll(".mtn-search-panel-close"), 0, "close button"),
+    clearButton: () => at(root.querySelectorAll(".mtn-search-panel-clear"), 0, "clear button"),
+    icon: () => at(root.querySelectorAll(".mtn-search-panel-icon"), 0, "search icon"),
     cards: () => results().querySelectorAll(".mtn-search-card"),
     hits: (cardElement) => cardElement.querySelectorAll(".mtn-search-card-hit"),
     marks: (row) => row.querySelectorAll(".mtn-search-mark"),
+    pathRow: (cardElement) => cardElement.querySelector(".mtn-search-card-path"),
+    pathLinks: (row) => row.querySelectorAll(".mtn-search-path-link"),
+    pathArrows: (row) => row.querySelectorAll(".mtn-search-path-arrow"),
     empty: () => results().querySelector(".mtn-search-empty"),
     typeQuery: (value) => {
       const field = input();
@@ -383,24 +420,32 @@ test("builds the contracted DOM tree with labels, roles and one setIcon close bu
   assert.equal(h.root.hasClass("mtn-search-panel"), true);
   assert.equal(h.root.hidden, true, "the window starts hidden");
   assert.equal(h.root.children.length, 3);
-  // The floating card never opens blank: the empty state is present up front.
-  assert.equal(h.empty()?.text, "No matches");
+  // Nothing to show before a query: the result area is not even laid out.
+  assert.equal(h.results().hidden, true);
+  assert.equal(h.empty(), undefined);
 
   const header = at(h.root.querySelectorAll(".mtn-search-panel-header"), 0, "header");
   const title = at(h.root.querySelectorAll(".mtn-search-panel-title"), 0, "title");
+  const icon = h.icon();
   const close = h.closeButton();
   const searchRow = at(h.root.querySelectorAll(".mtn-search-panel-search"), 0, "search row");
+  const fieldWrap = at(h.root.querySelectorAll(".mtn-search-panel-input-wrap"), 0, "input wrapper");
   const input = h.input();
+  const clear = h.clearButton();
   const count = h.count();
   const results = h.results();
 
   assert.equal(header.parent, h.root);
-  assert.equal(title.parent, header);
-  assert.equal(close.parent, header);
+  // The icon leads the header, then the title, then the close button.
+  assert.deepEqual(header.children, [icon, title, close]);
   assert.equal(searchRow.parent, h.root);
-  assert.equal(input.parent, searchRow);
+  assert.equal(fieldWrap.parent, searchRow);
   assert.equal(count.parent, searchRow);
   assert.equal(results.parent, h.root);
+
+  assert.equal(icon.tag, "span");
+  assert.equal(icon.icon, "search", "the header shows the search glyph");
+  assert.equal(icon.text, "");
 
   assert.equal(title.tag, "span");
   assert.equal(title.textContent, LABELS.title);
@@ -410,10 +455,19 @@ test("builds the contracted DOM tree with labels, roles and one setIcon close bu
   assert.equal(close.getAttribute("aria-label"), LABELS.close);
   assert.equal(close.icon, "x", "the close button is an Obsidian icon button");
 
+  assert.equal(input.parent, fieldWrap);
   assert.equal(input.tag, "input");
   assert.equal(input.getAttribute("type"), "search");
   assert.equal(input.placeholder, LABELS.placeholder);
   assert.equal(input.getAttribute("aria-label"), LABELS.placeholder);
+
+  assert.equal(clear.parent, fieldWrap, "the clear button lives inside the field");
+  assert.equal(clear.tag, "button");
+  assert.equal(clear.getAttribute("type"), "button");
+  assert.equal(clear.getAttribute("aria-label"), LABELS.clear);
+  assert.equal(clear.getAttribute("tabindex"), "-1", "the clear button stays out of the tab order");
+  assert.equal(clear.icon, "x");
+  assert.equal(clear.hidden, true, "there is nothing to clear before typing");
 
   assert.equal(count.hidden, true);
   assert.equal(count.textContent, "");
@@ -459,8 +513,10 @@ test("the close button and Escape are the only ways out, and clearing happens on
   assert.equal(h.panel.isOpen, false);
   assert.equal(h.root.hidden, true);
   assert.equal(h.cards().length, 0, "closing drops the result cards");
-  assert.equal(h.empty()?.textContent, LABELS.empty, "closing leaves the invite-to-search state");
+  assert.equal(h.results().hidden, true, "closing collapses the result area");
+  assert.equal(h.empty(), undefined, "closing leaves no placeholder behind");
   assert.equal(h.input().value, "");
+  assert.equal(h.clearButton().hidden, true);
   assert.deepEqual(h.notified, [true, false]);
 
   // Escape pressed inside the window closes it and never reaches the canvas.
@@ -542,6 +598,8 @@ test("typing is debounced through the injected clock and only the last query run
   assert.equal(blank.clock.pendingCount, 0);
   assert.deepEqual(blank.searches, []);
   assert.equal(blank.count().hidden, true);
+  assert.equal(blank.results().hidden, true);
+  assert.equal(blank.empty(), undefined);
 });
 
 test("a superseded search never renders its late answer, and undefined renders nothing", async () => {
@@ -578,7 +636,8 @@ test("a superseded search never renders its late answer, and undefined renders n
   assert.equal(at(h.cards(), 0, "card").querySelector(".mtn-search-card-title")?.textContent, "Second");
   assert.equal(h.count().textContent, "1 matches");
 
-  // The host may also declare an answer stale by resolving undefined.
+  // The host may also declare an answer stale by resolving undefined. Waiting
+  // forever would leave the scroll area open on a spinner, so it collapses.
   const stale = fixture({ search: async () => undefined });
   stale.panel.open();
   stale.typeQuery("gone");
@@ -586,7 +645,9 @@ test("a superseded search never renders its late answer, and undefined renders n
   await settle();
   assert.equal(stale.cards().length, 0);
   assert.equal(stale.empty(), undefined);
-  assert.equal(stale.count().textContent, LABELS.loading, "the window keeps waiting for a fresh answer");
+  assert.equal(stale.results().hidden, true, "a stale-only answer must not leave an empty scroll area");
+  assert.equal(stale.count().hidden, true);
+  assert.equal(stale.panel.isOpen, true, "collapsing the results must not close the window");
 });
 
 // ─── count and rendering ──────────────────────────────────────────────────────
@@ -617,15 +678,90 @@ test("the count appears only with a query and reports the rendered card count", 
   h.typeQuery("");
   assert.equal(h.count().hidden, true);
   assert.equal(h.cards().length, 0);
-  assert.equal(h.empty()?.textContent, LABELS.empty, "an empty query returns to the invite state");
+  assert.equal(h.results().hidden, true, "an empty query collapses the result area");
+  assert.equal(h.empty(), undefined, "an empty query shows no placeholder");
 
   const none = fixture({ search: async () => ({ cards: [], hitCount: 0 }) });
   none.panel.open();
   none.typeQuery("zzz");
+  assert.equal(none.results().hidden, false, "a real query opens the result area");
   none.clock.runAll();
   await settle();
   assert.equal(none.count().textContent, "0 matches");
   assert.equal(none.empty()?.textContent, LABELS.empty);
+});
+
+test("an empty query collapses the result area instead of leaving a placeholder", async () => {
+  const h = fixture({
+    search: async () => ({ cards: [card("n1", "Alpha", { path: "a.md" })], hitCount: 1 })
+  });
+
+  // Never opened, never typed: the card is only a title row plus a field.
+  assert.equal(h.results().hidden, true);
+  assert.equal(h.cards().length, 0);
+  assert.equal(h.empty(), undefined);
+
+  h.panel.open();
+  assert.equal(h.results().hidden, true, "opening the window without a query stays compact");
+  assert.equal(h.empty(), undefined);
+
+  h.typeQuery("alpha");
+  h.clock.runAll();
+  await settle();
+  assert.equal(h.results().hidden, false, "a query opens the scroll area");
+  assert.equal(h.cards().length, 1);
+
+  // Deleting the query collapses the area again: no rule, no gap, no placeholder.
+  h.typeQuery("");
+  assert.equal(h.results().hidden, true);
+  assert.equal(h.cards().length, 0);
+  assert.equal(h.empty(), undefined);
+
+  // Whitespace is blank, and setContext on a blank query keeps it collapsed.
+  h.typeQuery("   ");
+  assert.equal(h.results().hidden, true);
+  assert.equal(h.empty(), undefined);
+  h.panel.setContext();
+  assert.equal(h.results().hidden, true);
+  assert.equal(h.cards().length, 0);
+  assert.equal(h.empty(), undefined);
+});
+
+test("the clear button empties the query without closing the window", async () => {
+  const h = fixture({
+    search: async () => ({ cards: [card("n1", "Alpha", { path: "a.md" })], hitCount: 1 })
+  });
+  h.panel.open();
+  const clear = h.clearButton();
+  assert.equal(clear.hidden, true, "nothing to clear before typing");
+
+  h.typeQuery("alpha");
+  assert.equal(clear.hidden, false, "a query brings the clear affordance in");
+  h.clock.runAll();
+  await settle();
+  assert.equal(h.cards().length, 1);
+  assert.equal(h.count().hidden, false);
+
+  const searchesBefore = h.searches.length;
+  clear.fire("click");
+
+  assert.equal(h.input().value, "");
+  assert.equal(h.cards().length, 0, "clearing drops the rendered cards");
+  assert.equal(h.results().hidden, true, "clearing collapses the result area");
+  assert.equal(h.empty(), undefined);
+  assert.equal(h.count().hidden, true);
+  assert.equal(clear.hidden, true);
+  assert.equal(h.panel.isOpen, true, "clearing must not close the window");
+  assert.equal(h.document.activeElement, h.input(), "focus goes back to the field");
+  assert.deepEqual(h.notified, [true], "clearing is not a visibility change");
+  assert.equal(h.searches.length, searchesBefore, "clearing a field is not a search");
+  assert.equal(h.clock.pendingCount, 0);
+
+  // Whitespace counts as blank: the affordance hides with it.
+  h.typeQuery("   ");
+  assert.equal(clear.hidden, true);
+  h.typeQuery("beta");
+  assert.equal(clear.hidden, false);
 });
 
 test("hit rows keep the whole text, one mark per range, and a hover title", async () => {
@@ -719,6 +855,201 @@ test("separator rules sit between hit rows only", async () => {
   }), ["title", "hit", "separator", "hit", "separator", "hit"]);
 
   assert.equal(at(h.cards(), 1, "card").querySelectorAll(".mtn-search-card-separator").length, 0);
+});
+
+test("the path row links every node, one arrow between neighbours", async () => {
+  const h = fixture({
+    search: async () => ({
+      cards: [
+        card("n3", "Alpha", {
+          path: "notes/a.md",
+          nodePath: ["n1", "n2", "n3"],
+          hits: [contentHit("foo", [[0, 3]], 4)]
+        })
+      ],
+      hitCount: 1
+    })
+  });
+  h.panel.open();
+  h.typeQuery("foo");
+  h.clock.runAll();
+  await settle();
+
+  const element = at(h.cards(), 0, "card");
+  const row = h.pathRow(element);
+  assert.ok(row, "the card renders a path row");
+  assert.equal(row.tag, "nav");
+
+  const links = h.pathLinks(row);
+  const arrows = h.pathArrows(row);
+  assert.deepEqual(links.map((link) => link.textContent), ["n1", "n2", "n3"]);
+  assert.equal(arrows.length, links.length - 1, "exactly one arrow between neighbouring nodes");
+  assert.deepEqual(arrows.map((arrow) => arrow.textContent), ["→", "→"]);
+  for (const link of links) {
+    assert.equal(link.tag, "span");
+    assert.equal(link.getAttribute("role"), "button");
+    assert.equal(link.getAttribute("tabindex"), "0");
+  }
+
+  // The invariant flex wrapping relies on: every arrow is immediately followed by
+  // a clickable node, and the pair shares one atomic, non-shrinking flex item, so
+  // no wrapped line can ever finish on an arrow.
+  const flat = element.all();
+  let seen = 0;
+  for (let index = 0; index < flat.length; index += 1) {
+    const node = at(flat, index, "element");
+    if (!node.hasClass("mtn-search-path-arrow")) continue;
+    seen += 1;
+    const next = flat[index + 1];
+    assert.ok(next !== undefined, "an arrow is never the last element of a card");
+    assert.equal(next.hasClass("mtn-search-path-link"), true, "an arrow always introduces a node link");
+    assert.equal(next.parent, node.parent, "an arrow and its node share one wrapping unit");
+    assert.equal(
+      node.parent?.hasClass("mtn-search-path-segment"),
+      true,
+      "the arrow + node pair is an atomic flex item"
+    );
+  }
+  assert.equal(seen, arrows.length, "the walk visits every arrow");
+
+  // Each node link routes to its own node, by pointer and by keyboard.
+  at(links, 0, "first link").fire("click");
+  assert.deepEqual(h.jumps, ["n1"]);
+  const enter = at(links, 2, "last link").fire("keydown", { key: "Enter" });
+  assert.equal(enter.defaultPrevented, true);
+  at(links, 1, "middle link").fire("keydown", { key: " " });
+  assert.deepEqual(h.jumps, ["n1", "n3", "n2"]);
+  at(links, 0, "first link").fire("keydown", { key: "Tab" });
+  assert.equal(h.jumps.length, 3, "an unrelated key activates nothing");
+});
+
+test("the path row follows the title with no rule until the hits below", async () => {
+  const h = fixture({
+    search: async () => ({
+      cards: [
+        card("n2", "Alpha", {
+          path: "a.md",
+          nodePath: ["n1", "n2"],
+          hits: [contentHit("one", [[0, 3]], 1), contentHit("two", [[0, 3]], 2)]
+        }),
+        card("n2", "Beta", { path: "b.md", nodePath: ["n1", "n2"] }),
+        card("n1", "Root", { path: "c.md", hits: [contentHit("solo", [[0, 4]], 1)] })
+      ],
+      hitCount: 4
+    })
+  });
+  h.panel.open();
+  h.typeQuery("o");
+  h.clock.runAll();
+  await settle();
+
+  const many = at(h.cards(), 0, "card");
+  assert.deepEqual(
+    many.children.map(childKind),
+    ["title", "path", "separator", "hit", "separator", "hit"],
+    "the path opens the content below it with exactly one rule"
+  );
+  const title = at(many.querySelectorAll(".mtn-search-card-title"), 0, "title");
+  const path = h.pathRow(many);
+  assert.ok(path);
+  assert.equal(
+    many.children.indexOf(title) + 1,
+    many.children.indexOf(path),
+    "the path row directly follows the title: no rule between them"
+  );
+
+  // A path with nothing to open is the card's last row, and adds no rule.
+  const pathOnly = at(h.cards(), 1, "card");
+  assert.deepEqual(pathOnly.children.map(childKind), ["title", "path"]);
+
+  // No node path from the core: no path row, and the hits start right away.
+  const noPath = at(h.cards(), 2, "card");
+  assert.equal(h.pathRow(noPath), undefined);
+  assert.deepEqual(noPath.children.map(childKind), ["title", "hit"]);
+});
+
+test("path links show the host's node titles and route by id", async () => {
+  const h = fixture({
+    search: async () => ({
+      cards: [
+        card("n3", "Alpha", {
+          path: "a.md",
+          nodePath: ["n1", "n2", "n3"],
+          hits: [contentHit("foo", [[0, 3]], 1)]
+        })
+      ],
+      hitCount: 1
+    }),
+    // `n2` resolves to a blank title on purpose: blank is not a display name.
+    nodeTitle: (nodeId) => {
+      if (nodeId === "n1") return "Root";
+      if (nodeId === "n2") return "   ";
+      return "Leaf";
+    }
+  });
+  h.panel.open();
+  h.typeQuery("foo");
+  h.clock.runAll();
+  await settle();
+
+  const element = at(h.cards(), 0, "card");
+  const row = h.pathRow(element);
+  assert.ok(row, "the card renders a path row");
+  const links = h.pathLinks(row);
+
+  assert.deepEqual(links.map((link) => link.textContent), ["Root", "n2", "Leaf"]);
+  assert.deepEqual(links.map((link) => link.getAttribute("title")), ["Root", "n2", "Leaf"]);
+  assert.deepEqual(h.titleQueries, ["n1", "n2", "n3"], "every path node is resolved through the host");
+  // Raw ids must not leak into the labels once a title is available.
+  assert.equal(links[0]?.textContent?.includes("n1"), false);
+
+  // The click route still carries the node id, never the display title.
+  at(links, 0, "titled link").fire("click");
+  assert.deepEqual(h.jumps, ["n1"]);
+  at(links, 2, "titled link").fire("keydown", { key: "Enter" });
+  at(links, 2, "titled link").fire("keydown", { key: " " });
+  assert.deepEqual(h.jumps, ["n1", "n3", "n3"]);
+});
+
+test("path links fall back to the node id when the host offers no title", async () => {
+  const h = fixture({
+    search: async () => ({
+      cards: [card("n2", "Alpha", { path: "a.md", nodePath: ["n1", "n2"], hits: [contentHit("foo", [[0, 3]], 1)] })],
+      hitCount: 1
+    })
+  });
+  h.panel.open();
+  h.typeQuery("foo");
+  h.clock.runAll();
+  await settle();
+
+  const row = h.pathRow(at(h.cards(), 0, "card"));
+  assert.ok(row);
+  const links = h.pathLinks(row);
+  assert.deepEqual(links.map((link) => link.textContent), ["n1", "n2"]);
+  assert.deepEqual(links.map((link) => link.getAttribute("title")), ["n1", "n2"]);
+  assert.deepEqual(h.titleQueries, [], "no resolver means no lookups at all");
+});
+
+test("a resolver that answers undefined falls back per node", async () => {
+  const h = fixture({
+    search: async () => ({
+      cards: [card("n2", "Alpha", { path: "a.md", nodePath: ["n1", "n2"], hits: [contentHit("foo", [[0, 3]], 1)] })],
+      hitCount: 1
+    }),
+    nodeTitle: (nodeId) => (nodeId === "n1" ? "Root" : undefined)
+  });
+  h.panel.open();
+  h.typeQuery("foo");
+  h.clock.runAll();
+  await settle();
+
+  const row = h.pathRow(at(h.cards(), 0, "card"));
+  assert.ok(row);
+  const links = h.pathLinks(row);
+  assert.deepEqual(links.map((link) => link.textContent), ["Root", "n2"]);
+  assert.deepEqual(links.map((link) => link.getAttribute("title")), ["Root", "n2"]);
+  assert.deepEqual(h.titleQueries, ["n1", "n2"], "the unresolved node keeps its id");
 });
 
 test("a card without a path renders only its title row", async () => {
@@ -851,7 +1182,8 @@ test("setContext invalidates cached answers and re-runs the current query at onc
   h.typeQuery("");
   h.panel.setContext();
   assert.equal(h.cards().length, 0);
-  assert.equal(h.empty()?.textContent, LABELS.empty);
+  assert.equal(h.empty(), undefined);
+  assert.equal(h.results().hidden, true);
   assert.equal(h.count().hidden, true);
 });
 
@@ -985,9 +1317,65 @@ test("the appended stylesheet keeps the window floating, clamped, scrollable and
 
   assert.match(rule(".mtn-search-mark"), /background:\s*var\(--text-highlight-bg\);/);
 
+  // No query hides the result area outright: no rule, no gap, no blank box.
+  assert.match(rule(".mtn-search-panel-results[hidden]"), /display:\s*none !important;/);
+
+  // With the results collapsed the card is header + field, so the outer gaps above
+  // the title and below the input must match.
+  const headerPadding = rule(".mtn-search-panel-header").match(/padding:\s*([^;]+);/)?.[1] ?? "";
+  const searchPadding = rule(".mtn-search-panel-search").match(/padding:\s*([^;]+);/)?.[1] ?? "";
+  assert.equal(
+    headerPadding.split(/\s+/)[0],
+    searchPadding.split(/\s+/)[2],
+    "a query-less card keeps symmetric outer spacing"
+  );
+
+  // The header icon and the in-field clear button are part of the contract. The
+  // clear button keeps a 28px touch target even though the glyph stays small.
+  assert.match(rule(".mtn-search-panel-icon"), /display:\s*flex;/);
+  const clearRule = rule(".mtn-search-panel-clear");
+  assert.match(clearRule, /position:\s*absolute;/);
+  assert.match(clearRule, /width:\s*28px;/);
+  assert.match(clearRule, /height:\s*28px;/);
+  assert.match(rule(".mtn-search-panel-clear[hidden]"), /display:\s*none !important;/);
+
+  // The heading lifts on hover; only hit rows keep the full-width hover band.
+  const titleHover = rule(".mtn-search-card-title:hover");
+  assert.match(titleHover, /text-decoration:\s*underline;/);
+  assert.match(titleHover, /transform:\s*scale\(1\.02\);/);
+  assert.match(titleHover, /transform-origin:\s*left center;/);
+  assert.doesNotMatch(titleHover, /background/, "the title row must not paint a hover band");
+  assert.doesNotMatch(titleHover, /box-shadow/);
+  assert.match(rule(".mtn-search-card-title"), /transition:\s*transform 120ms ease;/);
+  assert.match(
+    rule(".mtn-search-card-hit:hover"),
+    /background:\s*var\(--background-modifier-active-hover/,
+    "hit rows keep their own hover background"
+  );
+  // The card itself paints no hover band: it used to tint the whole card when the
+  // pointer was only over the heading.
+  assert.doesNotMatch(css, /(?:^|\n)\.mtn-search-card:hover\s*\{/, "the card-wide hover band is gone");
+
+  // The node path wraps, underlines its links and keeps arrows unbreakable.
+  assert.match(rule(".mtn-search-card-path"), /flex-wrap:\s*wrap;/);
+  const pathLinkRule = rule(".mtn-search-path-link");
+  assert.match(pathLinkRule, /color:\s*var\(--link-color,\s*var\(--text-accent\)\);/);
+  assert.match(pathLinkRule, /text-decoration:\s*underline;/);
+  // A very long node name must ellipsize rather than burst the card.
+  assert.match(pathLinkRule, /max-width:\s*100%;/);
+  assert.match(pathLinkRule, /overflow:\s*hidden;/);
+  assert.match(pathLinkRule, /text-overflow:\s*ellipsis;/);
+  assert.match(pathLinkRule, /white-space:\s*nowrap;/);
+  assert.match(rule(".mtn-search-path-arrow"), /flex:\s*0 0 auto;/);
+  // Each arrow + node pair is one flex item, so a wrap can never strand an arrow.
+  const segmentRule = rule(".mtn-search-path-segment");
+  assert.match(segmentRule, /display:\s*inline-flex;/);
+  assert.match(segmentRule, /flex:\s*0 0 auto;/);
+  assert.match(segmentRule, /max-width:\s*100%;/);
+  assert.match(segmentRule, /min-width:\s*0;/);
+
   // The whole appended block uses theme variables only: no gradients, no hex.
   const appended = css.slice(css.indexOf(".mtn-search-panel"));
   assert.doesNotMatch(appended, /gradient/i);
   assert.doesNotMatch(appended, /#[0-9a-f]{3,8}\b/i);
-  assert.match(appended, /\.mtn-search-card-title:hover,\s*\n\.mtn-search-card-hit:hover\s*\{/);
 });

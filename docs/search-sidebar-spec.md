@@ -178,6 +178,7 @@ export interface SearchPanelLabels {
   readonly title: string;
   readonly placeholder: string;   // 同时用作 input 的 aria-label
   readonly close: string;         // × 的 aria-label
+  readonly clear: string;         // 输入框内清除按钮 × 的 aria-label（点击清空输入与结果，不关闭窗口）
   readonly count: string;         // 形如 "{count} matches"，{count} 由 {count} 占位
   readonly empty: string;         // 无命中提示
   readonly loading: string;       // 搜索进行中
@@ -189,6 +190,8 @@ export interface SearchPanelActions {
   readonly search: (query: string) => Promise<SearchResult | undefined>;
   /** 点击卡片标题行：跳转到节点并聚焦节点中心。 */
   readonly jumpToNode: (nodeId: NodeId) => void;
+  /** 路径行显示名：返回该节点的展示名；缺失或为空时 panel 回退显示 `nodeId`。 */
+  readonly nodeTitle?: (nodeId: NodeId) => string | undefined;
   /** 点击卡片内容行：打开文件并把光标聚焦到 line（1 起算）。 */
   readonly openFileAtLine: (path: string, line: number) => void;
   /** 窗口打开/关闭后通知宿主（供无障碍与焦点管理）。 */
@@ -223,18 +226,25 @@ DOM / 结构要求（`test/search-panel.test.ts` 固化，注意 `test/styles.te
 ```
 .mtn-search-panel[hidden]
   .mtn-search-panel-header
+    span.mtn-search-panel-icon        setIcon(..., "search")，位于标题左侧
     .mtn-search-panel-title           文本 = labels.title
     button.mtn-search-panel-close     aria-label = labels.close，内含 setIcon(..., "x")
-  .mtn-search-panel-search
-    input.mtn-search-panel-input        type="search"
-    .mtn-search-panel-count            文本 = labels.count 替换 {count}
-  .mtn-search-panel-results            （可滚动容器）
+  .mtn-search-panel-search              只含输入框包裹层与计数
+    span.mtn-search-panel-input-wrap      position:relative; display:flex; flex:1; min-width:0；是清除按钮的绝对定位锚点
+      input.mtn-search-panel-input        type="search"（`padding-right: 32px` 给清除按钮留白）
+      button.mtn-search-panel-clear       setIcon(..., "x")、aria-label = labels.clear、type="button"、tabindex="-1"；position:absolute 叠在输入框内部最右侧（28×28），query 为空时 hidden
+    .mtn-search-panel-count              文本 = labels.count 替换 {count}
+  .mtn-search-panel-results            （可滚动容器；query 为空时整体 hidden，不留分割线与空白）
     .mtn-search-card
       .mtn-search-card-title           role="button" tabindex="0"
+      nav.mtn-search-card-path         根 → … → 自身；仅 card.nodePath 非空时渲染（根节点命中没有这一行）；display:flex + flex-wrap:wrap，换行只发生在 segment 之间
+        span.mtn-search-path-segment   不可拆分的 flex item（display:inline-flex; flex:0 0 auto; max-width:100%）；箭头与其引入的节点同属一段；第一段（根）只有 link、不带箭头
+          span.mtn-search-path-arrow   文本 "→"、aria-hidden="true"；与同段 link 一起换行，不可能落在行尾
+          span.mtn-search-path-link    role="button" tabindex="0"，文本 = actions.nodeTitle(id)（缺失回退 id），点击 / Enter / Space → jumpToNode(id)；超长名 max-width:100% + text-overflow:ellipsis
       .mtn-search-card-hit             一行命中，role="button" tabindex="0"
-      hr.mtn-search-card-separator     命中部分之间的分割线
+      hr.mtn-search-card-separator     命中部分之间的分割线（标题与路径之间没有；路径与下方内容之间有）
       .mtn-search-card-truncated       仅 card.hitsLimited 时：labels.truncated（{count}=实际展示行数），纯说明行
-    .mtn-search-empty                  无命中文本
+    .mtn-search-empty                  仅“有 query 且 0 命中”时的无结果文本
 ```
 
 行为要求：
@@ -243,6 +253,7 @@ DOM / 结构要求（`test/search-panel.test.ts` 固化，注意 `test/styles.te
 - **失焦不关闭**：不得监听 `blur`/`focusout` 关闭窗口。
 - `Escape` 在输入框或面板内按下 → `close()`，`preventDefault()` + `stopPropagation()`；由面板自己监听，不依赖宿主。
 - 输入事件：`debounceMs`（默认 120ms）防抖后调用 `actions.search(query)`；`clock` 可注入以便测试同步推进。每次新搜索必须使其之前的结果失效（序号令牌或等价机制），过期结果不得渲染。
+- **失效应答收起**：宿主返回 `undefined`（表示"输入已过期"）或调用抛错时，panel 执行 `clearResults()`——结果区 `hidden`、计数隐藏，**窗口保持打开**；不得无限停在 loading 空盒，与空 query 的收起口径一致。
 - 输入框右侧 `.mtn-search-panel-count`：query 为空时不显示计数（`hidden`）；有结果时显示 `labels.count`；加载中显示 `labels.loading`。
 - 每个 `.mtn-search-card-hit`：文本只占一行（CSS `white-space: nowrap` + 省略号），命中关键字用 `<mark class="mtn-search-mark">` 包裹；`title` 属性给全文做悬浮提示。
 - 一行多段高亮 → 多个 `<mark>`。
@@ -267,8 +278,36 @@ DOM / 结构要求（`test/search-panel.test.ts` 固化，注意 `test/styles.te
 | `search.panel.loading` | `Searching…` | `正在搜索…` |
 | `search.panel.truncated` | `Only the first {count} hits are shown` | `仅显示前 {count} 条命中` |
 | `shortcut.search` | `Search nodes` | `搜索节点` |
+| `search.panel.clear` | `Clear search` | `清空搜索` |
 
 约束：占位符 `{count}` 两种语言必须一致；`test/i18n.test.ts` 要求 EN/ZH key 集合与非空文本一致。
+
+## 4.5 第二轮细化（用户新反馈，最高优先级）
+
+五个验收点：
+
+1. **空 query 时结果区完全不占空间**：`.mtn-search-panel-results` 必须 `hidden`（不能只清空内容、不能留分割线和空白）。关闭窗口、清空输入、`setContext` 之后都回到"只有标题行 + 输入行"的紧凑卡片，上下间距对称。所以**取消上一轮"任何无结果状态都显示空状态占位"**：`.mtn-search-empty` 只在"有 query 但 0 命中"时显示。
+2. **面板标题左侧有搜索图标**：header 结构改为 `span.mtn-search-panel-icon`（`setIcon(..., "search")`）+ `span.mtn-search-panel-title` + `button.mtn-search-panel-close`。
+3. **输入有字时输入框内部最右侧显示清除按钮**：`button.mtn-search-panel-clear`（`setIcon(..., "x")`、`aria-label = labels.clear`、`type="button"`、`tabindex="-1"`，避免与 Tab 焦点顺序打架），query 为空时 `hidden`。点击只清空输入与结果，**不关闭窗口**，并把焦点还给输入框。
+4. **卡片标题下方是节点路径**（根 → … → 命中节点）：
+   - 模型：`SearchCandidate` 增加 `readonly ancestorIds?: readonly NodeId[]`（**从根节点开始、不含命中节点自身**；根节点自身的命中为空数组/缺席，此时不渲染路径行）；`SearchCard` 增加 `readonly nodePath?: readonly NodeId[]`（根 → … → 自身，**含自身**，仅当 `ancestorIds` 非空时由 core 写入）。**注意**：`SearchCard.path` 已经是"文件路径 string"（内容命中与 `openFileAtLine` 用），节点链路必须用 `nodePath`，不得复用 `path`。
+   - 渲染：`nav.mtn-search-card-path`，放在标题行之后、第一个命中行/第一条分割线之前；**标题与路径之间没有分割线**，路径与下方内容之间保留 `hr.mtn-search-card-separator`（无内容命中时路径就是卡片最后一行，不加分割线）。
+   - 结构（最终实现）：`.mtn-search-card-path` 的每个 flex item 是一个 `span.mtn-search-path-segment`（`display: inline-flex; flex: 0 0 auto; min-width: 0; max-width: 100%`），**箭头与它引入的节点同属这个 segment**：segment 内先 `span.mtn-search-path-arrow`（`text = "→"`、`aria-hidden="true"`），再 `span.mtn-search-path-link`（`role="button"`、`tabindex="0"`、`title` = 名称、点击/Enter/Space → `actions.jumpToNode(id)`，行为与卡片标题一致）。路径的第一个节点（根）直接是 link、不带箭头。
+   - 换行规则：容器 `.mtn-search-card-path` 用 `display: flex; flex-wrap: wrap`，换行只发生在 segment 之间；因为箭头与节点在同一个不可拆分的 `flex: 0 0 auto` 片段里，**箭头不可能落在行尾**。测试固化该不变量（例如断言每个箭头元素与其后的可点击节点同属一个 segment）。
+   - 显示名：路径段显示**节点名**，由宿主通过 `actions.nodeTitle(nodeId)` 注入；panel 取不到或为空时回退显示 `nodeId`。单个过长的节点名由 `max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap` 省略号截断，不影响片段间换行。
+   - 路径行样式：链接用 `var(--link-color, var(--text-accent))` 且 `text-decoration: underline`（下划线，超链接观感），悬浮时 `color: var(--text-accent)`；箭头用 `var(--text-faint)`；整行 `font-size: var(--font-ui-smaller)`、`line-height: 1.4`、`gap: 2px 4px`，**只按 segment 换行**（不出现横向滚动），单个过长的节点名按上面的规则省略号截断。
+5. **卡片标题悬浮改为"轻微放大 + 下划线"，不要整行背景/阴影**：
+   - `.mtn-search-card-title:hover`：`text-decoration: underline; transform: scale(1.02); transform-origin: left center;`，**不得**再给标题行 `background`（`--background-modifier-active-hover` 之类）或阴影。
+   - 同时**删除卡片级 `.mtn-search-card:hover` 的整行背景**（用户要求不要整卡整行背景）；只有命中行（`.mtn-search-card-hit:hover`）保留整行背景悬浮。
+   - 需要给标题行加 `transition: transform 120ms ease;`，并注意 `transform` 会创建层叠上下文，标题行本身不滚动所以可接受。
+
+新增 i18n key（EN / ZH 同序追加在对象末尾）：
+
+| key | EN | ZH |
+| --- | --- | --- |
+| `search.panel.clear` | `Clear search` | `清空搜索` |
+
+面板新增 label 字段 `clear: string`（必填，与既有 label 一致）。
 
 ## 5. CSS 契约（panel 队友只追加）
 
@@ -277,9 +316,10 @@ DOM / 结构要求（`test/search-panel.test.ts` 固化，注意 `test/styles.te
   `position: absolute; top: 62px; right: 12px; z-index: 44; display: flex; flex-direction: column; box-sizing: border-box; width: min(360px, calc(100% - 24px)); max-height: calc(100% - 74px); overflow: hidden; border: 1px solid var(--background-modifier-border); border-radius: 13px; background: color-mix(in srgb, var(--background-primary) 92%, transparent); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); backdrop-filter: blur(10px); color: var(--text-normal);`
   （`top: 62px` 用于让开顶部工具栏；`z-index` 低于 `--layer-modal` 且高于画布。）
 - `.mtn-search-panel-results`：`flex: 1; min-height: 0; overflow-y: auto;`（滚动由这里负责），并用 `border-top: 1px solid var(--background-modifier-border)` 与查询行分隔；标题、输入框与关闭按钮固定不滚动。
-- 空状态：**任何无结果状态**（刚打开、清空输入、没有命中）都在结果区渲染 `.mtn-search-empty`（文本 = `labels.empty`），不允许留空白盒子。
-- 卡片：`border: 1px solid var(--background-modifier-border)`、`border-radius: var(--radius-m)`、内边距、悬浮时 `background: var(--background-modifier-hover)`。
-- 标题行行高与内容行都要能单独悬浮高亮；`mark` 使用 `background: var(--text-highlight-bg)` 或主题高亮变量，保留可读前景色。
+- 空状态：`query` 为空时 `.mtn-search-panel-results` 整体 `hidden`（**不占空间、无分割线、无空白**）；只有“有 query 且 0 命中”时才渲染 `.mtn-search-empty`（文本 = `labels.empty`）。
+- 卡片：`border: 1px solid var(--background-modifier-border)`、`border-radius: var(--radius-m)`、内边距；**不要给 `.mtn-search-card:hover` 加背景**（用户要求取消整卡整行背景，该规则已删除）。
+- 悬浮：只有命中内容行 `.mtn-search-card-hit:hover` 保留整行 `background`；卡片**标题行**改为轻微放大 + 下划线（`transform: scale(1.02); transform-origin: left center; text-decoration: underline;`，**没有背景或阴影**）。`mark` 使用 `background: var(--text-highlight-bg)` 或主题高亮变量，保留可读前景色。
+- 路径行：`nav.mtn-search-card-path` 用 flex + wrap，item 是 `span.mtn-search-path-segment`（箭头 + 其后的 `span.mtn-search-path-link` 同段），链接链接色 + 下划线、超长名省略号截断；详见 §4.5。
 - 单行截断：`white-space: nowrap; overflow: hidden; text-overflow: ellipsis;`（JS 侧还会按字符窗口加 `…`）。
 - 移动端可用：不得依赖 hover 才能点击；触摸目标高度 ≥ 28px。
 

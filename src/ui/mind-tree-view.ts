@@ -118,7 +118,13 @@ import { openMarkerPopover, type MarkerPopoverHandle } from "./marker-popover";
 import { shouldHandleMindTreePaste } from "./paste-routing";
 import { createBottomStatusBarState, MindTreeViewShell, type StatusMessageState } from "./components";
 import { MindTreeSearchPanel } from "./search/search-panel";
-import { buildSearchCandidates, normalizeSearchPath, resolveSearchMarkdownFiles } from "./search/search-payload";
+import {
+  buildSearchCandidates,
+  buildSearchParentIndex,
+  nodeAncestorIds,
+  normalizeSearchPath,
+  resolveSearchMarkdownFiles
+} from "./search/search-payload";
 import {
   readSearchFiles,
   searchMindTree,
@@ -289,6 +295,7 @@ export class MindTreeView extends TextFileView {
   private searchCandidateCache?: {
     revision: number;
     candidates: readonly SearchCandidate[];
+    nodeAncestors: (nodeId: NodeId) => readonly NodeId[] | undefined;
     files: Promise<readonly FileCandidate<TFile>[]>;
   };
   /** Markdown text keyed by path:mtime so repeated keystrokes stop re-reading. */
@@ -3402,11 +3409,17 @@ export class MindTreeView extends TextFileView {
       count: t("search.panel.count"),
       empty: t("search.panel.empty"),
       loading: t("search.panel.loading"),
-      truncated: t("search.panel.truncated")
+      truncated: t("search.panel.truncated"),
+      clear: t("search.panel.clear")
     }, {
       search: (query) => this.runSearch(query),
       jumpToNode: (nodeId) => this.jumpToSearchedNode(nodeId),
-      openFileAtLine: (path, line) => void this.openSearchedFileAtLine(path, line)
+      openFileAtLine: (path, line) => void this.openSearchedFileAtLine(path, line),
+      // Path rows show node names; the id stays the fallback for a pruned node.
+      nodeTitle: (nodeId) => {
+        const node = this.document?.nodes[nodeId];
+        return node ? parseNodeTitle(node.title).plainText : undefined;
+      }
     });
   }
 
@@ -3439,10 +3452,14 @@ export class MindTreeView extends TextFileView {
     const token = this.documentSessionToken;
     const ownPath = this.file ? normalizeSearchPath(this.file.path) : undefined;
     if (this.searchCandidateCache?.revision !== revision) {
+      // Ancestry stays lazy: only the cards that survive the result limit ask
+      // for their root-to-node chain, so a deep tree does not pay for every node.
+      const nodeAncestors = nodeAncestorIds(buildSearchParentIndex(document), new Set(Object.keys(document.nodes)));
       const candidates = buildSearchCandidates(document, ownPath);
       this.searchCandidateCache = {
         revision,
         candidates,
+        nodeAncestors,
         files: resolveSearchMarkdownFiles(this.plugin.resources, candidates, ownPath)
       };
     }
@@ -3453,7 +3470,7 @@ export class MindTreeView extends TextFileView {
       read: (file) => this.readSearchFileText(file)
     }, () => true);
     if (this.viewClosed || token !== this.documentSessionToken || this.document !== document) return undefined;
-    return { candidates: cache.candidates, fileContents: contents.contents };
+    return { candidates: cache.candidates, fileContents: contents.contents, nodeAncestorIds: cache.nodeAncestors };
   }
 
   /** Bounded, path+mtime keyed cache; every read is a plain vault read. */

@@ -462,7 +462,8 @@ export const EN = {
   "search.panel.empty": "No matches",
   "search.panel.loading": "Searching…",
   "shortcut.search": "Search nodes",
-  "search.panel.truncated": "Only the first {count} hits are shown"
+  "search.panel.truncated": "Only the first {count} hits are shown",
+  "search.panel.clear": "Clear search"
 } as const;
 
 export type TranslationKey = keyof typeof EN;
@@ -932,7 +933,8 @@ const ZH: Record<TranslationKey, string> = {
   "search.panel.empty": "没有匹配",
   "search.panel.loading": "正在搜索…",
   "shortcut.search": "搜索节点",
-  "search.panel.truncated": "仅显示前 {count} 条命中"
+  "search.panel.truncated": "仅显示前 {count} 条命中",
+  "search.panel.clear": "清空搜索"
 };
 
 export function translate(

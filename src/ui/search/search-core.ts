@@ -40,6 +40,13 @@ export interface SearchCard {
   readonly resourceId?: ResourceId;
   readonly path?: string;
   readonly fileName?: string;
+  /**
+   * Root → … → this node, for the clickable path row under the heading. `path`
+   * already means the linked file's vault path, so the node chain needs its own
+   * name. Written only when the candidate carries ancestors; a root hit has no
+   * path to show, so the field stays absent instead of holding an empty array.
+   */
+  readonly nodePath?: readonly NodeId[];
   /** Non-title hits in render order; the title hit never repeats here. */
   readonly hits: readonly SearchHit[];
   /**
@@ -66,12 +73,26 @@ export interface SearchCandidate {
   readonly resourceId?: ResourceId;
   readonly path?: string;
   readonly fileName?: string;
+  /**
+   * Root → … → parent node ids, excluding the hit node itself. Absent (or empty)
+   * for a root hit, which is what makes the card omit its path row entirely.
+   * Hosts may pass dirty data: duplicates and cycles are tolerated by the core.
+   */
+  readonly ancestorIds?: readonly NodeId[];
 }
 
 export interface SearchContext {
   readonly candidates: readonly SearchCandidate[];
   /** key = `path`, value = full file text; only `.md` files are present. */
   readonly fileContents: ReadonlyMap<string, string>;
+  /**
+   * Lazy ancestor lookup: root → … → parent, excluding the node itself; `[]` for
+   * a root node and `undefined` for an unknown one. Preferred over the eager
+   * `candidate.ancestorIds` snapshot because the host can build one parent index
+   * once instead of O(nodes × average depth) chains, and the core calls it only
+   * for the cards that survive `SEARCH_RESULT_LIMIT`.
+   */
+  readonly nodeAncestorIds?: (nodeId: NodeId) => readonly NodeId[] | undefined;
 }
 
 export interface SearchFileBudget {
@@ -331,6 +352,11 @@ export function buildSnippet(
 
 interface RankedCard {
   readonly card: SearchCard;
+  /**
+   * Eager ancestor fallback, kept out of the card until the cap is applied so a
+   * dropped card never allocates a chain.
+   */
+  readonly ancestorIds: readonly NodeId[] | undefined;
   readonly hasTitleHit: boolean;
   readonly hasFileHit: boolean;
   readonly contentHitCount: number;
@@ -391,6 +417,7 @@ export function searchMindTree(ctx: SearchContext, query: string): SearchResult 
       },
       hasTitleHit: titleHit !== undefined,
       hasFileHit: fileHit !== undefined,
+      ancestorIds: candidate.ancestorIds,
       // Sorting keeps using the true total; capping it would reshuffle cards.
       contentHitCount: content.total,
       order
@@ -398,7 +425,15 @@ export function searchMindTree(ctx: SearchContext, query: string): SearchResult 
   }
 
   ranked.sort(compareCards);
-  return { cards: ranked.slice(0, SEARCH_RESULT_LIMIT).map((entry) => entry.card), hitCount };
+  const cards: SearchCard[] = [];
+  for (const entry of ranked.slice(0, SEARCH_RESULT_LIMIT)) {
+    // Resolved last on purpose: a candidate the result cap drops must neither
+    // allocate a chain nor cost a lazy ancestor lookup.
+    const ancestorIds = resolveAncestorIds(ctx, entry);
+    const nodePath = buildNodePath(entry.card.nodeId, ancestorIds);
+    cards.push(nodePath === undefined ? entry.card : { ...entry.card, nodePath });
+  }
+  return { cards, hitCount };
 }
 
 function buildTitleHit(
@@ -409,6 +444,50 @@ function buildTitleHit(
   if (ranges.length === 0) return undefined;
   const snippet = buildSnippet(plainTitle, ranges);
   return { source: "title", line: 1, text: snippet.text, ranges: snippet.ranges };
+}
+
+/**
+ * Ancestors of one card that already survived the result cap. The lazy host
+ * callback wins whenever it has an answer, so a host can pay one parent-index
+ * build instead of one chain per node. When the callback is provided it is
+ * authoritative: `undefined` and `[]` both mean "this node has no path row", and
+ * the core must not fall back to a possibly stale `candidate.ancestorIds`
+ * snapshot, which would draw a wrong path for the current document. The snapshot
+ * is consulted only when no callback exists at all.
+ */
+function resolveAncestorIds(ctx: SearchContext, entry: RankedCard): readonly NodeId[] | undefined {
+  if (ctx.nodeAncestorIds !== undefined) return ctx.nodeAncestorIds(entry.card.nodeId);
+  return entry.ancestorIds;
+}
+
+/**
+ * Root → … → self chain for a card's clickable path row, or `undefined` when the
+ * card must not render one.
+ *
+ * Ancestors are host-supplied, lazily or as a snapshot, so they are treated as
+ * dirty: a repeated id is dropped instead of duplicating a row, and a chain that
+ * already contains the hit node itself (a cycle, which cannot be a truthful
+ * root-to-self path) drops the whole chain rather than throwing. Iterating the
+ * finite input array with a `Set` is what makes this unable to loop, so no
+ * separate depth cap is needed; the chain never takes part in ranking or hit
+ * counting.
+ */
+function buildNodePath(
+  nodeId: NodeId,
+  ancestorIds: readonly NodeId[] | undefined
+): readonly NodeId[] | undefined {
+  if (ancestorIds === undefined || ancestorIds.length === 0) return undefined;
+  const seen = new Set<NodeId>();
+  const chain: NodeId[] = [];
+  for (const ancestorId of ancestorIds) {
+    if (seen.has(ancestorId)) continue;
+    seen.add(ancestorId);
+    chain.push(ancestorId);
+  }
+  // `nodeId` among its own ancestors: stop instead of appending a duplicate.
+  if (seen.has(nodeId)) return undefined;
+  chain.push(nodeId);
+  return chain;
 }
 
 function buildFileHit(fileName: string, needle: string): SearchHit | undefined {

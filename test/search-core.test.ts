@@ -31,6 +31,14 @@ function makeContext(
   return { candidates, fileContents: new Map(Object.entries(files)) };
 }
 
+function makeLazyContext(
+  candidates: readonly SearchCandidate[],
+  nodeAncestorIds: (nodeId: string) => readonly string[] | undefined,
+  files: Readonly<Record<string, string>> = {}
+): SearchContext {
+  return { candidates, fileContents: new Map(Object.entries(files)), nodeAncestorIds };
+}
+
 interface FakeReader {
   readonly reader: SearchFileReader<string>;
   readonly reads: string[];
@@ -564,6 +572,155 @@ test("searchMindTree keeps resource metadata and repeats the same result", () =>
   assert.equal(first.cards[0]!.resourceId, "ab12C");
   assert.equal(first.cards[0]!.path, "notes/a.md");
   assert.equal(first.cards[0]!.fileName, "a.md");
+});
+
+/* ------------------------------------------------------------------ *
+ * searchMindTree · node path (SearchCandidate.ancestorIds)
+ * ------------------------------------------------------------------ */
+
+test("searchMindTree appends the hit node to the candidate ancestors", () => {
+  const candidate = makeCandidate({ nodeId: "n2", plainTitle: "Alpha", ancestorIds: ["root", "mid"] });
+  const card = searchMindTree(makeContext([candidate]), "alpha").cards[0]!;
+  assert.deepEqual(card.nodePath, ["root", "mid", "n2"]);
+});
+
+test("searchMindTree omits the node path for a root hit or a missing ancestor list", () => {
+  const root = makeCandidate({ nodeId: "root", plainTitle: "Alpha", ancestorIds: [] });
+  const absent = makeCandidate({ nodeId: "n1", plainTitle: "Alpha" });
+  const rootCard = searchMindTree(makeContext([root]), "alpha").cards[0]!;
+  assert.equal("nodePath" in rootCard, false);
+  const absentCard = searchMindTree(makeContext([absent]), "alpha").cards[0]!;
+  assert.equal("nodePath" in absentCard, false);
+});
+
+test("searchMindTree drops duplicate and cycling ancestor ids without throwing", () => {
+  const duplicated = makeCandidate({ nodeId: "n", plainTitle: "Alpha", ancestorIds: ["a", "a"] });
+  const looped = makeCandidate({ nodeId: "n", plainTitle: "Alpha", ancestorIds: ["a", "b", "a"] });
+  assert.deepEqual(searchMindTree(makeContext([duplicated]), "alpha").cards[0]!.nodePath, ["a", "n"]);
+
+  const loopedPath = searchMindTree(makeContext([looped]), "alpha").cards[0]!.nodePath!;
+  assert.deepEqual(loopedPath, ["a", "b", "n"]);
+  assert.equal(new Set(loopedPath).size, loopedPath.length);
+
+  // The hit node appears among its own ancestors, so no truthful root-to-self
+  // chain exists: the field is dropped instead of repeating the node.
+  const selfCycle = makeCandidate({
+    nodeId: "self",
+    plainTitle: "Alpha",
+    ancestorIds: ["root", "self"]
+  });
+  const selfCard = searchMindTree(makeContext([selfCycle]), "alpha").cards[0]!;
+  assert.equal("nodePath" in selfCard, false);
+});
+
+test("searchMindTree keeps ordering and hit counts independent of the node chain", () => {
+  const candidates = [
+    makeCandidate({ nodeId: "t1", plainTitle: "Beta one", path: "t1.md", ancestorIds: ["root"] }),
+    makeCandidate({ nodeId: "c1", plainTitle: "Doc", path: "c1.md" }),
+    makeCandidate({ nodeId: "c2", plainTitle: "Doc", path: "c2.md", ancestorIds: ["root", "mid"] })
+  ];
+  const context = makeContext(candidates, {
+    "t1.md": "beta content",
+    "c1.md": "beta",
+    "c2.md": "beta\nbeta"
+  });
+  const result = searchMindTree(context, "beta");
+  assert.deepEqual(cardIds(result), ["t1", "c2", "c1"]);
+  assert.equal(result.hitCount, 2 + 2 + 1);
+  assert.deepEqual(
+    result.cards.map((card) => card.nodePath),
+    [["root", "t1"], ["root", "mid", "c2"], undefined]
+  );
+});
+
+test("searchMindTree keeps node chains for the cards that survive the result cap", () => {
+  const candidates = Array.from({ length: SEARCH_RESULT_LIMIT + 1 }, (_, index) =>
+    makeCandidate({ nodeId: `n${index}`, plainTitle: `Item ${index}`, ancestorIds: ["root", `p${index}`] })
+  );
+  const result = searchMindTree(makeContext(candidates), "item");
+  assert.equal(result.cards.length, SEARCH_RESULT_LIMIT);
+  assert.equal(result.hitCount, SEARCH_RESULT_LIMIT + 1);
+  assert.deepEqual(result.cards[0]!.nodePath, ["root", "p0", "n0"]);
+  assert.deepEqual(result.cards[SEARCH_RESULT_LIMIT - 1]!.nodePath, [
+    "root",
+    `p${SEARCH_RESULT_LIMIT - 1}`,
+    `n${SEARCH_RESULT_LIMIT - 1}`
+  ]);
+});
+
+/* ------------------------------------------------------------------ *
+ * searchMindTree · lazy nodeAncestorIds
+ * ------------------------------------------------------------------ */
+
+test("searchMindTree asks the lazy ancestor callback only for cards it returns", () => {
+  const calls: string[] = [];
+  const candidates = Array.from({ length: SEARCH_RESULT_LIMIT + 25 }, (_, index) =>
+    makeCandidate({ nodeId: `n${index}`, plainTitle: `Item ${index}` })
+  );
+  const context = makeLazyContext(candidates, (nodeId) => {
+    calls.push(nodeId);
+    return ["root"];
+  });
+  const result = searchMindTree(context, "item");
+  assert.equal(result.cards.length, SEARCH_RESULT_LIMIT);
+  assert.equal(result.hitCount, SEARCH_RESULT_LIMIT + 25);
+  assert.equal(calls.length, result.cards.length);
+  // The invariant that matters: every returned card got exactly one lookup and
+  // the candidates dropped by the cap were never looked up at all.
+  assert.deepEqual(calls, result.cards.map((card) => card.nodeId));
+  assert.equal(calls.includes(`n${SEARCH_RESULT_LIMIT}`), false);
+  assert.deepEqual(result.cards[0]!.nodePath, ["root", "n0"]);
+  assert.deepEqual(result.cards[SEARCH_RESULT_LIMIT - 1]!.nodePath, [
+    "root",
+    `n${SEARCH_RESULT_LIMIT - 1}`
+  ]);
+});
+
+test("searchMindTree never asks the lazy ancestor callback when no card is returned", () => {
+  const calls: string[] = [];
+  const context = makeLazyContext([makeCandidate({ nodeId: "n1", plainTitle: "Doc" })], (nodeId) => {
+    calls.push(nodeId);
+    return ["root"];
+  });
+  assert.deepEqual(searchMindTree(context, "absent"), { cards: [], hitCount: 0 });
+  assert.equal(calls.length, 0);
+});
+
+test("searchMindTree omits the node path when the lazy callback has no ancestors", () => {
+  const candidate = makeCandidate({ nodeId: "n1", plainTitle: "Alpha" });
+  const unknown = makeLazyContext([candidate], () => undefined);
+  assert.equal("nodePath" in searchMindTree(unknown, "alpha").cards[0]!, false);
+  const root = makeLazyContext([candidate], () => []);
+  assert.equal("nodePath" in searchMindTree(root, "alpha").cards[0]!, false);
+});
+
+test("searchMindTree prefers the lazy callback over the eager ancestor snapshot", () => {
+  const candidate = makeCandidate({ nodeId: "n1", plainTitle: "Alpha", ancestorIds: ["stale"] });
+  const lazy = makeLazyContext([candidate], () => ["live", "mid"]);
+  assert.deepEqual(searchMindTree(lazy, "alpha").cards[0]!.nodePath, ["live", "mid", "n1"]);
+
+  // The callback is authoritative: an empty answer means "no path row", never a
+  // fallback to the snapshot the current document may have outgrown.
+  const emptyCallback = makeLazyContext([candidate], () => []);
+  assert.equal("nodePath" in searchMindTree(emptyCallback, "alpha").cards[0]!, false);
+  const unknownCallback = makeLazyContext([candidate], () => undefined);
+  assert.equal("nodePath" in searchMindTree(unknownCallback, "alpha").cards[0]!, false);
+
+  // Only a host without the callback falls back to the eager field.
+  assert.deepEqual(searchMindTree(makeContext([candidate]), "alpha").cards[0]!.nodePath, [
+    "stale",
+    "n1"
+  ]);
+});
+
+test("searchMindTree defends against duplicate and cycling lazy ancestors", () => {
+  const duplicate = makeCandidate({ nodeId: "n", plainTitle: "Alpha" });
+  const deduped = makeLazyContext([duplicate], () => ["a", "a", "b"]);
+  assert.deepEqual(searchMindTree(deduped, "alpha").cards[0]!.nodePath, ["a", "b", "n"]);
+
+  // The callback names the hit node among its own ancestors: drop the chain.
+  const cycle = makeLazyContext([duplicate], () => ["root", "n"]);
+  assert.equal("nodePath" in searchMindTree(cycle, "alpha").cards[0]!, false);
 });
 
 /* ------------------------------------------------------------------ *

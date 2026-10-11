@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSearchCandidates, normalizeSearchPath, resolveSearchMarkdownFiles } from "../src/ui/search/search-payload";
+import { buildSearchCandidates, buildSearchParentIndex, nodeAncestorIds, normalizeSearchPath, resolveSearchMarkdownFiles, searchedAncestorIds } from "../src/ui/search/search-payload";
 import type { FileResourceRef, MindTreeDocument, MindTreeNode } from "../src/types";
 
 /**
@@ -9,10 +9,10 @@ import type { FileResourceRef, MindTreeDocument, MindTreeNode } from "../src/typ
  * vault is allowed to read, so they are pinned here independently of Obsidian.
  */
 
-function node(id: string, title: string, resource?: FileResourceRef): MindTreeNode {
+function node(id: string, title: string, resource?: FileResourceRef, childIds: string[] = []): MindTreeNode {
   return resource
-    ? { id, title, childIds: [], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", resource }
-    : { id, title, childIds: [], createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
+    ? { id, title, childIds, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z", resource }
+    : { id, title, childIds, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" };
 }
 
 function fileRef(resourceId: string, pathHint: string): FileResourceRef {
@@ -33,6 +33,11 @@ function documentWith(nodes: MindTreeNode[]): MindTreeDocument {
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z"
   };
+}
+
+/** Every node id the document contains, which is what the accessor validates against. */
+function documentIds(document: MindTreeDocument): string[] {
+  return Object.keys(document.nodes);
 }
 
 test("search candidates follow node order and keep plain titles for matching", () => {
@@ -139,4 +144,66 @@ test("the current file and another mind tree are excluded after resolution", asy
       : files.get(reference.pathHint)
   }, candidates, "Maps/Current.mtn.md");
   assert.deepEqual(resolved, []);
+});
+
+test("result cards carry the root-to-node path so every ancestor stays clickable", () => {
+  const document = documentWith([
+    node("root", "Root", undefined, ["mid"]),
+    node("mid", "Middle", undefined, ["leaf"]),
+    node("leaf", "Leaf", fileRef("res-leaf", "Notes/Leaf.md")),
+    node("other", "Other")
+  ]);
+  // The eager map mirrors `SearchCandidate.ancestorIds`: root first, no self.
+  const paths = searchedAncestorIds(document);
+  assert.deepEqual(paths.get("root"), []);
+  assert.deepEqual(paths.get("mid"), ["root"]);
+  assert.deepEqual(paths.get("leaf"), ["root", "mid"]);
+  assert.deepEqual(paths.get("other"), []);
+
+  const candidates = buildSearchCandidates(document, undefined, paths);
+  const leaf = candidates.find((entry) => entry.nodeId === "leaf");
+  assert.deepEqual(leaf?.ancestorIds, ["root", "mid"]);
+  assert.deepEqual(candidates.find((entry) => entry.nodeId === "root")?.ancestorIds, []);
+});
+
+test("a cycling or duplicated parent chain terminates without repeated ancestors", () => {
+  const document = documentWith([
+    node("a", "A", undefined, ["b"]),
+    node("b", "B", undefined, ["a"])
+  ]);
+  // findParentId prefers the first parent that lists the child, so this cycle
+  // must still terminate and never list the node twice.
+  const paths = searchedAncestorIds(document);
+  for (const chain of paths.values()) {
+    assert.equal(new Set(chain).size, chain.length, "no ancestor may repeat");
+  }
+  // A self-referencing parent must not appear in its own ancestor list either.
+  const selfParent = documentWith([node("solo", "Solo", undefined, ["solo"])]);
+  assert.deepEqual(searchedAncestorIds(selfParent).get("solo"), []);
+});
+
+test("candidates without an ancestor map stay path-free instead of throwing", () => {
+  const document = documentWith([node("root", "Root"), node("child", "Child", fileRef("res-1", "Notes/Child.md"))]);
+  const candidates = buildSearchCandidates(document, undefined);
+  for (const candidate of candidates) assert.deepEqual(candidate.ancestorIds, []);
+});
+
+test("the lazy ancestor accessor answers per node and keeps cycles finite", () => {
+  const document = documentWith([
+    node("root", "Root", undefined, ["mid"]),
+    node("mid", "Middle", undefined, ["leaf"]),
+    node("leaf", "Leaf"),
+    node("orphan", "Orphan")
+  ]);
+  const ancestors = nodeAncestorIds(buildSearchParentIndex(document), new Set(documentIds(document)));
+  assert.deepEqual(ancestors("root"), []);
+  assert.deepEqual(ancestors("leaf"), ["root", "mid"]);
+  // A parentless node is the root and answers with an empty chain; a node the
+  // document does not contain answers `undefined` so the two stay distinct.
+  assert.deepEqual(ancestors("orphan"), []);
+  assert.equal(ancestors("missing"), undefined);
+
+  // A self-parented node must not list itself as its own ancestor.
+  const selfParent = documentWith([node("solo", "Solo", undefined, ["solo"])]);
+  assert.deepEqual(nodeAncestorIds(buildSearchParentIndex(selfParent), new Set(["solo"]))("solo"), []);
 });

@@ -9,32 +9,41 @@
 - 纯搜索逻辑 `src/ui/search/search-core.ts`（core 队友）：`findMatches` / `buildSnippet` / `searchMindTree`，NFKC + 小写折叠、按字面量匹配（禁止把 query 拼进 RegExp）、`SEARCH_RESULT_LIMIT` / `SEARCH_HITS_PER_CARD_LIMIT`（30）；文件正文懒读入辅助 `readSearchFiles`（预算默认 400 个文件 / 单文件 512 KiB，超限只计入 `skipped`、不截断）见契约 §2.1。
 - 面板与载荷 `src/ui/search/search-panel.ts`、`src/ui/search/search-payload.ts`（panel 队友）；CSS 只追加 `.mtn-search-*` 规则到 `styles.css`——`.mtn-search-panel` 是**浮在画布之上的圆角卡片**（与 `.mtn-toolbar` 同参数），不是贴边侧栏。
 - 宿主集成 `src/ui/mind-tree-view.ts`（Lead）：`Scope` 注册 `["Mod"]+F`，工具栏「搜索」与快捷键共用同一个打开入口；标题行点击 = 展开祖先 + 选中 + 聚焦节点中心；内容行点击 = `.md` 走 `leaf.openFile(file, { eState: { line: line - 1, ch: 0 } })`（打开位置沿用 `resourceOpenMode`），`.mtn.md` 只打开导图、不跳行。
-- i18n：`src/i18n/catalog.ts` 在 EN/ZH 对象**末尾**追加 **8** 个 key：`search.panel.title` / `placeholder` / `close` / `count` / `empty` / `loading` / `truncated`、`shortcut.search`；`{count}` 双语一致、两语言相对顺序一致。Lead 另行删除了随中央搜索弹窗一起废弃的 4 个 key（`notice.noMatch`、`modal.search.title`、`modal.search.placeholder`、`action.find`，EN/ZH 同步）。
+- i18n：`src/i18n/catalog.ts` 在 EN/ZH 对象**末尾**追加 **9** 个 key：`search.panel.title` / `placeholder` / `close` / `count` / `empty` / `loading` / `truncated` / `clear`、`shortcut.search`；`{count}` 双语一致、两语言相对顺序一致。Lead 另行删除了随中央搜索弹窗一起废弃的 4 个 key（`notice.noMatch`、`modal.search.title`、`modal.search.placeholder`、`action.find`，EN/ZH 同步）。
 - 快捷键帮助与契约：真实文件是 `src/ui/menus/keyboard-help-menu.ts`（任务书里的 `keyboard-help.ts` 不存在），在 `Mod+S` 之后追加 `Mod+F → shortcut.search`；`src/ui/ui-contracts.ts` 的 `KEYBOARD_HELP_ACTIONS` 已含 `"search"`（紧跟 `"save"`），`test/ui-modules.test.ts` 固化为断言（`indexOf("search") === indexOf("save") + 1`）。
-- 文档：`docs/02` §5.1（信息架构「右侧搜索悬浮框」项 + 一段行为口径）、§5.3 工具栏「搜索」项、§6.3 快捷键列表；`docs/06` P0 验收第 20 条；`README.md` / `README.en.md` 快捷键表各加一行 + 一小段行为说明；契约 §3 的 `SearchPanelLabels` 与 §4 的 key 表补 `truncated`。
+- 文档：`docs/02` §5.1（信息架构「右侧搜索悬浮框」项 + 一段行为口径）、§5.3 工具栏「搜索」项、§6.3 快捷键列表；`docs/06` P0 验收第 20 条；`README.md` / `README.en.md` 快捷键表各加一行 + 一小段行为说明；契约 §3 的 `SearchPanelLabels` 与 §4 的 key 表补 `truncated` / `clear`，§3 的 DOM 块补搜索图标、清除按钮与路径行层级。
 
 **行为口径（容易漏的点）**
 
 - 窗口**失焦不关闭**，只有右上角 `×` 与 `Esc` 关闭；再次按 `Ctrl/Cmd+F` 只聚焦已打开的窗口。
 - **样式口径（用户反馈后重做）**：搜索框**不是侧栏**，而是与顶部工具栏样式统一的**圆角悬浮卡片**——`.mtn-search-panel { position: absolute; top: 62px; right: 12px; width: min(360px, calc(100% - 24px)); max-height: calc(100% - 74px); overflow: hidden; border: 1px solid var(--background-modifier-border); border-radius: 13px; background: color-mix(in srgb, var(--background-primary) 92%, transparent); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); backdrop-filter: blur(10px); z-index: 44 }`，与 `.mtn-toolbar` 共用圆角/描边/半透明/阴影/模糊参数（只差水平居中）。**曾按“右侧贴边侧栏”实现（`top: 0; right: 0; bottom: 0` + `border-left`），用户要求改成悬浮框后于 commit 之前重做样式**；不要再写回 `bottom: 0` / `border-left` / 全高贴边。
 - 滚动与分隔：结果区 `.mtn-search-panel-results` 是唯一滚动容器（`flex: 1; min-height: 0; overflow-y: auto`），并与查询行之间用 `border-top: 1px solid var(--background-modifier-border)` 分隔；标题、输入框与关闭按钮固定不滚动。
-- **空状态占位**：任何无结果状态（刚打开、清空输入、没有命中）都渲染 `.mtn-search-empty`（文本 = `labels.empty`），不留空白盒子——`search-panel.ts` 的 `clearResults()` 与 `cards.length === 0` 两条路径都会调用 `showEmptyState()`。
+- **空 query 时结果栏 `hidden`**：`query` 为空（刚打开、清空输入、`setContext` 之后）时 `.mtn-search-panel-results` 整体 `hidden`——**不占空间、不留分割线、不留空白**，卡片只保留标题行 + 输入行；只有“有 query 且 0 命中”才渲染 `.mtn-search-empty`（文本 = `labels.empty`）。（第二轮用户反馈**作废**了第一版的“任何无结果状态都显示空状态占位”。）
 - 命中来源：节点名 / 文件名 / **已关联 `.md` 文件的正文**；思维树 `.mtn.md` 不解析正文。每次搜索对进入正文搜索的文件数量与单文件体积有上限，超限只减少命中、不阻塞界面、不读取未关联文件。
-- 卡片：标题 = 节点名；同一节点/文件的多段命中用 `hr.mtn-search-card-separator` 分隔，每段单行 + 首尾省略号 + `<mark class="mtn-search-mark">` 高亮；标题行与内容行可各自单独悬浮高亮。
+- 卡片：标题 = 节点名；同一节点/文件的多段命中用 `hr.mtn-search-card-separator` 分隔，每段单行 + 首尾省略号 + `<mark class="mtn-search-mark">` 高亮。**悬浮（第二轮定稿）**：`.mtn-search-card-title:hover` 只做 `transform: scale(1.02)` + `text-decoration: underline`（`transform-origin: left center`、`transition: transform 120ms ease`），**没有背景/阴影**；**卡片级 `.mtn-search-card:hover` 规则已被删除**（用户明确不要整行背景，取舍是取消整卡高亮、只留标题的放大+下划线与命中行的整行背景）；只有 `.mtn-search-card-hit:hover` 保留整行背景悬浮。
 - **单卡命中行上限 30**（`SEARCH_HITS_PER_CARD_LIMIT`，文件名命中占 1 条名额）；被截断的卡片带 `hitsLimited: true`，面板渲染 `labels.truncated` 到 `.mtn-search-card-truncated`（“仅显示前 N 条命中”，N = 实际展示行数）；卡片排序仍按真实命中数，`hitCount` 也是真实总数。
 - **点击标题可能改文档**：命中节点在折叠分支内时会先展开祖先，`collapsed` 是持久化字段 → 产生文档修改 + 正常自动保存 + 每个被展开祖先进一步撤销记录（`mind-tree-view.ts` 的 `jumpToSearchedNode` 用 `commit(...)` 落这一步）。文档口径是“搜索本身不修改文档”，不要写成“搜索绝不产生撤销”。
+
+**第二轮细化（同日，用户反馈）**
+
+- **面板标题图标**：`.mtn-search-panel-header` 内、标题左侧是 `span.mtn-search-panel-icon`（`setIcon(..., "search")`、`aria-hidden`）。
+- **输入框内清除按钮**：输入有字时，输入框内部最右侧显示 `button.mtn-search-panel-clear`（**28×28**、`setIcon(..., "x")`、`aria-label = labels.clear`、`type="button"`、`tabindex="-1"` 以免打乱 Tab 顺序），query 为空时 `hidden`；点击清空输入与结果、**不关闭窗口**并把焦点还给输入框。输入框是 `padding: 0 32px 0 8px`（清除按钮叠在内部最右侧），并已隐藏浏览器自带的 `::-webkit-search-cancel-button`。i18n key `search.panel.clear`（EN `Clear search` / ZH `清空搜索`）。
+- **节点路径——模型字段是 `nodePath`，别和 `path` 混**：`SearchCard.path` 是**文件路径 string**（内容命中与 `openFileAtLine` 用），节点链路必须用 `SearchCard.nodePath?: readonly NodeId[]`（根 → … → 自身，**含自身**；只有 `ancestorIds` 非空时才写入，根节点命中没有这一行）。`ancestorIds` 是 `SearchCandidate` 上**从根开始、不含自身**的快照；但 `SearchContext.nodeAncestorIds?: (nodeId) => readonly NodeId[] | undefined` 是**绝对权威**的惰性回调（宿主用实时父索引，只在存活卡片上调用），core 优先用它、拿不到才退回快照。渲染为 `nav.mtn-search-card-path`，位于标题行之后、第一条命中之前；**标题与路径之间没有分割线**，路径与第一个命中行之间有 `hr.mtn-search-card-separator`（`index > 0 || hasPath`）。
+- **路径行显示节点名 + 换行不变量**：路径段文本由 `MindTreeView` 通过 `actions.nodeTitle(nodeId)` 注入（`parseNodeTitle(node.title).plainText`），panel 取不到或为空时回退显示 `nodeId`；没显示名就不会有空白行。结构上每个 flex item 是一个 `span.mtn-search-path-segment`（`display:inline-flex; flex:0 0 auto; max-width:100%`），**箭头与它引入的节点同属这一段**（先 `span.mtn-search-path-arrow`，再 `span.mtn-search-path-link`），第一段（根）只有 link、无箭头。容器 `flex-wrap: wrap`，因此**换行只发生在 segment 之间、箭头不可能落在行尾**；单个超长节点名由 `max-width:100% + overflow:hidden + text-overflow:ellipsis + white-space:nowrap` 省略号截断。样式：链接 `var(--link-color, var(--text-accent))` + 下划线（hover 转 `--text-accent`），箭头 `var(--text-faint)`，整行 `var(--font-ui-smaller)`、`gap: 2px 4px`。
+- **命名语义（验收 F1 修）**：`search-payload.ts` 的 `searchedAncestorIds(document)` 原名 `searchedNodePaths`，**已改名**。它返回每个节点的祖先链 `Map<NodeId, readonly NodeId[]>`——**根 → … → 父，不含自身**，对应 `SearchCandidate.ancestorIds` 而**不是** `SearchCard.nodePath`；需要 root-to-self 的调用者必须自己补上自身。搜索路径优先用 `buildSearchParentIndex` + `nodeAncestorIds`（惰性、只算存活卡片），这个 eager map 给需要一次性全量链的调用者；不要把两者混用。
+- **失效应答收起（验收 F3 修）**：`search-panel.ts` 的 `runSearch` 在宿主返回 `undefined`（“输入已过期”）**或抛错**时执行 `clearResults()`——结果区 `hidden`、计数隐藏、**窗口保持打开**，不再无限停在 loading 空盒；与空 query 的收起一致。对应测试断言 `results().hidden === true` + `count().hidden === true` + 面板仍打开。
 
 **环境与验证（本沙箱，替代命令未变）**
 
 - `npm run check` = **0 错误**（2026-10-11 最终态）。
 - `npm test` 仍必失败（tsx → esbuild `spawn EPERM`）。替代：`& "C:\Users\Dayiy\AppData\Local\Temp\dsh-mtn-hooks\run-tests.ps1"`，单文件加 `-Pattern "test/xxx.test.ts"`（也接受 `test/search-*.test.ts` 这类 glob）；完整输出写到仓库根 `.mtn-test-run.log`（**未跟踪，提交前删除或忽略**）。
-- `test/search-*.test.ts` = **80/80 全绿**；`test/i18n.test.ts` = **6/6 全绿**。
-- 全量 = **655 tests / 650 pass / 5 fail**（连跑两次一致；task-5 独立验收时的快照是 654/649/5，差 1 条，应是验收后又落地的一条断言）。5 条失败全部是直接调 `esbuild buildSync` 的既有环境失败：`adaptive-tooltip`、`custom-markers-settings-page`、`marker-popover-custom`、`plugin-update-modal`、`top-toolbar`；逐个单独复跑都是 `spawn EPERM`、0 条用例执行，与仓库代码无关。
+- `test/search-*.test.ts` = **101/101 全绿**（task-17 在 F1 改名 + F3 失效应答修完后复核仍为 101/101；第一轮收尾时为 80/80，中途曾出现 1 条新样式断言在 panel/CSS 落地前变红，落地后消失）。`test/i18n.test.ts` = **6/6 全绿**。
+- 全量 = **676 tests / 671 pass / 5 fail**（task-17 复核值，与 F1/F3 修完前一致；第二轮落地后的最终实测值）。5 条失败全部是直接调 `esbuild buildSync` 的既有环境失败：`adaptive-tooltip`、`custom-markers-settings-page`、`marker-popover-custom`、`plugin-update-modal`、`top-toolbar`；逐个单独复跑都是 `spawn EPERM`、0 条用例执行，与仓库代码无关（历史快照：task-5 验收时 654/649/5、第二轮落地前 655/650/5）。
 - **坑（重要，别被 EXITCODE=0 骗）**：`test/theme-menu-hover.test.ts` 也把 `buildSync` 放在模块顶层（第 101 行）。异常发生在用例注册之后，Node test runner 只统计已注册的前 7 条（全 pass），**其余 11 条（该文件共声明 18 条用例）被静默吞掉**，文件级异常也不计入 fail。它既不是本轮回归、也**不能**当通过证据；怀疑某文件没跑完时按文件单独跑并检查 `.mtn-test-run.log`。
 
 **未完成 / 建议下一步**
 
-- **真实 Obsidian 内的人工验收尚未做**（仓库无浏览器环境）：右侧窗口滚动与不遮工具栏、卡片/标题行的悬浮高亮、点击内容行后 `leaf.openFile(eState)` 的光标是否落在正确行、`Ctrl/Cmd+F` 与宿主全局 find 的先后（view scope 应优先，需实测）、移动端触摸目标与窄屏表现。
+- **真实 Obsidian 内的人工验收尚未做**（仓库无浏览器环境）：悬浮框滚动与不遮工具栏、标题图标与输入框内清除按钮（28×28、悬浮与点击命中区）、空 query 时结果栏是否完全收起（无分割线/空白）、卡片路径行显示节点名且逐段可点、长路径换行（箭头不落行尾）与超长节点名省略号截断、标题悬浮 scale+下划线且**卡片级没有整行背景**、命中行整行背景悬浮、点击内容行后 `leaf.openFile(eState)` 的光标是否落在正确行、`Ctrl/Cmd+F` 与宿主全局 find 的先后（view scope 应优先，需实测）、移动端触摸目标与窄屏表现。
 - **view 集成没有自动化测试**：`openSearchPanel()` 的创建/销毁、`Mod+F` 注册、展开祖先与 `centerNodeInViewport` 的接线只经类型检查与人工验收兜底，后续回归需手工覆盖。
 - 已知取舍：输入框右侧计数按契约显示**命中的结果（卡片）数量** `cards.length`，不是 `hitCount`（总命中段数）；卡片数另有 `SEARCH_RESULT_LIMIT = 200` 上限，超过 200 张时计数停在 200。`hitCount` 目前只用于排序，UI 未消费。
 - 契约 `docs/search-sidebar-spec.md` 的 DOM 结构块已补 `.mtn-search-card-truncated`；该文件是**本轮临时契约**，后续可把长期有效部分并入 `docs/02`/`docs/05` 后删除。

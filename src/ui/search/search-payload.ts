@@ -1,6 +1,7 @@
+import { findParentId } from "../../domain/tree";
 import { parseNodeTitle } from "../../format/node-title";
 import { classifyFile, linkedFileTitle } from "../../format/resource-id";
-import type { FileResourceRef, MindTreeDocument } from "../../types";
+import type { FileResourceRef, MindTreeDocument, NodeId } from "../../types";
 import type { FileCandidate, SearchCandidate } from "./search-core";
 
 /**
@@ -18,6 +19,64 @@ export function normalizeSearchPath(path: string): string {
 }
 
 /**
+ * Parent-of relationship for every node, built once in document order.
+ *
+ * A result card only needs the chain of the nodes it actually shows, so the
+ * search payload passes this index (and the lazy accessor below) to the core
+ * instead of precomputing a full root-to-node chain for every node in the tree.
+ */
+export function buildSearchParentIndex(document: MindTreeDocument): ReadonlyMap<NodeId, NodeId> {
+  const parents = new Map<NodeId, NodeId>();
+  for (const nodeId of Object.keys(document.nodes)) {
+    const parentId = findParentId(document, nodeId);
+    if (parentId) parents.set(nodeId, parentId);
+  }
+  return parents;
+}
+
+/**
+ * Ancestor chain (root first, excluding the node itself) derived from a parent
+ * index. The walk is iterative with a visited set so a hand-edited or cycling
+ * document cannot hang the search window; an unreachable node simply keeps the
+ * chain collected so far. A parentless node is the root and returns an empty
+ * chain, while a node the document does not contain returns `undefined` so the
+ * core can tell "no ancestry information" from "the root itself".
+ */
+export function nodeAncestorIds(
+  parents: ReadonlyMap<NodeId, NodeId>,
+  knownNodeIds?: ReadonlySet<NodeId>
+): (nodeId: NodeId) => readonly NodeId[] | undefined {
+  return (nodeId: NodeId): readonly NodeId[] | undefined => {
+    const isKnown = knownNodeIds ? knownNodeIds.has(nodeId) : parents.has(nodeId);
+    if (!isKnown) return undefined;
+    const chain: NodeId[] = [];
+    const visited = new Set<NodeId>([nodeId]);
+    let parentId = parents.get(nodeId);
+    while (parentId && !visited.has(parentId)) {
+      chain.push(parentId);
+      visited.add(parentId);
+      parentId = parents.get(parentId);
+    }
+    return chain.reverse();
+  };
+}
+
+/**
+ * Every node's ancestor chain (root first, **excluding the node itself**), keyed
+ * by node id. Prefer `buildSearchParentIndex` + `nodeAncestorIds` for search,
+ * which only walks the chains of the cards actually rendered; this eager map is
+ * for callers that need every chain at once. It deliberately mirrors
+ * `SearchCandidate.ancestorIds`, not `SearchCard.nodePath`, so callers must add
+ * the node itself when they need a root-to-self chain.
+ */
+export function searchedAncestorIds(document: MindTreeDocument): ReadonlyMap<NodeId, readonly NodeId[]> {
+  const ancestors = nodeAncestorIds(buildSearchParentIndex(document), new Set(Object.keys(document.nodes)));
+  const paths = new Map<NodeId, readonly NodeId[]>();
+  for (const nodeId of Object.keys(document.nodes)) paths.set(nodeId, ancestors(nodeId) ?? []);
+  return paths;
+}
+
+/**
  * Node order is stable, so the read budget always covers the same first files
  * and results do not shuffle between keystrokes. Nodes without a file still
  * match by title; they simply carry no content. A resource claimed by two nodes
@@ -25,8 +84,10 @@ export function normalizeSearchPath(path: string): string {
  */
 export function buildSearchCandidates(
   document: MindTreeDocument,
-  ownPath: string | undefined
+  ownPath: string | undefined,
+  ancestorsByNodeId: ReadonlyMap<NodeId, readonly NodeId[]> = new Map()
 ): readonly SearchCandidate[] {
+  const ancestorsOf = (nodeId: NodeId): readonly NodeId[] => ancestorsByNodeId.get(nodeId) ?? [];
   const candidates: SearchCandidate[] = [];
   const seenResourceIds = new Set<string>();
   for (const node of Object.values(document.nodes)) {
@@ -41,6 +102,7 @@ export function buildSearchCandidates(
       title: node.title,
       plainTitle: parseNodeTitle(node.title).plainText,
       resourceId,
+      ancestorIds: ancestorsOf(node.id),
       ...(path ? { path, fileName: linkedFileTitle(path) } : {})
     });
   }
@@ -48,7 +110,12 @@ export function buildSearchCandidates(
     // File nodes were added above; a URL node still matches by title and only
     // lacks content, so it must not fall through both loops.
     if (node.resource?.type === "file") continue;
-    candidates.push({ nodeId: node.id, title: node.title, plainTitle: parseNodeTitle(node.title).plainText });
+    candidates.push({
+      nodeId: node.id,
+      title: node.title,
+      plainTitle: parseNodeTitle(node.title).plainText,
+      ancestorIds: ancestorsOf(node.id)
+    });
   }
   return candidates;
 }

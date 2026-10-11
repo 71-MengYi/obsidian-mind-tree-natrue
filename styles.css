@@ -2175,10 +2175,18 @@
 .mtn-search-panel-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 8px;
   flex: 0 0 auto;
-  padding: 2px 6px 2px 12px;
+  /* Top gap matches the search row's bottom gap: a query-less card stays symmetric. */
+  padding: 6px 6px 2px 12px;
+}
+
+.mtn-search-panel-icon {
+  display: flex;
+  align-items: center;
+  flex: 0 0 auto;
+  color: var(--text-muted);
 }
 
 .mtn-search-panel-title {
@@ -2193,6 +2201,7 @@
   justify-content: center;
   width: 24px;
   height: 24px;
+  margin-left: auto;
   padding: 2px;
   border: 0;
   border-radius: 6px;
@@ -2211,14 +2220,23 @@
   align-items: center;
   gap: 8px;
   flex: 0 0 auto;
-  padding: 4px 10px 8px 12px;
+  padding: 4px 10px 6px 12px;
+}
+
+/* The field wrapper carries the clear button so it sits inside the input. */
+.mtn-search-panel-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
 }
 
 .mtn-search-panel-input {
-  flex: 1;
+  width: 100%;
   min-width: 0;
   height: 28px;
-  padding: 0 8px;
+  padding: 0 32px 0 8px;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s, 4px);
   background: var(--background-secondary);
@@ -2230,6 +2248,37 @@
   border-color: var(--text-accent);
   outline: none;
 }
+
+/* The panel ships its own clear button: drop the browser's duplicate glyph. */
+.mtn-search-panel-input::-webkit-search-cancel-button {
+  display: none;
+}
+
+/* Inside the field, out of the tab order: the field itself keeps the focus. The
+   28px box keeps the touch target at the vault-wide minimum without changing the
+   glyph size. */
+.mtn-search-panel-clear {
+  position: absolute;
+  right: 2px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.mtn-search-panel-clear:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mtn-search-panel-clear[hidden] { display: none !important; }
 
 .mtn-search-panel-count {
   flex: 0 0 auto;
@@ -2255,6 +2304,9 @@
   overflow-y: auto;
 }
 
+/* No query at all: the result area leaves no border, gap or blank box behind. */
+.mtn-search-panel-results[hidden] { display: none !important; }
+
 .mtn-search-card {
   display: flex;
   flex-direction: column;
@@ -2264,9 +2316,9 @@
   background: var(--background-primary);
 }
 
-.mtn-search-card:hover {
-  background: var(--background-modifier-hover);
-}
+/* No card-wide hover band on purpose: hovering the heading used to tint the whole
+   card, which reads as "a row that is far too wide". The heading underlines and
+   lifts instead, and hit rows keep their own background. */
 
 .mtn-search-card-title,
 .mtn-search-card-hit {
@@ -2285,12 +2337,67 @@
 
 .mtn-search-card-title {
   font-weight: var(--font-semibold, 600);
+  transition: transform 120ms ease;
 }
 
-/* Each row highlights on its own, so pointer and keyboard users see the target. */
-.mtn-search-card-title:hover,
+/* The heading lifts slightly instead of painting a full-width hover band. */
+.mtn-search-card-title:hover {
+  text-decoration: underline;
+  transform: scale(1.02);
+  transform-origin: left center;
+}
+
 .mtn-search-card-hit:hover {
   background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+}
+
+/* Root → … → node, with each arrow glued to the link it introduces. */
+.mtn-search-card-path {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 4px;
+  margin: 0 6px 4px;
+  color: var(--text-faint);
+  font-size: var(--font-ui-smaller);
+  line-height: 1.4;
+}
+
+.mtn-search-path-segment {
+  display: inline-flex;
+  align-items: center;
+  /* The pair stays one item; `max-width` clamps it so a long name cannot burst the card. */
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 100%;
+  gap: 4px;
+}
+
+.mtn-search-path-link {
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: 2px;
+  color: var(--link-color, var(--text-accent));
+  text-decoration: underline;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mtn-search-path-link:hover {
+  color: var(--text-accent);
+}
+
+.mtn-search-path-link:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: 1px;
+}
+
+/* Never shrinks and never wraps away from its link, so a line cannot end on it. */
+.mtn-search-path-arrow {
+  flex: 0 0 auto;
+  color: var(--text-faint);
 }
 
 .mtn-search-card-title:focus-visible,
