@@ -2144,3 +2144,189 @@
 /* Rich titles use the same SVG glyph positions as the image exporter. */
 .mtn-rich-title { line-height: 0; }
 .mtn-rich-title > svg { display: block; overflow: visible; pointer-events: none; }
+
+/* ─── Floating search window (Ctrl/Cmd+F) ───────────────────────────────────
+   One rounded, shadowed card that matches the top toolbar instead of a docked
+   sidebar: it clears the toolbar, stays inside the view and scrolls its own
+   results so the title, query and close button never move. */
+
+.mtn-search-panel {
+  position: absolute;
+  top: 62px;
+  right: 12px;
+  z-index: 44;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  width: min(360px, calc(100% - 24px));
+  max-height: calc(100% - 74px);
+  overflow: hidden;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--background-primary) 92%, transparent);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  backdrop-filter: blur(10px);
+  color: var(--text-normal);
+}
+
+/* `hidden` must win over the flex display above. */
+.mtn-search-panel[hidden] { display: none !important; }
+
+.mtn-search-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 2px 6px 2px 12px;
+}
+
+.mtn-search-panel-title {
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold, 600);
+}
+
+.mtn-search-panel-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 2px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.mtn-search-panel-close:hover {
+  background: var(--background-modifier-hover);
+  color: var(--text-normal);
+}
+
+.mtn-search-panel-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+  padding: 4px 10px 8px 12px;
+}
+
+.mtn-search-panel-input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 4px);
+  background: var(--background-secondary);
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+}
+
+.mtn-search-panel-input:focus {
+  border-color: var(--text-accent);
+  outline: none;
+}
+
+.mtn-search-panel-count {
+  flex: 0 0 auto;
+  max-width: 45%;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.mtn-search-panel-count[hidden] { display: none !important; }
+
+/* Scrolling belongs here: the title, query and close button never move. */
+.mtn-search-panel-results {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+  padding: 8px 12px 10px;
+  border-top: 1px solid var(--background-modifier-border);
+  overflow-y: auto;
+}
+
+.mtn-search-card {
+  display: flex;
+  flex-direction: column;
+  padding: 6px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m, 8px);
+  background: var(--background-primary);
+}
+
+.mtn-search-card:hover {
+  background: var(--background-modifier-hover);
+}
+
+.mtn-search-card-title,
+.mtn-search-card-hit {
+  display: block;
+  min-height: 28px;
+  padding: 5px 6px;
+  border-radius: var(--radius-s, 4px);
+  overflow: hidden;
+  color: var(--text-normal);
+  font-size: var(--font-ui-small);
+  line-height: 1.4;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.mtn-search-card-title {
+  font-weight: var(--font-semibold, 600);
+}
+
+/* Each row highlights on its own, so pointer and keyboard users see the target. */
+.mtn-search-card-title:hover,
+.mtn-search-card-hit:hover {
+  background: var(--background-modifier-active-hover, var(--background-modifier-hover));
+}
+
+.mtn-search-card-title:focus-visible,
+.mtn-search-card-hit:focus-visible {
+  outline: 2px solid var(--text-accent);
+  outline-offset: -2px;
+}
+
+.mtn-search-card-separator {
+  height: 1px;
+  margin: 4px 6px;
+  border: 0;
+  background: var(--background-modifier-border);
+}
+
+.mtn-search-mark {
+  padding: 0 1px;
+  border-radius: 2px;
+  background: var(--text-highlight-bg);
+  color: var(--text-normal);
+}
+
+.mtn-search-empty {
+  padding: 10px 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  text-align: center;
+}
+
+/* A card that hit the per-card hit limit says so, and stays non-clickable. */
+.mtn-search-card-truncated {
+  padding: 4px 6px;
+  border-top: 1px solid var(--background-modifier-border);
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}

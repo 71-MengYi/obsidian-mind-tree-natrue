@@ -89,9 +89,12 @@ Select a node and just use the keyboard — no button hunting:
 | `Ctrl/Cmd + Z` / `Ctrl/Cmd + Shift + Z` | Undo / redo |
 | `Ctrl/Cmd + E` | Create a Markdown note for this node and link it |
 | `Ctrl/Cmd + S` | Save now and update the Markdown outline |
+| `Ctrl/Cmd + F` | Open the search window on the right |
 | `Escape` | Cancel editing or dragging |
 
 On macOS, use `Cmd` instead of `Ctrl`. The round question-mark button at the view's top-left shows the same reference.
+
+`Ctrl/Cmd + F` or the toolbar's **Search** button opens the search window on the right of the view: the window stays open and **does not close when it loses focus** — close it with the `×` in its top-right corner or with `Esc`. A live hit count sits to the right of the input, and cards below list matches from node names, file names and the content of **linked Markdown files** (mind-tree `.mtn.md` files are not content-searched; each search caps how many files and how much text it reads, so a few hits may be missed without ever blocking the UI). Multiple hits inside one card are separated by rules, each hit stays on one line, is ellipsized at both ends and has its keyword highlighted. Click a card title to jump to that node and center it in the view; click a content row to open the file with the cursor at that line.
 
 ### 3. Attach notes to the tree
 

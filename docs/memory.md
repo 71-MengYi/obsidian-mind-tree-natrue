@@ -1,5 +1,44 @@
 # memory
 
+## 2026-10-11 · Ctrl/Cmd+F 右侧搜索窗口（`feat`，团队协作）
+
+**需求**：`Ctrl/Cmd+F` 或工具栏「搜索」打开视图**右侧**搜索窗口（不是中央悬浮弹窗）。并行接口契约是 `docs/search-sidebar-spec.md`（临时文件，本轮完成后可删）；`docs/` 产品基线优先于它。
+
+**落点文件（最终）**
+
+- 纯搜索逻辑 `src/ui/search/search-core.ts`（core 队友）：`findMatches` / `buildSnippet` / `searchMindTree`，NFKC + 小写折叠、按字面量匹配（禁止把 query 拼进 RegExp）、`SEARCH_RESULT_LIMIT` / `SEARCH_HITS_PER_CARD_LIMIT`（30）；文件正文懒读入辅助 `readSearchFiles`（预算默认 400 个文件 / 单文件 512 KiB，超限只计入 `skipped`、不截断）见契约 §2.1。
+- 面板与载荷 `src/ui/search/search-panel.ts`、`src/ui/search/search-payload.ts`（panel 队友）；CSS 只追加 `.mtn-search-*` 规则到 `styles.css`——`.mtn-search-panel` 是**浮在画布之上的圆角卡片**（与 `.mtn-toolbar` 同参数），不是贴边侧栏。
+- 宿主集成 `src/ui/mind-tree-view.ts`（Lead）：`Scope` 注册 `["Mod"]+F`，工具栏「搜索」与快捷键共用同一个打开入口；标题行点击 = 展开祖先 + 选中 + 聚焦节点中心；内容行点击 = `.md` 走 `leaf.openFile(file, { eState: { line: line - 1, ch: 0 } })`（打开位置沿用 `resourceOpenMode`），`.mtn.md` 只打开导图、不跳行。
+- i18n：`src/i18n/catalog.ts` 在 EN/ZH 对象**末尾**追加 **8** 个 key：`search.panel.title` / `placeholder` / `close` / `count` / `empty` / `loading` / `truncated`、`shortcut.search`；`{count}` 双语一致、两语言相对顺序一致。Lead 另行删除了随中央搜索弹窗一起废弃的 4 个 key（`notice.noMatch`、`modal.search.title`、`modal.search.placeholder`、`action.find`，EN/ZH 同步）。
+- 快捷键帮助与契约：真实文件是 `src/ui/menus/keyboard-help-menu.ts`（任务书里的 `keyboard-help.ts` 不存在），在 `Mod+S` 之后追加 `Mod+F → shortcut.search`；`src/ui/ui-contracts.ts` 的 `KEYBOARD_HELP_ACTIONS` 已含 `"search"`（紧跟 `"save"`），`test/ui-modules.test.ts` 固化为断言（`indexOf("search") === indexOf("save") + 1`）。
+- 文档：`docs/02` §5.1（信息架构「右侧搜索悬浮框」项 + 一段行为口径）、§5.3 工具栏「搜索」项、§6.3 快捷键列表；`docs/06` P0 验收第 20 条；`README.md` / `README.en.md` 快捷键表各加一行 + 一小段行为说明；契约 §3 的 `SearchPanelLabels` 与 §4 的 key 表补 `truncated`。
+
+**行为口径（容易漏的点）**
+
+- 窗口**失焦不关闭**，只有右上角 `×` 与 `Esc` 关闭；再次按 `Ctrl/Cmd+F` 只聚焦已打开的窗口。
+- **样式口径（用户反馈后重做）**：搜索框**不是侧栏**，而是与顶部工具栏样式统一的**圆角悬浮卡片**——`.mtn-search-panel { position: absolute; top: 62px; right: 12px; width: min(360px, calc(100% - 24px)); max-height: calc(100% - 74px); overflow: hidden; border: 1px solid var(--background-modifier-border); border-radius: 13px; background: color-mix(in srgb, var(--background-primary) 92%, transparent); box-shadow: 0 8px 24px rgb(0 0 0 / 12%); backdrop-filter: blur(10px); z-index: 44 }`，与 `.mtn-toolbar` 共用圆角/描边/半透明/阴影/模糊参数（只差水平居中）。**曾按“右侧贴边侧栏”实现（`top: 0; right: 0; bottom: 0` + `border-left`），用户要求改成悬浮框后于 commit 之前重做样式**；不要再写回 `bottom: 0` / `border-left` / 全高贴边。
+- 滚动与分隔：结果区 `.mtn-search-panel-results` 是唯一滚动容器（`flex: 1; min-height: 0; overflow-y: auto`），并与查询行之间用 `border-top: 1px solid var(--background-modifier-border)` 分隔；标题、输入框与关闭按钮固定不滚动。
+- **空状态占位**：任何无结果状态（刚打开、清空输入、没有命中）都渲染 `.mtn-search-empty`（文本 = `labels.empty`），不留空白盒子——`search-panel.ts` 的 `clearResults()` 与 `cards.length === 0` 两条路径都会调用 `showEmptyState()`。
+- 命中来源：节点名 / 文件名 / **已关联 `.md` 文件的正文**；思维树 `.mtn.md` 不解析正文。每次搜索对进入正文搜索的文件数量与单文件体积有上限，超限只减少命中、不阻塞界面、不读取未关联文件。
+- 卡片：标题 = 节点名；同一节点/文件的多段命中用 `hr.mtn-search-card-separator` 分隔，每段单行 + 首尾省略号 + `<mark class="mtn-search-mark">` 高亮；标题行与内容行可各自单独悬浮高亮。
+- **单卡命中行上限 30**（`SEARCH_HITS_PER_CARD_LIMIT`，文件名命中占 1 条名额）；被截断的卡片带 `hitsLimited: true`，面板渲染 `labels.truncated` 到 `.mtn-search-card-truncated`（“仅显示前 N 条命中”，N = 实际展示行数）；卡片排序仍按真实命中数，`hitCount` 也是真实总数。
+- **点击标题可能改文档**：命中节点在折叠分支内时会先展开祖先，`collapsed` 是持久化字段 → 产生文档修改 + 正常自动保存 + 每个被展开祖先进一步撤销记录（`mind-tree-view.ts` 的 `jumpToSearchedNode` 用 `commit(...)` 落这一步）。文档口径是“搜索本身不修改文档”，不要写成“搜索绝不产生撤销”。
+
+**环境与验证（本沙箱，替代命令未变）**
+
+- `npm run check` = **0 错误**（2026-10-11 最终态）。
+- `npm test` 仍必失败（tsx → esbuild `spawn EPERM`）。替代：`& "C:\Users\Dayiy\AppData\Local\Temp\dsh-mtn-hooks\run-tests.ps1"`，单文件加 `-Pattern "test/xxx.test.ts"`（也接受 `test/search-*.test.ts` 这类 glob）；完整输出写到仓库根 `.mtn-test-run.log`（**未跟踪，提交前删除或忽略**）。
+- `test/search-*.test.ts` = **80/80 全绿**；`test/i18n.test.ts` = **6/6 全绿**。
+- 全量 = **655 tests / 650 pass / 5 fail**（连跑两次一致；task-5 独立验收时的快照是 654/649/5，差 1 条，应是验收后又落地的一条断言）。5 条失败全部是直接调 `esbuild buildSync` 的既有环境失败：`adaptive-tooltip`、`custom-markers-settings-page`、`marker-popover-custom`、`plugin-update-modal`、`top-toolbar`；逐个单独复跑都是 `spawn EPERM`、0 条用例执行，与仓库代码无关。
+- **坑（重要，别被 EXITCODE=0 骗）**：`test/theme-menu-hover.test.ts` 也把 `buildSync` 放在模块顶层（第 101 行）。异常发生在用例注册之后，Node test runner 只统计已注册的前 7 条（全 pass），**其余 11 条（该文件共声明 18 条用例）被静默吞掉**，文件级异常也不计入 fail。它既不是本轮回归、也**不能**当通过证据；怀疑某文件没跑完时按文件单独跑并检查 `.mtn-test-run.log`。
+
+**未完成 / 建议下一步**
+
+- **真实 Obsidian 内的人工验收尚未做**（仓库无浏览器环境）：右侧窗口滚动与不遮工具栏、卡片/标题行的悬浮高亮、点击内容行后 `leaf.openFile(eState)` 的光标是否落在正确行、`Ctrl/Cmd+F` 与宿主全局 find 的先后（view scope 应优先，需实测）、移动端触摸目标与窄屏表现。
+- **view 集成没有自动化测试**：`openSearchPanel()` 的创建/销毁、`Mod+F` 注册、展开祖先与 `centerNodeInViewport` 的接线只经类型检查与人工验收兜底，后续回归需手工覆盖。
+- 已知取舍：输入框右侧计数按契约显示**命中的结果（卡片）数量** `cards.length`，不是 `hitCount`（总命中段数）；卡片数另有 `SEARCH_RESULT_LIMIT = 200` 上限，超过 200 张时计数停在 200。`hitCount` 目前只用于排序，UI 未消费。
+- 契约 `docs/search-sidebar-spec.md` 的 DOM 结构块已补 `.mtn-search-card-truncated`；该文件是**本轮临时契约**，后续可把长期有效部分并入 `docs/02`/`docs/05` 后删除。
+
 ## 2026-10-10 · 自定义标记（Emoji + 文字标记）与「管理标记」设置页（`feat`，团队协作）
 
 **需求**：设置页新增「管理标记」tab，管理自定义 Emoji 与文字标记（增减、拖拽排序、悬浮 ×），并在节点标记面板与节点尾部使用；内置进度/优先级/高亮不受影响。

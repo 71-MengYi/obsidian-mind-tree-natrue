@@ -8,7 +8,7 @@ export const TOP_TOOLBAR_ORDER = [
 /** Semantic rows shown by the keyboard help menu. */
 export const KEYBOARD_HELP_ACTIONS = [
   "add-sibling-below", "add-sibling-above", "add-child", "add-parent",
-  "move-up", "move-down", "create-note", "save", "navigate-siblings",
+  "move-up", "move-down", "create-note", "save", "search", "navigate-siblings",
   "navigate-hierarchy", "edit", "delete", "select-all", "copy", "cut",
   "paste", "undo", "redo", "cancel"
 ] as const;

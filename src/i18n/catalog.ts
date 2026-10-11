@@ -384,7 +384,6 @@ export const EN = {
   "notice.syncEnabled": "Filename synchronization restored.",
   "notice.deleteFilesFailed": "Linked files that could not be deleted: {count}\n{paths}",
   "notice.operationFailed": "Operation failed: {message}",
-  "notice.noMatch": "No matching node.",
   "notice.noNewFilesToCollect": "No new files were found in this folder.",
   "notice.skippedFile": "Skipped {path}: {message}",
   "notice.pasteLinksUnresolved": "Text pasted. Unresolved file links: {count}. Their text was kept in unlinked nodes.",
@@ -445,9 +444,6 @@ export const EN = {
   "modal.moveFiles.currentOnly": "Move only the current node's file",
   "modal.moveFiles.branch": "Move all linked files in this branch",
   "modal.moveFiles.noFolders": "No matching folders",
-  "modal.search.title": "Search mind tree",
-  "modal.search.placeholder": "Node title",
-  "action.find": "Find",
   "collection.title": "Collection",
   "collection.verifying": "Checking files…",
   "collection.progress": "Preparing files: {completed} / {total}…",
@@ -457,7 +453,16 @@ export const EN = {
   "status.unsaved": "Unsaved changes",
   "status.saveFailed": "Save failed: {message}",
   "status.saveConflict": "External changes detected. Choose which version to keep.",
-  "status.invalidFile": "Unable to open this mind tree file:\n{message}"
+  "status.invalidFile": "Unable to open this mind tree file:\n{message}",
+
+  "search.panel.title": "Search",
+  "search.panel.placeholder": "Search nodes, file names and Markdown content",
+  "search.panel.close": "Close search",
+  "search.panel.count": "{count} matches",
+  "search.panel.empty": "No matches",
+  "search.panel.loading": "Searching…",
+  "shortcut.search": "Search nodes",
+  "search.panel.truncated": "Only the first {count} hits are shown"
 } as const;
 
 export type TranslationKey = keyof typeof EN;
@@ -849,7 +854,6 @@ const ZH: Record<TranslationKey, string> = {
   "title.invalidFileName": "请输入有效的文件名。",
   "notice.deleteFilesFailed": "无法删除 {count} 个关联文件：{paths}",
   "notice.operationFailed": "操作失败：{message}",
-  "notice.noMatch": "没有匹配的节点。",
   "notice.noNewFilesToCollect": "此文件夹中没有待收集的新文件。",
   "notice.skippedFile": "已跳过 {path}：{message}",
   "notice.pasteLinksUnresolved": "文本已粘贴，{count} 个文件链接未能关联，原文已保留为未关联节点。",
@@ -910,9 +914,6 @@ const ZH: Record<TranslationKey, string> = {
   "modal.moveFiles.currentOnly": "仅移动当前节点的文件",
   "modal.moveFiles.branch": "移动该分支内全部关联文件",
   "modal.moveFiles.noFolders": "没有匹配的文件夹",
-  "modal.search.title": "搜索思维树",
-  "modal.search.placeholder": "节点标题",
-  "action.find": "查找",
   "collection.title": "收集",
   "collection.verifying": "正在检查文件…",
   "collection.progress": "正在准备文件：{completed} / {total}…",
@@ -922,7 +923,16 @@ const ZH: Record<TranslationKey, string> = {
   "status.unsaved": "有未保存的修改",
   "status.saveFailed": "保存失败：{message}",
   "status.saveConflict": "检测到外部修改，请选择需要保留的版本。",
-  "status.invalidFile": "无法打开该思维树文件：\n{message}"
+  "status.invalidFile": "无法打开该思维树文件：\n{message}",
+
+  "search.panel.title": "搜索",
+  "search.panel.placeholder": "搜索节点名、文件名与 Markdown 内容",
+  "search.panel.close": "关闭搜索",
+  "search.panel.count": "{count} 项匹配",
+  "search.panel.empty": "没有匹配",
+  "search.panel.loading": "正在搜索…",
+  "shortcut.search": "搜索节点",
+  "search.panel.truncated": "仅显示前 {count} 条命中"
 };
 
 export function translate(

@@ -22,6 +22,7 @@ export class KeyboardHelpMenu {
       ["Tab", t("shortcut.addChild")], ["Shift + Tab", t("shortcut.addParent")],
       [`${commandKey} + ↑`, t("shortcut.moveSiblingUp")], [`${commandKey} + ↓`, t("shortcut.moveSiblingDown")],
       [`${commandKey} + E`, t("shortcut.createNote")], [`${commandKey} + S`, t("shortcut.save")],
+      [`${commandKey} + F`, t("shortcut.search")],
       ["↑ / ↓", t("shortcut.navigateSiblings")], ["← / →", t("shortcut.navigateHierarchy")],
       [t("shortcut.spaceKey"), t("shortcut.editNode")], ["Delete / Backspace", t("shortcut.deleteBranch")],
       [`${commandKey} + A`, t("shortcut.selectAll")], [`${commandKey} + C`, t("shortcut.copyBranch")],

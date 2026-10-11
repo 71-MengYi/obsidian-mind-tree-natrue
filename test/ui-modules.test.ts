@@ -31,6 +31,9 @@ test("toolbar and keyboard help expose the established semantic order", () => {
   assert.deepEqual(TOP_TOOLBAR_ORDER.slice(-3), ["copy", "import", "export"]);
   assert.equal(KEYBOARD_HELP_ACTIONS[0], "add-sibling-below");
   assert.equal(KEYBOARD_HELP_ACTIONS.at(-1), "cancel");
+  // The search window is a real view shortcut, so the help table lists it in the
+  // same position as the menu: right after save.
+  assert.equal(KEYBOARD_HELP_ACTIONS.indexOf("search"), KEYBOARD_HELP_ACTIONS.indexOf("save") + 1);
 });
 
 test("node menu description changes only for applicable resource and tree state", () => {
