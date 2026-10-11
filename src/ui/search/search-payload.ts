@@ -1,6 +1,6 @@
 import { findParentId } from "../../domain/tree";
 import { parseNodeTitle } from "../../format/node-title";
-import { classifyFile, linkedFileTitle } from "../../format/resource-id";
+import { classifyFile, isMindTreePath, linkedFileTitle } from "../../format/resource-id";
 import type { FileResourceRef, MindTreeDocument, NodeId } from "../../types";
 import type { FileCandidate, SearchCandidate } from "./search-core";
 
@@ -59,21 +59,6 @@ export function nodeAncestorIds(
     }
     return chain.reverse();
   };
-}
-
-/**
- * Every node's ancestor chain (root first, **excluding the node itself**), keyed
- * by node id. Prefer `buildSearchParentIndex` + `nodeAncestorIds` for search,
- * which only walks the chains of the cards actually rendered; this eager map is
- * for callers that need every chain at once. It deliberately mirrors
- * `SearchCandidate.ancestorIds`, not `SearchCard.nodePath`, so callers must add
- * the node itself when they need a root-to-self chain.
- */
-export function searchedAncestorIds(document: MindTreeDocument): ReadonlyMap<NodeId, readonly NodeId[]> {
-  const ancestors = nodeAncestorIds(buildSearchParentIndex(document), new Set(Object.keys(document.nodes)));
-  const paths = new Map<NodeId, readonly NodeId[]>();
-  for (const nodeId of Object.keys(document.nodes)) paths.set(nodeId, ancestors(nodeId) ?? []);
-  return paths;
 }
 
 /**
@@ -145,7 +130,7 @@ export function resolveSearchMarkdownFiles<T extends { path: string }>(
     resolved.push(resources.resolveVerified(reference).then((file) => {
       if (!file || !file.path.toLowerCase().endsWith(".md")) return undefined;
       const path = normalizeSearchPath(file.path);
-      if (path === ownPath || path.endsWith(".mtn.md") || seen.has(path)) return undefined;
+      if (path === ownPath || isMindTreePath(path) || seen.has(path)) return undefined;
       seen.add(path);
       return { path, file };
     }).catch(() => undefined));

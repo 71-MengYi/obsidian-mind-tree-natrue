@@ -1,11 +1,16 @@
 import {
   MAX_MIND_TREE_DEPTH,
   MAX_MIND_TREE_NODES,
+  asRecord,
   assertJsonContainerDepth,
-  createSafeRecord
+  createSafeRecord,
+  exceedsDepthBudget,
+  exceedsNodeBudget,
+  stringValue
 } from "../input-limits";
 import type { BranchClipboardPayload, ClipboardLinkTarget, MindTreeNode, NodeId } from "../types";
-import { asRecord, assertSafeNodeId, normalizeRuntimeNode, stringValue } from "./runtime-node";
+import { assertSafeNodeId, normalizeRuntimeNode } from "./runtime-node";
+import { parseSafeHttpUrl } from "./url";
 
 export class ClipboardPayloadError extends Error {
   constructor(message: string) {
@@ -25,7 +30,7 @@ export function normalizeBranchClipboardPayload(value: unknown): BranchClipboard
   const rawNodes = asRecord(record["nodes"]);
   if (!rawNodes) throw new ClipboardPayloadError("Structured clipboard nodes must be an object.");
   const nodeEntries = Object.entries(rawNodes);
-  if (nodeEntries.length > MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(nodeEntries.length)) {
     throw new ClipboardPayloadError(`Structured clipboard data exceeds ${MAX_MIND_TREE_NODES} nodes.`);
   }
 
@@ -56,6 +61,17 @@ export function normalizeBranchClipboardPayload(value: unknown): BranchClipboard
   };
 }
 
+/**
+ * Resolve a payload's root list from either field. `rootId` stays required for
+ * payloads written by older versions, while `rootIds` carries the complete
+ * forest; duplicates are removed so a malformed payload cannot insert the same
+ * root twice.
+ */
+export function payloadRootIds(payload: BranchClipboardPayload): NodeId[] {
+  const roots = payload.rootIds?.length ? payload.rootIds : [payload.rootId];
+  return [...new Set(roots)];
+}
+
 function validateForest(nodes: Record<NodeId, MindTreeNode>, rootIds: NodeId[]): Set<NodeId> {
   const roots = new Set(rootIds);
   const parentCount = new Map<NodeId, number>();
@@ -73,7 +89,7 @@ function validateForest(nodes: Record<NodeId, MindTreeNode>, rootIds: NodeId[]):
       continue;
     }
     // Depth is zero-based; a maximum of 256 levels permits depths 0..255.
-    if (current.depth >= MAX_MIND_TREE_DEPTH) {
+    if (exceedsDepthBudget(current.depth)) {
       throw new ClipboardPayloadError(`Structured clipboard tree exceeds ${MAX_MIND_TREE_DEPTH} levels.`);
     }
     if (visiting.has(current.id)) throw new ClipboardPayloadError(`Structured clipboard cycle at ${current.id}.`);
@@ -129,10 +145,5 @@ function requiredString(record: Record<string, unknown>, key: string): string {
 }
 
 function safeHttpUrl(value: string): string | undefined {
-  try {
-    const url = new URL(value);
-    return url.protocol === "http:" || url.protocol === "https:" ? url.toString() : undefined;
-  } catch {
-    return undefined;
-  }
+  return parseSafeHttpUrl(value)?.toString();
 }

@@ -1,4 +1,5 @@
 import { parseNodeTitle } from "../format/node-title";
+import { parseSafeHttpUrl } from "../domain/url";
 export interface TextLinkSpan {
   start: number;
   end: number;
@@ -11,12 +12,7 @@ export interface TextLinkSpan {
 /** Keep percent-encoded path/query separators intact; never decode an HTTP URL. */
 export function normalizeSafeHttpUrl(value: string): string | undefined {
   if (!value || /\s/.test(value)) return undefined;
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === "http:" || parsed.protocol === "https:" ? parsed.toString() : undefined;
-  } catch {
-    return undefined;
-  }
+  return parseSafeHttpUrl(value)?.toString();
 }
 
 /**

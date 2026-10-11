@@ -1,5 +1,6 @@
 import { normalizeNodeMarkers } from "./markers";
-import { assertSafeRecordKey, createSafeRecord } from "../input-limits";
+import { asRecord, assertSafeRecordKey, createSafeRecord, stringValue } from "../input-limits";
+import { isSafeHttpUrl } from "./url";
 import type { MindTreeNode, NodeStyle, ResourceRef } from "../types";
 
 export class RuntimeNodeDataError extends Error {
@@ -54,7 +55,7 @@ export function normalizeRuntimeNode(id: string, value: unknown): MindTreeNode {
   return node;
 }
 
-export function normalizeRuntimeResource(value: unknown): ResourceRef {
+function normalizeRuntimeResource(value: unknown): ResourceRef {
   const record = asRecord(value);
   if (!record) throw new RuntimeNodeDataError("Node resource must be an object.");
   if (record["type"] === "url") {
@@ -83,16 +84,6 @@ export function assertSafeNodeId(id: string): void {
     throw new RuntimeNodeDataError("Node IDs must be non-empty strings of at most 512 characters.");
   }
   assertSafeRecordKey(id);
-}
-
-export function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
-export function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }
 
 function requiredString(record: Record<string, unknown>, key: string): string {
@@ -133,14 +124,5 @@ function copyUnknownFields(
     if (ignored.has(key)) continue;
     assertSafeRecordKey(key);
     target[key] = value;
-  }
-}
-
-function isSafeHttpUrl(value: string): boolean {
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
   }
 }

@@ -1,3 +1,4 @@
+import { asRecord } from "./input-limits";
 import type {
   MindTreeCollectionMode,
   MindTreeConnectionStyle,
@@ -115,12 +116,6 @@ export function documentSettingsUsedDefaults(
   const record = asRecord(value);
   return (Object.keys(DOCUMENT_SETTING_YAML_KEYS) as Array<keyof MindTreeDocumentSettings>)
     .some((property) => record?.[DOCUMENT_SETTING_YAML_KEYS[property]] !== normalized[property]);
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
 }
 
 function enumValue<T extends string>(value: unknown, allowed: ReadonlySet<T>): T | undefined {

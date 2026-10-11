@@ -1,5 +1,5 @@
 import { addNode, extractBranches } from "../domain/tree";
-import { normalizeBranchClipboardPayload } from "../domain/clipboard-payload";
+import { normalizeBranchClipboardPayload, payloadRootIds } from "../domain/clipboard-payload";
 import { renderBranchMarkdown } from "../format/outline";
 import { linkedFileTitle } from "../format/resource-id";
 import { MAX_STRUCTURED_CLIPBOARD_BYTES, utf8ByteLength } from "../input-limits";
@@ -11,7 +11,7 @@ import type {
 } from "../types";
 import { normalizeSafeHttpUrl, parseTextImport } from "./text-import";
 
-export const MIND_TREE_MIME = "application/x-mind-tree-nature+json";
+const MIND_TREE_MIME = "application/x-mind-tree-nature+json";
 
 interface InternalBranchClipboard {
   markdown: string;
@@ -60,7 +60,7 @@ export async function copyBranches(
   mode: "branch" | "markdown"
 ): Promise<void> {
   const payload = extractBranches(document, nodeIds);
-  const rootIds = payload.rootIds?.length ? payload.rootIds : [payload.rootId];
+  const rootIds = payloadRootIds(payload);
   const markdown = rootIds.map((nodeId) => renderBranchMarkdown(document, nodeId)).join("\n");
   if (mode === "markdown") {
     await navigator.clipboard.writeText(markdown);

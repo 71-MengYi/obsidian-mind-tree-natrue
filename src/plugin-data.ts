@@ -1,6 +1,6 @@
 import { normalizeConnectionStyle, normalizeNodeShape } from "./document-settings";
 import { normalizeCustomMarkerDefinitions } from "./domain/custom-markers";
-import { assertSafeRecordKey, createSafeRecord } from "./input-limits";
+import { asRecord, assertSafeRecordKey, createSafeRecord } from "./input-limits";
 import { normalizeNewNoteDefaultContent } from "./services/note-content";
 import {
   DEFAULT_SETTINGS,
@@ -151,10 +151,4 @@ function safeBoolean(value: unknown, fallback: boolean): boolean {
 
 function optionValue<T extends string>(value: unknown, options: readonly T[], fallback: T): T {
   return typeof value === "string" && options.includes(value as T) ? value as T : fallback;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
 }

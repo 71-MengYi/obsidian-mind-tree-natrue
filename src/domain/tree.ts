@@ -12,12 +12,19 @@ import type {
   NodeId,
   ValidationResult
 } from "../types";
-import { createDefaultDocumentSettings } from "../document-settings";
+import { DEFAULT_DOCUMENT_SETTINGS, createDefaultDocumentSettings } from "../document-settings";
 import { copySettingsState } from "../document-settings-state";
-import { MAX_MIND_TREE_DEPTH, MAX_MIND_TREE_NODES, createSafeRecord } from "../input-limits";
-import { normalizeBranchClipboardPayload } from "./clipboard-payload";
+import {
+  MAX_MIND_TREE_DEPTH,
+  MAX_MIND_TREE_NODES,
+  createSafeRecord,
+  exceedsDepthBudget,
+  exceedsNodeBudget
+} from "../input-limits";
+import { normalizeBranchClipboardPayload, payloadRootIds } from "./clipboard-payload";
 import { assertSafeNodeId } from "./runtime-node";
 import { getDocumentTreeIndex, invalidateDocumentTreeIndex } from "./tree-index";
+import { isSafeHttpUrl } from "./url";
 
 const ROOT_TITLE = "新建思维树";
 /** Fallback used by non-UI callers; the view supplies the localized equivalent. */
@@ -43,11 +50,11 @@ export function nowIso(): string {
  */
 export function createEmptyDocument(
   title = ROOT_TITLE,
-  theme: MindTreeTheme = "vibrant",
-  layoutMode: MindTreeLayoutMode = "balanced",
-  nodeShape: MindTreeNodeShape = "rounded",
-  collectionMode: MindTreeCollectionMode = "ask",
-  connectionStyle: MindTreeConnectionStyle = "theme"
+  theme: MindTreeTheme = DEFAULT_DOCUMENT_SETTINGS.theme,
+  layoutMode: MindTreeLayoutMode = DEFAULT_DOCUMENT_SETTINGS.layoutMode,
+  nodeShape: MindTreeNodeShape = DEFAULT_DOCUMENT_SETTINGS.nodeShape,
+  collectionMode: MindTreeCollectionMode = DEFAULT_DOCUMENT_SETTINGS.collectionMode,
+  connectionStyle: MindTreeConnectionStyle = DEFAULT_DOCUMENT_SETTINGS.connectionStyle
 ): MindTreeDocument {
   const createdAt = nowIso();
   const rootId = createId();
@@ -69,8 +76,19 @@ export function createEmptyDocument(
   };
 }
 
+/**
+ * Deep-copy JSON-shaped domain data. `structuredClone` replaces the previous
+ * JSON round-trip: it keeps null-prototype records and never stringifies the
+ * payload, so unknown fields are copied unchanged. Every value in a document
+ * comes from JSON/YAML or a node factory and is structured-cloneable by
+ * construction.
+ */
+function cloneJson<T>(value: T): T {
+  return structuredClone(value);
+}
+
 export function cloneDocument(document: MindTreeDocument): MindTreeDocument {
-  const clone = JSON.parse(JSON.stringify(document)) as MindTreeDocument;
+  const clone = cloneJson(document);
   copySettingsState(document, clone);
   return clone;
 }
@@ -162,7 +180,7 @@ export function collectBranchIds(document: MindTreeDocument, nodeId: NodeId): No
   return result;
 }
 
-export function isDescendant(document: MindTreeDocument, ancestorId: NodeId, candidateId: NodeId): boolean {
+function isDescendant(document: MindTreeDocument, ancestorId: NodeId, candidateId: NodeId): boolean {
   return collectBranchIds(document, ancestorId).includes(candidateId);
 }
 
@@ -173,10 +191,10 @@ export function addNode(
   index?: number
 ): MindTreeNode {
   const parent = getNode(document, parentId);
-  if (Object.keys(document.nodes).length >= MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(Object.keys(document.nodes).length, 1)) {
     throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_NODES} nodes.`);
   }
-  if (getDepth(document, parentId) + 1 >= MAX_MIND_TREE_DEPTH) {
+  if (exceedsDepthBudget(getDepth(document, parentId) + 1)) {
     throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_DEPTH} levels.`);
   }
   const createdAt = nowIso();
@@ -208,10 +226,10 @@ export function addSibling(document: MindTreeDocument, nodeId: NodeId, title = D
 /** Insert a new node between the selected node and its current parent. */
 export function insertParentNode(document: MindTreeDocument, nodeId: NodeId, title = DEFAULT_NODE_TITLE): MindTreeNode {
   const child = getNode(document, nodeId);
-  if (Object.keys(document.nodes).length >= MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(Object.keys(document.nodes).length, 1)) {
     throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_NODES} nodes.`);
   }
-  if (collectBranchIds(document, nodeId).some((id) => getDepth(document, id) + 1 >= MAX_MIND_TREE_DEPTH)) {
+  if (collectBranchIds(document, nodeId).some((id) => exceedsDepthBudget(getDepth(document, id) + 1))) {
     throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_DEPTH} levels.`);
   }
   let oldParent: MindTreeNode | undefined;
@@ -323,15 +341,6 @@ export function deleteNodeOnly(document: MindTreeDocument, nodeId: NodeId): void
   invalidateDocumentTreeIndex(document);
 }
 
-export function moveNode(
-  document: MindTreeDocument,
-  nodeId: NodeId,
-  targetId: NodeId,
-  position: DropPosition
-): void {
-  moveNodes(document, [nodeId], targetId, position);
-}
-
 /**
  * Move an arbitrary selected forest as one ordered group.
  *
@@ -372,7 +381,7 @@ export function moveNodes(
     const relativeHeight = collectBranchIds(document, rootId).reduce((height, id) => (
       Math.max(height, getDepth(document, id) - originalRootDepth)
     ), 0);
-    if (newRootDepth + relativeHeight >= MAX_MIND_TREE_DEPTH) {
+    if (exceedsDepthBudget(newRootDepth + relativeHeight)) {
       throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_DEPTH} levels.`);
     }
   }
@@ -479,7 +488,7 @@ export function setCollapsedAfterDepth(document: MindTreeDocument, maxVisibleDep
 export function validateDocument(document: MindTreeDocument): ValidationResult {
   const issues: ValidationResult["issues"] = [];
   const nodeIds = Object.keys(document.nodes);
-  if (nodeIds.length > MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(nodeIds.length)) {
     issues.push({ code: "node-count", message: `Mind Tree exceeds the ${MAX_MIND_TREE_NODES}-node safety limit.` });
     return { valid: false, issues, unreachableNodeIds: nodeIds };
   }
@@ -517,7 +526,7 @@ export function validateDocument(document: MindTreeDocument): ValidationResult {
       continue;
     }
     // Depth is zero-based; a maximum of 256 levels permits depths 0..255.
-    if (current.depth >= MAX_MIND_TREE_DEPTH) {
+    if (exceedsDepthBudget(current.depth)) {
       issues.push({ code: "tree-depth", message: `Mind Tree exceeds the ${MAX_MIND_TREE_DEPTH}-level safety limit.`, nodeId: current.id });
       continue;
     }
@@ -552,10 +561,6 @@ export function validateDocument(document: MindTreeDocument): ValidationResult {
   return { valid: issues.length === 0, issues, unreachableNodeIds };
 }
 
-export function extractBranch(document: MindTreeDocument, nodeId: NodeId): BranchClipboardPayload {
-  return extractBranches(document, [nodeId]);
-}
-
 /** Extract one or more independent branches into a single clipboard forest. */
 export function extractBranches(document: MindTreeDocument, nodeIds: Iterable<NodeId>): BranchClipboardPayload {
   const selected = new Set([...nodeIds].filter((id) => Boolean(document.nodes[id])));
@@ -566,22 +571,12 @@ export function extractBranches(document: MindTreeDocument, nodeIds: Iterable<No
   const nodes = createSafeRecord<MindTreeNode>();
   for (const rootId of rootIds) {
     for (const id of collectBranchIds(document, rootId)) {
-      nodes[id] = JSON.parse(JSON.stringify(getNode(document, id))) as MindTreeNode;
+      nodes[id] = cloneJson(getNode(document, id));
     }
   }
   // Clipboard payloads need a source discriminator, not a persisted resource
   // identity. The root ID is present even before the tree is linked.
   return { sourceDocumentId: document.documentId ?? document.rootId, rootId: rootIds[0]!, rootIds, nodes };
-}
-
-export function insertBranch(
-  document: MindTreeDocument,
-  parentId: NodeId,
-  payload: BranchClipboardPayload
-): NodeId {
-  const inserted = insertBranches(document, parentId, payload);
-  if (!inserted[0]) throw new Error("Invalid branch payload.");
-  return inserted[0];
 }
 
 /** Insert every top-level root in a clipboard forest as siblings. */
@@ -591,8 +586,7 @@ export function insertBranches(
   payload: BranchClipboardPayload
 ): NodeId[] {
   const safePayload = normalizeBranchClipboardPayload(payload);
-  const rootIds = [...new Set(safePayload.rootIds?.length ? safePayload.rootIds : [safePayload.rootId])]
-    .filter((id) => Boolean(safePayload.nodes[id]));
+  const rootIds = payloadRootIds(safePayload).filter((id) => Boolean(safePayload.nodes[id]));
   if (rootIds.length === 0) throw new Error("Invalid branch payload.");
 
   // Only import nodes reachable from a declared root. This prevents malformed
@@ -608,7 +602,7 @@ export function insertBranches(
     ids.push(id);
     for (let index = source.childIds.length - 1; index >= 0; index -= 1) pending.push(source.childIds[index]!);
   }
-  if (Object.keys(document.nodes).length + ids.length > MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(Object.keys(document.nodes).length, ids.length)) {
     throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_NODES} nodes.`);
   }
   const parentDepth = getDepth(document, parentId);
@@ -624,7 +618,7 @@ export function insertBranches(
       depthPending.push({ id: childId, depth: current.depth + 1 });
     }
   }
-  if (parentDepth + 1 + maximumPayloadDepth >= MAX_MIND_TREE_DEPTH) {
+  if (exceedsDepthBudget(parentDepth + 1 + maximumPayloadDepth)) {
     throw new Error(`Mind Tree cannot exceed ${MAX_MIND_TREE_DEPTH} levels.`);
   }
   const idMap = new Map(ids.map((id) => [id, createId()]));
@@ -637,10 +631,10 @@ export function insertBranches(
       ? undefined
       : source.resource;
     document.nodes[id] = {
-      ...JSON.parse(JSON.stringify(source)) as MindTreeNode,
+      ...cloneJson(source),
       id,
       childIds: source.childIds.map((childId) => idMap.get(childId)).filter((value): value is string => Boolean(value)),
-      ...(resource ? { resource: JSON.parse(JSON.stringify(resource)) } : { resource: undefined }),
+      ...(resource ? { resource: cloneJson(resource) } : { resource: undefined }),
       createdAt,
       updatedAt: createdAt
     };
@@ -656,13 +650,4 @@ export function touch(document: MindTreeDocument, node?: MindTreeNode): void {
   const updatedAt = nowIso();
   document.updatedAt = updatedAt;
   if (node) node.updatedAt = updatedAt;
-}
-
-function isSafeHttpUrl(value: string): boolean {
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
 }

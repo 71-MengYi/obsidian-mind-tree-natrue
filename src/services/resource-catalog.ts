@@ -1,6 +1,6 @@
 import { parse as parseYaml } from "yaml";
 import { classifyFileSubtype } from "../domain/markers";
-import { classifyFile, extractNonMarkdownResourceId, isMarkdownPath } from "../format/resource-id";
+import { classifyFile, extractNonMarkdownResourceId, isMarkdownPath, isMindTreePath } from "../format/resource-id";
 import type { FileResourceRef } from "../types";
 import type { IndexedResource } from "./local-resource-cache";
 
@@ -53,7 +53,7 @@ export function readResourceIdentity(path: string, source = ""): IndexedResource
     const nested = frontmatter?.["mind-tree-nature"];
     const metadata = nested && typeof nested === "object" && !Array.isArray(nested)
       ? nested as Record<string, unknown> : undefined;
-    resourceId = path.toLowerCase().endsWith(".mtn.md")
+    resourceId = isMindTreePath(path)
       ? frontmatter?.["documentId"] ?? metadata?.["documentId"] : metadata?.["resourceId"];
     fileSubtype = classifyFileSubtype(frontmatter);
   }

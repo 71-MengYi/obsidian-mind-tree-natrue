@@ -1,11 +1,10 @@
 import type { ViewState } from "obsidian";
+import { isMindTreePath } from "./format/resource-id";
 
 export const MIND_TREE_VIEW_TYPE = "mind-tree-nature-view";
-export const MIND_TREE_FILE_SUFFIX = ".mtn.md";
 
-export function isMindTreePath(path: string): boolean {
-  return path.endsWith(MIND_TREE_FILE_SUFFIX);
-}
+/** Re-exported so existing `view-routing` importers keep working. */
+export { isMindTreePath };
 
 export function routeMindTreeViewState(viewState: ViewState): ViewState {
   const filePath = viewState.state?.["file"];

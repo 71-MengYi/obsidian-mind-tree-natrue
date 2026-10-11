@@ -1,9 +1,10 @@
 import { App, normalizePath, TFile } from "obsidian";
 import { createId } from "../domain/tree";
-import { EXTERNAL_FILE_REJECT_BYTES } from "../input-limits";
+import { EXTERNAL_FILE_REJECT_BYTES, asRecord } from "../input-limits";
 import {
   appendNonMarkdownResourceId, buildLinkedResourcePath, classifyFile, createShortResourceId,
-  DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR, isMarkdownPath, stripNonMarkdownResourceId,
+  DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR, isMarkdownPath, isMindTreePath, sanitizeFileTitle,
+  stripNonMarkdownResourceId,
   type NonMarkdownResourceIdSeparator
 } from "../format/resource-id";
 import type { FileResourceRef, MindTreeDocument, ResourceId } from "../types";
@@ -213,7 +214,7 @@ export class ResourceIndexService {
       if (current) {
         resourceId = current.resourceId;
         this.assertKnownUnique(resourceId);
-      } else if (/\.mtn\.md$/i.test(file.path)) {
+      } else if (isMindTreePath(file.path)) {
         const assigned = await this.assignMindTreeDocumentId(file, this.createUniqueResourceId());
         resourceId = assigned.documentId;
         managedFile = assigned.file;
@@ -301,7 +302,7 @@ export class ResourceIndexService {
     title: string,
     initialContent: string
   ): Promise<{ file: TFile; reference: FileResourceRef }> {
-    const cleanedTitle = sanitizeFileName(title);
+    const cleanedTitle = sanitizeFileTitle(title);
     if (!cleanedTitle) throw new Error("The note title cannot be empty.");
     const normalizedDirectory = normalizeDirectory(directory);
     if (normalizedDirectory) await this.ensureFolder(normalizedDirectory);
@@ -366,7 +367,7 @@ export class ResourceIndexService {
     }
     const safeName = source.name.replace(/[\\/]/g, " ").trim();
     if (!safeName) throw new Error("The dropped file has no valid name.");
-    if (safeName.endsWith(".mtn.md")) {
+    if (isMindTreePath(safeName)) {
       throw new Error("Mind-tree source files cannot be imported from outside the vault.");
     }
 
@@ -534,7 +535,7 @@ export class ResourceIndexService {
       .map((node) => node.resource?.type === "file" ? normalizePath(node.resource.pathHint) : undefined)
       .filter((path): path is string => Boolean(path)));
     return this.app.vault.getFiles().filter((file) => {
-      if (file.path === treeFile.path || file.path.endsWith(".mtn.md")) return false;
+      if (file.path === treeFile.path || isMindTreePath(file.path)) return false;
       if (ignoredPrefixes.some((prefix) => file.path.startsWith(normalizePath(prefix)))) return false;
       const parentPath = file.parent?.isRoot() ? "" : file.parent?.path ?? "";
       const inScope = recursive
@@ -629,20 +630,12 @@ export class ResourceIndexService {
 
 }
 
-function sanitizeFileName(value: string): string {
-  return value.replace(/[\\/:*?"<>|]/g, " ").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
-}
-
 function normalizeDirectory(value: string): string {
   const normalized = normalizePath(value.trim()).replace(/^\/+|\/+$/g, "");
   if (normalized.split("/").some((segment) => segment === "." || segment === "..")) {
     throw new Error("Vault folder paths cannot contain '.' or '..' segments.");
   }
   return normalized;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : undefined;
 }
 
 function stringValue(value: unknown): string | undefined {

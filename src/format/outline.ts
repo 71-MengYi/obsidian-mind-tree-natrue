@@ -1,6 +1,8 @@
 import { parseNodeTitle, nodeTitleMode, escapeTitleMarkdown } from "./node-title";
 import type { MindTreeDocument, MindTreeNode, NodeId } from "../types";
 import { renderNodeMarkerSuffix } from "../domain/markers";
+import { DEFAULT_NODE_TITLE } from "../domain/tree";
+import { isSafeHttpUrl } from "../domain/url";
 
 export const OUTLINE_START = "<!-- mtn:outline:start -->";
 export const OUTLINE_END = "<!-- mtn:outline:end -->";
@@ -34,7 +36,7 @@ function renderNode(
 }
 
 function renderNodeLabel(node: MindTreeNode, isRoot: boolean): string {
-  const source = node.title || "未命名节点";
+  const source = node.title || DEFAULT_NODE_TITLE;
   const title = nodeTitleMode(node, isRoot ? 0 : 1) === "literal"
     ? escapeTitleMarkdown(source) : parseNodeTitle(source).markdown;
   const resource = node.resource;
@@ -52,27 +54,10 @@ function renderNodeLabel(node: MindTreeNode, isRoot: boolean): string {
   return withMarkers(`[[${escapeWikiTarget(path)}|${title}]]`);
 }
 
-export function escapeMarkdown(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/([\[\]()*_`])/g, "\\$1")
-    .replace(/[\r\n]+/g, " ")
-    .trim();
-}
-
 function escapeLinkTarget(value: string): string {
   return value.replace(/\s/g, (character) => encodeURIComponent(character)).replace(/\)/g, "%29");
 }
 
 function escapeWikiTarget(value: string): string {
   return value.replace(/\|/g, "\\|").replace(/[\r\n]+/g, " ");
-}
-
-function isSafeHttpUrl(value: string): boolean {
-  try {
-    const protocol = new URL(value).protocol;
-    return protocol === "http:" || protocol === "https:";
-  } catch {
-    return false;
-  }
 }

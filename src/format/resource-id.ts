@@ -4,7 +4,7 @@ import { createId } from "../domain/tree";
 export type NonMarkdownResourceIdSeparator = "%" | "@";
 
 export const DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR: NonMarkdownResourceIdSeparator = "@";
-export const NON_MARKDOWN_RESOURCE_ID_LENGTH = 5;
+const NON_MARKDOWN_RESOURCE_ID_LENGTH = 5;
 
 const NEW_NON_MARKDOWN_ID_PATTERN = /([%@])([A-Za-z0-9]{5})(?=\.[^.]+$|$)/;
 const LEGACY_NON_MARKDOWN_ID_PATTERN = /~mtn-([0-9a-hjkmnp-tv-z]{10})(?=\.[^.]+$|$)/i;
@@ -43,13 +43,21 @@ export function stripNonMarkdownResourceId(name: string): string {
   return name.replace(NEW_NON_MARKDOWN_ID_PATTERN, "").replace(LEGACY_NON_MARKDOWN_ID_PATTERN, "");
 }
 
+/**
+ * Replace characters the vault cannot store in a file name. Shared so resource
+ * creation, template copies and linked-title renames cannot drift apart.
+ */
+export function sanitizeFileTitle(title: string): string {
+  return title.replace(/[\\/:*?"<>|]/g, " ").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+}
+
 export function buildLinkedResourcePath(
   path: string,
   title: string,
   resourceId: string,
   separator: NonMarkdownResourceIdSeparator = DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR
 ): string {
-  const cleanedTitle = title.replace(/[\\/:*?"<>|]/g, " ").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+  const cleanedTitle = sanitizeFileTitle(title);
   if (!cleanedTitle) throw new Error("The file name cannot be empty.");
   const slashIndex = path.lastIndexOf("/");
   const directory = slashIndex >= 0 ? path.slice(0, slashIndex + 1) : "";
@@ -119,6 +127,15 @@ function appendLegacyNonMarkdownResourceId(path: string, resourceId: string): st
 
 export function isMarkdownPath(path: string): boolean {
   return path.toLowerCase().endsWith(".md");
+}
+
+/**
+ * One classifier for mind-tree files. The vault index, the search window and the
+ * view router must agree: a `Note.MTN.MD` that the index treats as a mind tree
+ * but the router opens as Markdown would silently lose its machine data.
+ */
+export function isMindTreePath(path: string): boolean {
+  return path.replace(/\\/g, "/").toLowerCase().endsWith(".mtn.md");
 }
 
 export function classifyFile(path: string): "note" | "image" | "attachment" {

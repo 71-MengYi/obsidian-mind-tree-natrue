@@ -13,8 +13,11 @@ import {
   MAX_COMPRESSED_MIND_TREE_BYTES,
   MAX_DECOMPRESSED_MIND_TREE_BYTES,
   MAX_MIND_TREE_NODES,
+  asRecord,
   assertJsonContainerDepth,
-  createSafeRecord
+  createSafeRecord,
+  exceedsNodeBudget,
+  stringValue
 } from "../input-limits";
 import type {
   MindTreeCollectionMode,
@@ -41,6 +44,13 @@ const DOCUMENT_SETTING_YAML_KEY_SET = new Set<string>(Object.values(DOCUMENT_SET
 export const DATA_NOTICE = "这段话之后的内容是压缩json，无需读取和分析。";
 export const DATA_START = "<!-- mtn:data:start -->";
 export const DATA_END = "<!-- mtn:data:end -->";
+/**
+ * Runtime fallback for a document whose `title` is missing. Deliberately not
+ * `ROOT_TITLE` from domain/tree: "a parsed tree without a title" and "a brand
+ * new tree" are different situations that the product may want to word
+ * differently, so only the duplicated literal is removed here.
+ */
+const UNTITLED_TREE_TITLE = "未命名思维树";
 
 export class MindTreeFormatError extends Error {
   constructor(message: string, readonly causes: string[] = []) {
@@ -209,11 +219,11 @@ function normalizeDocument(value: unknown): MindTreeDocument {
   const documentId = stringValue(record["documentId"]);
   const settings = normalizeDocumentSettings(record["settings"]);
   const rootId = requiredString(record, "rootId");
-  const title = stringValue(record["title"]) ?? "未命名思维树";
+  const title = stringValue(record["title"]) ?? UNTITLED_TREE_TITLE;
   const rawNodes = asRecord(record["nodes"]);
   if (!rawNodes) throw new MindTreeFormatError("Mind Tree nodes must be a YAML mapping.");
   const nodeEntries = Object.entries(rawNodes);
-  if (nodeEntries.length > MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(nodeEntries.length)) {
     throw new MindTreeFormatError(`Mind Tree data exceeds the ${MAX_MIND_TREE_NODES}-node safety limit.`);
   }
   const nodes = createSafeRecord<MindTreeNode>();
@@ -419,16 +429,6 @@ function requiredString(record: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
-}
-
-function asRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? value as Record<string, unknown>
-    : undefined;
-}
-
 function collectUnknown(record: Record<string, unknown>, knownKeys: string[]): Record<string, unknown> {
   const known = new Set(knownKeys);
   return Object.fromEntries(Object.entries(record).filter(([key]) => !known.has(key) && !RESERVED_VERSION_KEYS.has(key)));
@@ -440,5 +440,5 @@ function removeVersionKeys(record: Record<string, unknown>): Record<string, unkn
 }
 
 function escapeHeading(value: string): string {
-  return value.replace(/[\r\n]+/g, " ").replace(/^#+\s*/, "").trim() || "未命名思维树";
+  return value.replace(/[\r\n]+/g, " ").replace(/^#+\s*/, "").trim() || UNTITLED_TREE_TITLE;
 }

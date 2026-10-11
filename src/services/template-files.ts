@@ -4,6 +4,7 @@ import {
   classifyFile,
   extractNonMarkdownResourceId,
   isMarkdownPath,
+  sanitizeFileTitle,
   type NonMarkdownResourceIdSeparator
 } from "../format/resource-id";
 import type { FileResourceRef } from "../types";
@@ -83,7 +84,7 @@ export class TemplateFileService<T extends TemplateFile> {
     isTargetCurrent: () => boolean
   ): Promise<TemplateFileResult<T>> {
     this.requireTarget(isTargetCurrent);
-    const cleanedTitle = title.replace(/[\\/:*?"<>|]/g, " ").replace(/[\r\n]+/g, " ").replace(/\s+/g, " ").trim();
+    const cleanedTitle = sanitizeFileTitle(title);
     if (!cleanedTitle || cleanedTitle === "." || cleanedTitle === "..") throw new Error("The file title cannot be empty or a path segment.");
     const extension = templateFileExtension(template.path);
     const markdown = isMarkdownPath(template.path);

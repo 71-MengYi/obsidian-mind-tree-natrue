@@ -5,6 +5,8 @@ import {
   MAX_TEXT_IMPORT_BYTES,
   InputLimitError,
   createSafeRecord,
+  exceedsDepthBudget,
+  exceedsNodeBudget,
   utf8ByteLength
 } from "../input-limits";
 import type {
@@ -175,11 +177,11 @@ function addImportedLine(builder: ImportBuilder, value: string, parentId?: NodeI
 /** Construct a bounded forest first; asynchronous file lookup happens later. */
 function addImportedNode(builder: ImportBuilder, parsed: ParsedTextNode, parentId?: NodeId): NodeId | undefined {
   if (!parsed.title) return undefined;
-  if (builder.count >= MAX_MIND_TREE_NODES) {
+  if (exceedsNodeBudget(builder.count, 1)) {
     throw new InputLimitError("node-count", `Text import exceeds ${MAX_MIND_TREE_NODES} nodes.`);
   }
   const depth = parentId ? (builder.depthById.get(parentId) ?? 0) + 1 : 0;
-  if (depth >= MAX_MIND_TREE_DEPTH) {
+  if (exceedsDepthBudget(depth)) {
     throw new InputLimitError("tree-depth", `Text import exceeds ${MAX_MIND_TREE_DEPTH} levels.`);
   }
   const id = createId();

@@ -18,6 +18,24 @@ export const EXTERNAL_FILE_REJECT_BYTES = 1024 * 1024 * 1024;
 /** Small compressed chunks bound the largest single streaming inflate output. */
 export const GUNZIP_INPUT_CHUNK_BYTES = 4 * 1024;
 
+/**
+ * Named boundary predicates for the two structural caps.
+ *
+ * Callers keep their own error type, code and wording; only the comparison
+ * direction and the boundary value live here, so a future limit change cannot
+ * silently diverge between the parser, the clipboard and the tree commands.
+ * `additional` is how many nodes a command is about to add: the resulting total
+ * must stay within `MAX_MIND_TREE_NODES`.
+ */
+export function exceedsNodeBudget(currentCount: number, additional = 0): boolean {
+  return currentCount + additional > MAX_MIND_TREE_NODES;
+}
+
+/** Depth is zero-based, so a node at depth `MAX_MIND_TREE_DEPTH` is one too deep. */
+export function exceedsDepthBudget(depth: number): boolean {
+  return depth >= MAX_MIND_TREE_DEPTH;
+}
+
 const DANGEROUS_RECORD_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 
 export class InputLimitError extends Error {
@@ -58,6 +76,22 @@ export function assertSafeRecordKey(key: string): void {
   if (DANGEROUS_RECORD_KEYS.has(key)) {
     throw new InputLimitError("unsafe-key", `Unsafe object key is not allowed: ${key}`);
   }
+}
+
+/**
+ * Narrow untrusted JSON to a plain object. Kept beside the other untrusted-input
+ * guards so the "is this a record" rule cannot drift between the settings file,
+ * the document payload and the vault index.
+ */
+export function asRecord(value: unknown): Record<string, unknown> | undefined {
+  return value !== null && typeof value === "object" && !Array.isArray(value)
+    ? value as Record<string, unknown>
+    : undefined;
+}
+
+/** Read a value that is only usable when it is any string (an empty string is kept). */
+export function stringValue(value: unknown): string | undefined {
+  return typeof value === "string" ? value : undefined;
 }
 
 /**

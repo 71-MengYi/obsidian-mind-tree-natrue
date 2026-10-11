@@ -2,6 +2,7 @@ import type { TitleCommitResult } from "../format/node-title";
 import type { MindTreeDocument } from "../types";
 import type { VersionConflictCoordinator, VersionChoiceResult } from "./version-conflict-coordinator";
 import { DocumentSession } from "./document-session";
+import { canonicalTreePath } from "./pending-conflict-store";
 import type { TreeSettingKey } from "../document-settings-state";
 import { TREE_SETTING_KEYS } from "../document-settings-state";
 
@@ -70,7 +71,7 @@ export class SharedMindTreeSession {
   private _path: string;
 
   constructor(path: string) {
-    this._path = normalizeSessionPath(path);
+    this._path = canonicalTreePath(path);
     this.history.isMutationBlocked = () => this.mutationLocked;
   }
 
@@ -95,7 +96,7 @@ export class SharedMindTreeSession {
   }
 
   rename(path: string): void {
-    this._path = normalizeSessionPath(path);
+    this._path = canonicalTreePath(path);
   }
 
   initialize(document: MindTreeDocument | undefined, source: string, parseError?: string): boolean {
@@ -317,7 +318,7 @@ export class MindTreeSessionRegistry {
   private sessions = new Map<string, SharedMindTreeSession>();
 
   acquire(path: string): SharedMindTreeSession {
-    const normalized = normalizeSessionPath(path);
+    const normalized = canonicalTreePath(path);
     let session = this.sessions.get(normalized);
     if (!session) {
       session = new SharedMindTreeSession(normalized);
@@ -327,7 +328,7 @@ export class MindTreeSessionRegistry {
   }
 
   release(path: string, participantId: string): void {
-    const normalized = normalizeSessionPath(path);
+    const normalized = canonicalTreePath(path);
     const session = this.sessions.get(normalized);
     if (!session) return;
     session.detach(participantId);
@@ -343,8 +344,8 @@ export class MindTreeSessionRegistry {
   }
 
   rename(oldPath: string, newPath: string): void {
-    const oldNormalized = normalizeSessionPath(oldPath);
-    const newNormalized = normalizeSessionPath(newPath);
+    const oldNormalized = canonicalTreePath(oldPath);
+    const newNormalized = canonicalTreePath(newPath);
     const session = this.sessions.get(oldNormalized);
     if (!session || oldNormalized === newNormalized) return;
     const collision = this.sessions.get(newNormalized);
@@ -362,11 +363,6 @@ export class MindTreeSessionRegistry {
   }
 
   get(path: string): SharedMindTreeSession | undefined {
-    return this.sessions.get(normalizeSessionPath(path));
+    return this.sessions.get(canonicalTreePath(path));
   }
-}
-
-/** Keep this coordination primitive usable in tests without Obsidian runtime. */
-function normalizeSessionPath(path: string): string {
-  return path.replace(/\\/g, "/").replace(/\/{2,}/g, "/").replace(/^\/+|\/+$/g, "");
 }
