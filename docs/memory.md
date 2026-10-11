@@ -23,7 +23,7 @@
 - 纯搜索逻辑 `src/ui/search/search-core.ts`（core 队友）：`findMatches` / `buildSnippet` / `searchMindTree`，NFKC + 小写折叠、按字面量匹配（禁止把 query 拼进 RegExp）、`SEARCH_RESULT_LIMIT` / `SEARCH_HITS_PER_CARD_LIMIT`（30）；文件正文懒读入辅助 `readSearchFiles`（预算默认 400 个文件 / 单文件 512 KiB，超限只计入 `skipped`、不截断）见契约 §2.1。
 - 面板与载荷 `src/ui/search/search-panel.ts`、`src/ui/search/search-payload.ts`（panel 队友）；CSS 只追加 `.mtn-search-*` 规则到 `styles.css`——`.mtn-search-panel` 是**浮在画布之上的圆角卡片**（与 `.mtn-toolbar` 同参数），不是贴边侧栏。
 - 宿主集成 `src/ui/mind-tree-view.ts`（Lead）：`Scope` 注册 `["Mod"]+F`，工具栏「搜索」与快捷键共用同一个打开入口；标题行点击 = 展开祖先 + 选中 + 聚焦节点中心；内容行点击 = `.md` 走 `leaf.openFile(file, { eState: { line: line - 1, ch: 0 } })`（打开位置沿用 `resourceOpenMode`），`.mtn.md` 只打开导图、不跳行。
-- i18n：`src/i18n/catalog.ts` 在 EN/ZH 对象**末尾**追加 **9** 个 key：`search.panel.title` / `placeholder` / `close` / `count` / `empty` / `loading` / `truncated` / `clear`、`shortcut.search`；`{count}` 双语一致、两语言相对顺序一致。Lead 另行删除了随中央搜索弹窗一起废弃的 4 个 key（`notice.noMatch`、`modal.search.title`、`modal.search.placeholder`、`action.find`，EN/ZH 同步）。
+- i18n：`src/i18n/catalog.ts` 在 EN/ZH 对象**末尾**追加 **9** 个 key：`search.panel.title` / `placeholder` / `close` / `count` / `empty` / `loading` / `truncated` / `clear`、`shortcut.search`（**2026-10-11 已合并为 `toolbar.search`**）；`{count}` 双语一致、两语言相对顺序一致。Lead 另行删除了随中央搜索弹窗一起废弃的 4 个 key（`notice.noMatch`、`modal.search.title`、`modal.search.placeholder`、`action.find`，EN/ZH 同步）。
 - 快捷键帮助与契约：真实文件是 `src/ui/menus/keyboard-help-menu.ts`（任务书里的 `keyboard-help.ts` 不存在），在 `Mod+S` 之后追加 `Mod+F → shortcut.search`；`src/ui/ui-contracts.ts` 的 `KEYBOARD_HELP_ACTIONS` 已含 `"search"`（紧跟 `"save"`），`test/ui-modules.test.ts` 固化为断言（`indexOf("search") === indexOf("save") + 1`）。
 - 文档：`docs/02` §5.1（信息架构「右侧搜索悬浮框」项 + 一段行为口径）、§5.3 工具栏「搜索」项、§6.3 快捷键列表；`docs/06` P0 验收第 20 条；`README.md` / `README.en.md` 快捷键表各加一行 + 一小段行为说明；契约 §3 的 `SearchPanelLabels` 与 §4 的 key 表补 `truncated` / `clear`，§3 的 DOM 块补搜索图标、清除按钮与路径行层级。
 
@@ -229,11 +229,42 @@
 - 决策纯函数：`resolvePendingConflict()`（`src/services/pending-conflict-store.ts`）——`live` / `rebind` / `stale-path` / `retain`，只看证据，不猜路径。
 - 编排：`MindTreeNaturePlugin.reportUnlocatedPendingVersions()`（`src/main.ts`），启动时**等资源索引重建完成后**执行；`vault.delete` 与 `vault.rename` 事件用 800 ms 防抖再跑一次。
 - 解锁：`VersionConflictCoordinator.discard()` / `abandon()`（`src/services/version-conflict-coordinator.ts`）清记录 + 清内存冲突态；清理失败也必须解锁。
-- 新文案：`conflict.discarded`（中英各一条）；`conflict.unlocated` 仅保留给 `retain` 分支。
+- 新文案：`conflict.discarded`（中英各一条）；`conflict.unlocated` 仅保留给 `retain` 分支（**2026-10-11 复核为零引用，该 key 已删除**）。
 - 文档同步：`docs/02` §冲突段、`docs/03` §7.6、`docs/06` 验收项。注意：本条实现后，第 1 条"删除即创建记录"的入口已由下一轮的删除修复移除，`pendingPaths`/`retain` 分支主要剩启动恢复与移动歧义两种来源。
 
 **仍在的限制**
 
 - 记录里的本地冻结版本（`currentSource`/`draft`）随记录一起丢弃，用户选择"不备份"；若源文件其实是被同步客户端移走且 `documentId` 不唯一，则保留记录并报错。
-- 编排层（`main.ts`）没有单元测试：`npm run check` 覆盖类型，行为靠上述纯函数与 store/coordinator 测试守护。若要补集成测试，需要先有可注入的 App/vault 端口。
+- 编排层（`main.ts`）没有单元测试：`npm run check` 覆盖类型，行为靠上述纯函数与 store/coordinator 测试守护。若要补集成测试，需要先有可注入的 App/vault 端口。**（2026-10-11 部分改善：未决冲突维护已提取为 `src/services/pending-conflict-maintenance.ts`，用 ports + 注入时钟，可脱离 Obsidian 测。）**
+
+## 2026-10-11 · 模块「合并 / 简化」审计落地（`refactor`，团队协作）
+
+**背景**：先由 5 人团队做只读审计（报告落在 `.audit/merge-simplify-audit-2026-10-11.md`，gitignored），再按「除不建议做外逐项落实」分成 9+ 个提交落地。基线未变：`src/` 141 个 `.ts`、`test/` 71 个 `*.test.ts`、**686 用例 / 681 pass / 5 条 esbuild `spawn EPERM` 环境失败**；`npm run check` 0 错误。
+
+**落点（按提交顺序）**
+
+1. 重复判定收敛：`input-limits.ts` 新增 `asRecord`/`stringValue`（5 份窄化 → 1）与 `exceedsNodeBudget`/`exceedsDepthBudget`（14 处手写上限比较 → 2 个谓词，边界与 `node-count`/`tree-depth` code 逐字保留）；新增 `domain/url.ts`（`parseSafeHttpUrl`/`isSafeHttpUrl`，收敛 3 份逐字相同实现，`clipboard-payload` 与 `text-url` 保留各自归一化语义）；`format/resource-id.ts` 新增 `sanitizeFileTitle` 与 **`isMindTreePath`**；会话注册表复用 `canonicalTreePath`；4 处 JSON 克隆改 `structuredClone`；新增 `payloadRootIds`。
+2. `src/numeric.ts`（`clamp` 5→1）、`src/lru-cache.ts`（`evictOldest` 5→1）、`render/color.ts`（`readableTextColor`）；`export.ts` 与画布共用 `readableTextColor`/`escapeTitleXml`。
+3. i18n：删 4 个死 key（`toolbar.layout`、`conflict.unlocated`、`notice.skippedFile`、`settings.layout.desc`），合并 10 组中英同值 key（5 份 `settings.*.desc` → `settings.defaultValue.desc`；`shortcut.search` → `toolbar.search`；folder 相关 → `folderPicker.*`）。
+4. `ui/folder-picker.ts`（两个 modal 的文件夹选择器合一）、`ui/theme-dataset.ts`（主题 dataset 单一赋值）、`StatusIndicator` 并入 view-shell、`DocumentSafetyPanel` 并入 version-comparison；删除 `ui/clipboard-controller.ts`、`ui/modals.ts`、`components/status-indicator.ts`、`components/document-safety-panel.ts`。
+5. 删死代码/过期导出：`escapeMarkdown`、`estimateTextWidth`、`searchedAncestorIds`、`get visible()`、`moveNode`/`extractBranch`/`insertBranch` 单数包装（测试改用复数版）、`countEmojiMatches` 复用 `searchEmoji`。
+6. `main.ts` 882→779：`addViewCommand` 收敛 9 条命令壳、`createParseOptions` 单一映射、`PendingConflictMaintenance`（ports + 时钟注入）。`services/serial-lane.ts` 收敛 4 处尾指针：**A 族 `serial()` 保留失败尾、B 族 `serialNormalized()` 尾指针永不 reject**（`SettingsPersistence.flush()` 依赖它可 await/引用比较），两族语义显式命名而不是塞进一个布尔；`test/serial-lane.test.ts` 4 条直接覆盖。设置页改表驱动。
+7. `ui/controllers/search-controller.ts`：搜索面板 + 候选/正文缓存下沉，视图 3870→3788 行；**陈旧读取三重判据（`viewClosed`、`documentSessionToken`、`document` 同一性）与 `searchRevision` 单调递增原样保留**。
+8. 结构性：新增中性层 **`src/render/`**（9 模块）——`layout`/`presentation`/`theme-presets`/`color`/`inline-math`/`viewport` 整体迁入，`text-measurer`/`resource-badges`/`image-nodes` 拆成「纯逻辑在 `render/` + `Browser*` DOM 适配留在 `ui/`」；`services/export.ts` 不再 import `ui/`，**services → ui 反向依赖清零**（含 `workspace-update-host` 的 type-only `ViewportState`，已随 `render/viewport.ts` 归位）。
+
+**环境坑（本轮新增，重要）**
+
+- **workspace-write 沙箱不允许删除文件，也不允许写 `.git/index`**：`Remove-Item` 与 `git add/commit` 都会报 "访问被拒绝 / Permission denied"。两者都需要一次性提权（工具参数 `sandbox_permissions: danger-full-access`），Lead 已用它将删除与提交各批量完成一次。给后续 agent：**不要**因为删除失败而用"清空文件"绕过。
+- `edit` 偶发 `ReplaceFileW EIO (Win32 1175)`：这是并发读写导致的瞬时错误，**原样重试即可**（本轮出现 10 余次，重试全部成功）。
+- 多 agent 并发改同一文件时行号会漂移，必须"重读再改"；`input-limits.ts`、`domain/tree.ts`、`resource-index.ts`、`mind-tree-view.ts` 被 2–3 条线改过。
+- **`services/*.ts` 不能 `import { t } from "../i18n"`**（除已有 obsidian mock 的测试）：`node_modules/obsidian` 的 `main: ""`，会让直接 import 该服务的测试在**加载期** `ERR_MODULE_NOT_FOUND`。`export.ts` 因此无法用 `t("node.untitled")`，EN 空标题节点的导出仍按 `DEFAULT_NODE_TITLE`（中文）测量，与画布有细微差异——**待产品决策**（给导出加可选 `untitledTitle`，或给测试补 obsidian mock）。
+- `test/theme-menu-hover.test.ts` 的"顶层 `buildSync` 吞掉 11 条用例"问题仍在（见上一轮记录），全量数字里它只贡献 7 条。
+
+**未做 / 待办**
+
+- docs 漂移已在本轮同步 `AGENTS.md`（结构、计数、依赖方向、落点表、shim 段落）与 `docs/search-sidebar-spec.md` 的 key 引用；`docs/search-sidebar-spec.md` 本身仍是**临时契约**，长期内容宜并入 `docs/02`/`docs/05` 后删除。
+- 审计报告里明确「不做」的项：合并 `buildShell()`（235 行内约 120 处 `this.*`，是状态机不是装配层）、合并 `validateDocument`/`validateForest`、合并三处 Frontmatter 正则（拒绝条件不等价，数据安全红线）、`document-settings-state` 的 WeakMap 记账、视觉常量与格式字节。
+- `.audit/` 仍是 gitignored 草稿区（含本次报告与旧等价性指纹工具），未清理。
+- `manifest.json` 1.1.7→1.1.8 仍是开工前既有的未提交改动，**未提交**（由发布方确认）。
+
 

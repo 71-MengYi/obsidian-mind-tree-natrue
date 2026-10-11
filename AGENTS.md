@@ -2,7 +2,7 @@
 
 > 本文件是本仓库对 AI Agent（以及任何自动化协作者）的**唯一入口**：先在这里找到"该读什么、该改哪里、改完跑什么"，再动手。
 >
-> - 核对基线：2026-10-09，`master` @ `768bfc9`；远端 `git@github.com:71-MengYi/obsidian-mind-tree-natrue.git`（`natrue` 是历史拼写，**不要顺手改正**，改名会破坏安装链接）。
+> - 核对基线：2026-10-11（在 2026-10-09 `master` @ `768bfc9` 之上完成一轮「合并 / 简化」重构，落点与坑见 `docs/memory.md` 同日条目）；远端 `git@github.com:71-MengYi/obsidian-mind-tree-natrue.git`（`natrue` 是历史拼写，**不要顺手改正**，改名会破坏安装链接）。
 > - 规则优先级：`docs/` 产品与技术基线 **>** 本文件 **>** 其他约定。冲突时以 `docs/` 为准，并把本文件改对。
 > - 目录/命令/规则发生变化时，请同步更新本文件。
 
@@ -58,8 +58,8 @@
 ```
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
-├── src/                        源码（121 个 .ts，唯一的开发区域）
-├── test/                       单元测试（56 个 *.test.ts + test/helpers/）
+├── src/                        源码（141 个 .ts，唯一的开发区域）
+├── test/                       单元测试（71 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -81,30 +81,34 @@ mind-tree-nature/
 └── main.js                     ⚠ 构建产物，已 gitignore —— **不要提交、不要手工编辑**
 ```
 
-`src/` 分层（`main.ts` 之外 9 个根文件）：
+`src/` 分层（`main.ts` 之外 11 个根文件）：
 
 ```
 src/
-├── main.ts                    插件入口：注册视图/命令/设置页/文件事件，编排各服务（752 行）
+├── main.ts                    插件入口：注册视图/命令/设置页/文件事件，编排各服务（779 行）
 ├── types.ts                   ★ 领域模型类型（MindTreeDocument、MindTreeNode、ResourceRef、NodeMarker…）
-├── settings-model.ts          全局设置模型与默认值（DEFAULT_SETTINGS）
-├── settings.ts                设置页 MindTreeSettingTab
+├── settings-model.ts          全局设置模型与默认值（DEFAULT_SETTINGS）+ createParseOptions
+├── settings.ts                设置页 MindTreeSettingTab（分区表驱动）
 ├── plugin-data.ts             data.json 读写与规范化（只含 settings）
 ├── document-settings.ts       单树 6 项 YAML 设置的键名、默认值与规范化
 ├── document-settings-state.ts 运行时 YAML 归属（WeakMap，绝不进入文档/JSON）
-├── input-limits.ts            ★ 所有不可信输入的硬上限（体积/节点数/深度/JSON 嵌套）
-├── view-routing.ts            视图类型常量与 .mtn.md 路径判定
-├── domain/      (5)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts
-├── format/      (5)  .mtn.md 格式：document.ts、outline.ts、migrations.ts、document-identity.ts、resource-id.ts
+├── input-limits.ts            ★ 不可信输入硬上限 + asRecord/stringValue + exceedsNodeBudget/exceedsDepthBudget
+├── view-routing.ts            视图类型常量；isMindTreePath 转发自 format/resource-id（唯一判定）
+├── numeric.ts                 clamp（唯一实现）
+├── lru-cache.ts               evictOldest（唯一淘汰实现）
+├── domain/      (7)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts、custom-markers.ts、url.ts
+├── format/      (6)  .mtn.md 格式：document.ts、outline.ts、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
-├── services/   (20)  会话/冲突/资源/模板/导出/设置持久化等；updates/ 另有 7 个自更新文件
-└── ui/         (23)  视图与全部 DOM/SVG：
-    ├── components/     (13) view-shell、canvas-shell、工具栏、状态栏、预览、ui-object 基类
-    ├── controllers/    (12) 画布交互、键盘、拖拽、触摸手势、剪贴板、图片缩放、键盘避让…
+├── render/      (9)  ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、color、inline-math
+├── services/   (22)  会话/冲突/资源/模板/导出/设置持久化等；updates/ 另有 7 个自更新文件
+└── ui/         (20)  视图与全部 DOM/SVG：
+    ├── components/     (13) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、ui-object 基类
+    ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
     ├── renderers/       (4) node-renderer、connection-renderer、node-render-model
-    ├── menus/           (5) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助
+    ├── menus/           (6) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览
     ├── modals/         (10) 新建/删除/移动/导入/文件建议/更新提示等对话框
-    └── settings-pages/  (6) 基础设置、思维导图、主题笔记、插件更新分区
+    ├── settings-pages/  (7) 基础设置、思维导图、主题笔记、插件更新分区、管理标记
+    └── search/          (3) 搜索核心（search-core）、右侧搜索面板、搜索载荷
 ```
 
 ---
@@ -120,12 +124,16 @@ src/ui/                DOM 与 SVG；唯一可以碰 Obsidian View 的一层
     ↓
 src/services/          会话、冲突、资源索引、模板、更新、导出、持久化
     ↓
+src/render/            ★ 中性渲染层：布局/测量/徽标/主题/色槽/视口/颜色/行内公式（零 ui、零 Obsidian）
+    ↓
 src/format/ + i18n/    .mtn.md 解析/序列化/迁移/大纲；文案
     ↓
 src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试）
 ```
 
 **硬约束**：`ui/` 内的组件**不得**反向导入 `MindTreeView` 或插件主类（`docs/05-technical-design.md` §9.1）。界面事件先转成命名操作 → 领域命令产生新文档状态 → 视图重算并调用组件 `update()`。组件不得直接改文档模型。
+
+`render/` 只放纯函数与纯数据（可脱离 DOM 测试）；需要 Canvas、`getComputedStyle`、Obsidian DOM 扩展的 `Browser*` 适配器留在 `ui/`（`ui/text-measurer.ts`、`ui/resource-badges.ts`、`ui/image-nodes.ts`），并反向依赖 `render/`。这样 `services/export.ts` 可以与画布共用同一套布局与测量，而不必反过来 import `ui/`。
 
 ### 3.2 关键类与职责（约 85 个导出类，下列为改动热点）
 
@@ -134,7 +142,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
 | `MindTreeNaturePlugin` | `src/main.ts` | 注册视图/命令/设置页/文件事件，持有各服务，编排冲突清理与更新流程 |
-| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（约 3.4k 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
+| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3789 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
 | `MindTreeViewShell` / `CanvasShell` / `ViewMenuBar` / `TopToolbar` / `BottomStatusBar` / `StatusIndicator` | `src/ui/components/*` | 视图外壳、画布宿主、左上菜单栏、顶部工具栏、左下状态栏、状态提示层 |
 | `DisposableUiObject` / `DisposerBag` | `src/ui/components/ui-object.ts` | 所有 UI 对象的幂等销毁基类；新增 UI 模块必须接入 |
 
@@ -149,20 +157,25 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `ClipboardController` | `clipboard-controller.ts` | 结构化剪贴板 + 系统剪贴板兜底 |
 | `TouchGestureController` / `TouchGestureMachine` | `touch-gesture-controller.ts` / `touch-gesture.ts` | 触摸手势识别与分流 |
 | `ImageResizeController` / `KeyboardAvoidanceController` / `DeleteDetailsController` / `FileAssociationController` | 同名文件 | 图片缩放、移动端键盘避让、删除详情预览、Ctrl/Cmd+E 关联流程 |
+| `SearchController` | `search-controller.ts` | 右侧搜索窗口：面板、候选与正文缓存、陈旧读取三重判据（`createSearchController`） |
 
-**渲染与布局（`src/ui/`）**
+**渲染与布局（中性层 `src/render/` + DOM 适配 `src/ui/`）**
 
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
-| `NodeRenderer` | `renderers/node-renderer.ts` | 节点 DOM 渲染 |
-| `ConnectionRenderer` | `renderers/connection-renderer.ts` | 连线 SVG 几何与主题样式 |
-| `createNodeVisualState` | `renderers/node-render-model.ts` | 纯函数：节点 → 视觉状态 |
-| `layoutTree` / `connectionPath` / `getNodeSize` | `layout.ts` | 五种布局、节点尺寸与路径计算 |
-| `BrowserNodeTextMeasurer` / `measureRichTitle` / `renderRichTitleSvg` | `text-measurer.ts` | 用 Canvas 实测标题宽度并按富文本（markdown/行内公式）切行（画布与 PNG/SVG 导出共用） |
-| `BrowserResourceBadgeMeasurer` / `getNodeMarkerGeometry` | `resource-badges.ts` | 扩展名/专用徽标/自定义标记的测量与派生 |
-| `getNodeResourceControls` | `resource-badges.ts` | 节点尾部控件（打开按钮、同步关闭标志）统一来源 |
-| `MindTreeThemePreset` / `getBranchColorSlots` | `theme-presets.ts` / `presentation.ts` | 十套主题、十二色分支色槽 |
-| `ViewportState` 工具集 | `viewport.ts` | 缩放/平移（**会话状态，绝不写盘**） |
+| `NodeRenderer` | `ui/renderers/node-renderer.ts` | 节点 DOM 渲染 |
+| `ConnectionRenderer` | `ui/renderers/connection-renderer.ts` | 连线 SVG 几何与主题样式 |
+| `createNodeVisualState` | `ui/renderers/node-render-model.ts` | 纯函数：节点 → 视觉状态 |
+| `layoutTree` / `connectionPath` / `getNodeSize` | `render/layout.ts` | 五种布局、节点尺寸与路径计算（中性层，导出复用） |
+| `measureRichTitle` / `renderRichTitleSvg` / `escapeTitleXml` / `fallbackNodeTextMeasurer` | `render/text-measurer.ts` | 纯测量与富文本（markdown/行内公式）切行 |
+| `BrowserNodeTextMeasurer` | `ui/text-measurer.ts` | Canvas 实测标题宽度（DOM 适配器，反向依赖 `render/`） |
+| `getNodeMarkerGeometry` / `createResourceBadgePresentation` / `getNodeResourceControls` | `render/resource-badges.ts` | 扩展名/专用徽标/自定义标记的几何与派生 |
+| `BrowserResourceBadgeMeasurer` | `ui/resource-badges.ts` | 隐藏 probe 实测徽标宽高（DOM 适配器） |
+| `MindTreeThemePreset` / `getBranchColorSlots` | `render/theme-presets.ts` / `render/presentation.ts` | 十套主题、十二色分支色槽 |
+| `ViewportState` 工具集 | `render/viewport.ts` | 缩放/平移（**会话状态，绝不写盘**） |
+| `BrowserImageNodePresentation` | `ui/image-nodes.ts` | 图片节点呈现（纯尺寸计算在 `render/image-nodes.ts`） |
+| `applyMindTreeThemeDataset` | `ui/theme-dataset.ts` | 主题 dataset 的唯一赋值点（画布与只读预览共用） |
+| `clamp` / `evictOldest` / `readableTextColor` | `src/numeric.ts` / `src/lru-cache.ts` / `render/color.ts` | 数值夹紧、有界缓存淘汰、高亮底色可读色的单点实现 |
 
 **服务（`src/services/`）**
 
@@ -180,6 +193,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `renderBranchSvg` / `exportBranchPng` | `export.ts` | SVG/PNG 导出与安全图片嵌入 |
 | `parseTextLine` / `parseTextImport` | `text-links.ts` / `text-import.ts` | 粘贴与导入共用的行级解析 |
 | `SettingsPersistence` | `settings-persistence.ts` | 设置串行保存与外部更新接收 |
+| `SerialTaskQueue` | `serial-lane.ts` | 文件级串行队列的尾指针管理（失败保留 / 归一化两族语义显式区分） |
+| `PendingConflictMaintenance` | `pending-conflict-maintenance.ts` | 未决冲突日志与 vault/会话的对齐（800ms 防抖，ports 注入） |
 | `ReleaseClient` / `UpdateCoordinator` / `UpdateStore` / `WorkspaceUpdateHost` | `updates/*.ts` | 插件自更新：校验、事务安装、回滚、重启 |
 
 **格式与领域（`src/format/`、`src/domain/`）**
@@ -188,9 +203,11 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | --- | --- | --- |
 | `parseMindTreeFile` / `serializeMindTreeFile` | `format/document.ts` | `.mtn.md` 解析与序列化（含 gzip+Base64 数据区） |
 | `MindTreeMigrationFactory` / `mindTreeMigrationFactory` | `format/migrations.ts` | **唯一**版本迁移入口（v1→v2，逐级、失败不覆盖） |
-| `renderOutline` / `escapeMarkdown` | `format/outline.ts` | 由机器数据单向下发 Markdown 大纲 |
+| `renderOutline` | `format/outline.ts` | 由机器数据单向下发 Markdown 大纲 |
 | `restoreDocumentIdentity` | `format/document-identity.ts` | 只改身份标量的比较写入 |
 | `createShortResourceId` / `extractNonMarkdownResourceId` | `format/resource-id.ts` | 5 位资源 ID、`@`/`%` 分隔符、历史 `~mtn-` 兼容 |
+| `isMindTreePath` / `isMarkdownPath` / `sanitizeFileTitle` | `format/resource-id.ts` | `.mtn.md` 判定与文件名清洗的唯一来源（`view-routing` 只转发） |
+| `parseSafeHttpUrl` / `isSafeHttpUrl` | `domain/url.ts` | 唯一 URL 校验（http/https） |
 | 树操作：`addNode` / `moveNodes` / `deleteBranches` / `extractBranches` / `insertBranches` … | `domain/tree.ts` | 纯函数树命令（配合撤销栈） |
 | `getDocumentTreeIndex` | `domain/tree-index.ts` | 父节点/深度/文档序索引（WeakMap 失效） |
 | `normalizeRuntimeNode` / `normalizeNodeMarkers` | `domain/runtime-node.ts` / `domain/markers.ts` | 不可信数据的运行时校验 |
@@ -202,7 +219,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 设计文档中的名字 | 代码落点 |
 | --- | --- |
 | `MindTreeView` | `src/ui/mind-tree-view.ts` |
-| `TreeCanvas` | `src/ui/components/canvas-shell.ts` + `ui/renderers/*` + `ui/controllers/*` + `ui/layout.ts` |
+| `TreeCanvas` | `src/ui/components/canvas-shell.ts` + `ui/renderers/*` + `ui/controllers/*` + `render/layout.ts` |
 | `TreeCommandService` | `src/domain/tree.ts`（纯命令）+ `src/services/document-session.ts`（历史） |
 | `DocumentRepository` | `src/format/document.ts`（+ `outline.ts`、`document-identity.ts`） |
 | `MindTreeMigrationFactory` | `src/format/migrations.ts`（同名） |
@@ -245,7 +262,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，56 个文件，约 500 个用例）+ `test/helpers/`（1 个共享桩）。
+- 位置：`test/*.test.ts`（**平铺**，71 个文件，686 个用例）+ `test/helpers/`（1 个共享桩）。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -359,15 +376,15 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改单树设置 | `src/document-settings.ts`、`src/document-settings-state.ts`、`src/ui/menus/tree-settings-menu.ts` | `docs/03-document-format.md` §7、`docs/05-technical-design.md` §9.4 | `test/document-settings-state.test.ts`、`test/format.test.ts` |
 | 改文件格式/解析/迁移 | `src/format/document.ts`、`migrations.ts`、`document-identity.ts` | `docs/03-document-format.md` 全篇、`docs/05-technical-design.md` §9.4 | `test/format.test.ts`、`test/identity-repair.test.ts`、`test/document-conflict.test.ts` |
 | 改树操作（增/删/移/复制） | `src/domain/tree.ts`、`src/domain/clipboard-payload.ts` | `docs/02-interface-interactions.md` §6.4–6.5、§6.10 | `test/tree.test.ts`、`test/exchange.test.ts` |
-| 改布局/节点尺寸 | `src/ui/layout.ts`、`src/ui/text-measurer.ts` | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/performance.test.ts` |
-| 改节点渲染/徽标/样式 | `src/ui/renderers/*`、`src/ui/resource-badges.ts`、`styles.css` | `docs/02-interface-interactions.md` §5.5 | `test/styles.test.ts`、`test/resource-badges.test.ts`、`test/ui-modules.test.ts` |
-| 改画布交互/手势/拖拽 | `src/ui/controllers/*`、`src/ui/viewport.ts`、`src/ui/drop-placement.ts` | `docs/02-interface-interactions.md` §6.3、`docs/05-technical-design.md` §12.1 | `test/pointer-operations.test.ts`、`test/touch-gesture.test.ts`、`test/touch-routing.test.ts`、`test/drop-placement.test.ts` |
+| 改布局/节点尺寸 | `src/render/layout.ts`、`src/render/text-measurer.ts`（Canvas 适配在 `src/ui/text-measurer.ts`） | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/performance.test.ts` |
+| 改节点渲染/徽标/样式 | `src/ui/renderers/*`、`src/render/resource-badges.ts`（DOM 适配在 `src/ui/resource-badges.ts`）、`styles.css` | `docs/02-interface-interactions.md` §5.5 | `test/styles.test.ts`、`test/resource-badges.test.ts`、`test/ui-modules.test.ts` |
+| 改画布交互/手势/拖拽 | `src/ui/controllers/*`、`src/render/viewport.ts`、`src/ui/drop-placement.ts` | `docs/02-interface-interactions.md` §6.3、`docs/05-technical-design.md` §12.1 | `test/pointer-operations.test.ts`、`test/touch-gesture.test.ts`、`test/touch-routing.test.ts`、`test/drop-placement.test.ts` |
 | 改文件关联/索引/缓存 | `src/services/resource-index.ts`、`resource-catalog.ts`、`resource-identity.ts`、`local-resource-cache.ts`、`linked-resource-sync.ts` | `docs/04-resource-index.md` 全篇 | `test/resource-index-service.test.ts`、`test/resource-catalog.test.ts`、`test/resource-identity.test.ts`、`test/local-resource-cache.test.ts` |
 | 改冲突/未决版本/保存 | `src/services/version-conflict-coordinator.ts`、`pending-conflict-store.ts`、`document-conflict.ts`、`document-session.ts`、`mind-tree-session-registry.ts` | `docs/05-technical-design.md` §11 | `test/version-conflict.test.ts`、`test/pending-conflict-store.test.ts`、`test/safety.test.ts`、`test/document-session.test.ts` |
 | 改模板文件流程 | `src/services/template-files.ts` | `docs/05-technical-design.md` §9.1 | `test/template-files.test.ts` |
 | 改导入/粘贴 | `src/services/text-import.ts`、`text-links.ts`、`text-url.ts`、`clipboard.ts`、`src/ui/paste-routing.ts` | `docs/02-interface-interactions.md` §6.10 | `test/text-import.test.ts`、`test/text-links.test.ts`、`test/exchange.test.ts`、`test/paste-routing.test.ts` |
 | 改导出（PNG/SVG/Markdown） | `src/services/export.ts` | `docs/02-interface-interactions.md` §6.10 | `test/exchange.test.ts` |
-| 改主题/配色/连线 | `src/ui/theme-presets.ts`、`src/ui/presentation.ts`、`styles.css` | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/styles.test.ts` |
+| 改主题/配色/连线 | `src/render/theme-presets.ts`、`src/render/presentation.ts`、`styles.css` | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/styles.test.ts` |
 | 改插件自更新 | `src/services/updates/*` | `.github/workflows/release.yml` 注释、`docs/05-technical-design.md` | `test/plugin-updates.test.ts`、`test/update-workspace-host.test.ts` |
 | 改设置持久化 / `data.json` | `src/plugin-data.ts`、`src/services/settings-persistence.ts` | `docs/05-technical-design.md` §11.1 末段 | `test/plugin-data.test.ts`、`test/settings-persistence.test.ts` |
 | 改命令/菜单契约 | `src/main.ts`、`src/ui/ui-contracts.ts`、`src/ui/menus/*` | `docs/02-interface-interactions.md` §5.2–5.3、§6.6 | `test/ui-modules.test.ts` |
@@ -394,9 +411,9 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 1. **版本号双轨**：`manifest.json` 是 `1.1.5`，`package.json` 是 `0.1.0`。发布版本只看 `manifest.json`，且必须与标签严格一致（`X.Y.Z`，无前后缀）。
 2. **`test/styles.test.ts` 是"源码字符串测试"**：它直接读取 `styles.css` 与 `src/ui/mind-tree-view.ts`、`src/ui/renderers/node-renderer.ts`。改 CSS 类名、或改这两个文件里的类名字符串，可能连带弄红它——改前先看断言。
 3. **i18n 占位符必须成对**：`{version}`、`{path}` 等在两语言中必须一致，缺一个 `test/i18n.test.ts` 就报错。
-4. **`src/ui/clipboard-controller.ts`、`src/ui/modals.ts`、`src/ui/components/index.ts` 等是兼容 shim / barrel**（部分标记 `@deprecated`）：新代码请从 `ui/controllers/`、`ui/modals/*` 等真实模块导入，别再往 shim 里加逻辑。
+4. **barrel 与已删 shim**：`src/ui/modals.ts`、`src/ui/clipboard-controller.ts` 已在 2026-10-11 删除（前者由 `ui/modals/index.ts` 承接，后者零引用）；`src/ui/components/index.ts`、`src/ui/controllers/index.ts`、`src/ui/renderers/index.ts`、`src/ui/menus/index.ts` 仍是 barrel，且**不是全目录**（controllers 缺 `delete-details-controller`、menus 缺 `theme-menu-hover`）——新代码优先直接从真实模块导入，别再往 shim 里加逻辑。
 5. **测试同进程**：`--test-isolation=none` 意味着不要依赖跨文件的全局状态；测试要用独立实例与可注入端口。
-6. **视口与折叠是会话状态**：`viewport.ts` 的值永不落盘；折叠只影响展示，导出时展开。
+6. **视口与折叠是会话状态**：`render/viewport.ts` 的值永不落盘；折叠只影响展示，导出时展开。
 7. **UI 组件禁止反向导入**：`ui/components`、`ui/renderers` 不得 import `MindTreeView` 或插件主类；渲染器只读渲染状态。
 8. **移动端限制**：不要用 `fs`、`path`、`child_process` 等 Node 能力完成核心功能；Electron 只在桌面端点按后动态 `import`。
 9. **设计文档名与代码名不同**（见 §3.3）：按概念名 grep 是找不到的，先换算再检索。
@@ -404,4 +421,4 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ---
 
-*最后核对：2026-10-09 · `master` @ `768bfc9` · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准。*
+*最后核对：2026-10-11 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；本轮「合并/简化」重构的落点、未完成项与环境坑见 `docs/memory.md` 2026-10-11 条目。*

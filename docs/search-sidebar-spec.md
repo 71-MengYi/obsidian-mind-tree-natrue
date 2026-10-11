@@ -277,7 +277,7 @@ DOM / 结构要求（`test/search-panel.test.ts` 固化，注意 `test/styles.te
 | `search.panel.empty` | `No matches` | `没有匹配` |
 | `search.panel.loading` | `Searching…` | `正在搜索…` |
 | `search.panel.truncated` | `Only the first {count} hits are shown` | `仅显示前 {count} 条命中` |
-| `shortcut.search` | `Search nodes` | `搜索节点` |
+| `toolbar.search` | `Search nodes` | `搜索节点` |
 | `search.panel.clear` | `Clear search` | `清空搜索` |
 
 约束：占位符 `{count}` 两种语言必须一致；`test/i18n.test.ts` 要求 EN/ZH key 集合与非空文本一致。
@@ -330,7 +330,7 @@ DOM / 结构要求（`test/search-panel.test.ts` 固化，注意 `test/styles.te
 - 搜索数据来源：当前文档节点 + `plugin.resources` 解析出的文件；只有 `.md` 文件读内容；跳过当前视图自身的 `.mtn.md`。
 - 点击标题：展开祖先 → `selectOnly` → `centerNodeInViewport`（复用既有私有方法）。
 - 点击内容行：`.md` 直接 `leaf.openFile(file, { eState: { line, ch: 0 } })`；`.mtn.md` 走 `openLinkedFile` 打开导图（不跳行）。
-- i18n key 见第 4 节；`keyboard-help.ts` 的 `shortcut.search` 行由 docs 队友补。
+- i18n key 见第 4 节（2026-10-11 起搜索入口复用 `toolbar.search`，原 `shortcut.search` 已合并删除）；`keyboard-help-menu.ts` 的快捷键帮助行由 docs 队友补。
 
 ## 7. 环境与验证（本沙箱）
 
