@@ -1,4 +1,6 @@
 import { createManagedMindTreeSnapshot } from "./document-conflict";
+import { SerialTaskQueue } from "./serial-lane";
+import { isMindTreePath } from "../format/resource-id";
 import type { ParseMindTreeOptions } from "../format/document";
 
 export interface PendingTitleDraft {
@@ -91,7 +93,7 @@ export function validatePendingConflict(value: unknown, options: ParseMindTreeOp
   const record = value as PendingConflictRecord;
   if (record.version !== 1 || !safeId(record.id) || typeof record.path !== "string"
     || record.path !== canonicalTreePath(record.path) || record.path.split("/").some((part) => !part || part === ".." || part === ".")
-    || !record.path.toLowerCase().endsWith(".mtn.md")
+    || !isMindTreePath(record.path)
     || typeof record.baselineSource !== "string" || typeof record.currentSource !== "string") {
     throw new Error("Invalid pending conflict locator.");
   }
@@ -122,7 +124,7 @@ export function validatePendingConflict(value: unknown, options: ParseMindTreeOp
 
 /** All journal operations are serialized, verified, and restricted to this client. */
 export class PendingConflictStore {
-  private tail: Promise<unknown> = Promise.resolve();
+  private readonly journalLane = new SerialTaskQueue();
   readonly directory: string;
 
   constructor(private readonly io: PendingConflictIO, pluginDirectory: string, clientId: string,
@@ -132,9 +134,7 @@ export class PendingConflictStore {
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.tail.catch(() => undefined).then(task);
-    this.tail = next;
-    return next;
+    return this.journalLane.serial(task);
   }
 
   private async records(): Promise<PendingConflictRecord[]> {

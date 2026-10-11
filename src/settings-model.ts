@@ -2,6 +2,7 @@ import {
   DEFAULT_NON_MARKDOWN_RESOURCE_ID_SEPARATOR,
   type NonMarkdownResourceIdSeparator
 } from "./format/resource-id";
+import type { ParseMindTreeOptions } from "./format/document";
 import type { CustomMarkerDefinition } from "./domain/custom-markers";
 import type {
   MindTreeCollectionMode,
@@ -69,3 +70,18 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   connectionStyle: "theme",
   nodeShape: "rounded"
 };
+
+/**
+ * Global preferences only fill YAML properties absent from a file. Kept here as
+ * the single mapping so parsing, identity writes and conflict snapshots cannot
+ * drift apart.
+ */
+export function createParseOptions(settings: MindTreeSettings): Readonly<ParseMindTreeOptions> {
+  return {
+    defaultLayoutMode: settings.defaultLayoutMode,
+    defaultTheme: settings.theme,
+    defaultNodeShape: settings.nodeShape,
+    defaultCollectionMode: settings.defaultCollectionMode,
+    defaultConnectionStyle: settings.connectionStyle
+  };
+}

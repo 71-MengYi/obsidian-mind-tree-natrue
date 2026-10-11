@@ -3,8 +3,10 @@
  * An external-settings notification invalidates queued snapshots immediately,
  * even when an earlier save is still waiting for I/O.
  */
+import { SerialTaskQueue } from "./serial-lane";
+
 export class SettingsPersistence<T> {
-  private tail: Promise<unknown> = Promise.resolve();
+  private readonly lane = new SerialTaskQueue();
   private generation = 0;
   private disposed = false;
   private retry?: ReturnType<typeof setTimeout>;
@@ -20,9 +22,8 @@ export class SettingsPersistence<T> {
   }) {}
 
   private serial(task: () => Promise<void>): Promise<void> {
-    const next = this.tail.then(task);
-    this.tail = next.catch(() => undefined);
-    return next;
+    // The stored tail must stay resolved; `flush()` compares it by reference.
+    return this.lane.serialNormalized(task);
   }
 
   reload(): Promise<void> {
@@ -87,7 +88,7 @@ export class SettingsPersistence<T> {
   /** Unlike ordinary UI saves, update preparation must observe failed writes. */
   async flush(): Promise<void> {
     let tail: Promise<unknown>;
-    do { tail = this.tail; await tail; } while (tail !== this.tail);
+    do { tail = this.lane.settledTail; await tail; } while (tail !== this.lane.settledTail);
     if (this.disposed || this.readFailed || this.lastFailure || this.retry !== undefined) {
       throw this.lastFailure ?? new Error("Settings have not been saved.");
     }

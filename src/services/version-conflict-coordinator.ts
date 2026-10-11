@@ -7,6 +7,7 @@ import { assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTr
 import { canonicalTreePath, type PendingConflictEntry, type PendingConflictRecord, type PendingConflictStore, type PendingTitleDraft } from "./pending-conflict-store";
 import { rebaseTreeSettings, TREE_SETTING_KEYS } from "../document-settings-state";
 import { restoreDocumentIdentity } from "../format/document-identity";
+import { SerialTaskQueue } from "./serial-lane";
 
 export interface VersionPreviewState {
   readonly mode: "comparison" | "identity" | "invalid" | "metadata";
@@ -69,7 +70,7 @@ export class VersionConflictCoordinator {
   private readRequested = false;
   private readDrain?: Promise<void>;
   private stage?: Promise<void>;
-  private operationTail: Promise<unknown> = Promise.resolve();
+  private readonly operationLane = new SerialTaskQueue();
   private assessmentKind: "comparison" | "identity" | "invalid" | "metadata" = "metadata";
   private originalId?: string;
 
@@ -91,9 +92,7 @@ export class VersionConflictCoordinator {
   }
 
   private serial<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.operationTail.catch(() => undefined).then(task);
-    this.operationTail = next;
-    return next;
+    return this.operationLane.serial(task);
   }
 
   /** Capture at the user click, before waiting for another file write. */
@@ -201,7 +200,7 @@ export class VersionConflictCoordinator {
 
   async settle(): Promise<void> {
     await this.stage?.catch(() => undefined);
-    await this.operationTail.catch(() => undefined);
+    await this.operationLane.settledTail.catch(() => undefined);
     if (this.record && !this.durable) await this.persist();
   }
 

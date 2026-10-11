@@ -12,15 +12,19 @@ export type { MindTreeSettings } from "./settings-model";
  * Cross-tree preferences remain in plugin data. Layout, theme, connection and
  * shape preferences are runtime defaults for trees without their own value;
  * active values live per document.
+ *
+ * One row per tab: the same entry drives the tab strip, the active-page type and
+ * the panel factory, so a new page cannot be added to only part of the UI.
+ * `create` stays lazy so only the active page's class is instantiated.
  */
-type SettingsPage = "basic" | "mind-map" | "topic-notes" | "custom-markers";
+const SETTINGS_PAGES = [
+  { id: "basic", label: "settings.tabs.basic", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new BasicSettingsPage(panel, port) },
+  { id: "mind-map", label: "settings.tabs.mindMap", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new MindMapSettingsPage(panel, port) },
+  { id: "topic-notes", label: "settings.tabs.topicNotes", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new TopicNoteSettingsPage(panel, port) },
+  { id: "custom-markers", label: "settings.tabs.customMarkers", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new CustomMarkersSettingsPage(panel, port) }
+] as const satisfies ReadonlyArray<{ id: string; label: TranslationKey; create: (panel: HTMLElement, port: SettingsPagePort) => SettingsPageObject }>;
 
-const SETTINGS_PAGES: ReadonlyArray<{ id: SettingsPage; label: TranslationKey }> = [
-  { id: "basic", label: "settings.tabs.basic" },
-  { id: "mind-map", label: "settings.tabs.mindMap" },
-  { id: "topic-notes", label: "settings.tabs.topicNotes" },
-  { id: "custom-markers", label: "settings.tabs.customMarkers" }
-];
+type SettingsPage = (typeof SETTINGS_PAGES)[number]["id"];
 
 export class MindTreeSettingTab extends PluginSettingTab {
   private activePage: SettingsPage = "basic";
@@ -54,10 +58,8 @@ export class MindTreeSettingTab extends PluginSettingTab {
         subscribe: (listener) => this.plugin.updates.subscribe(listener)
       }
     };
-    if (this.activePage === "basic") this.page = new BasicSettingsPage(panel, port);
-    else if (this.activePage === "mind-map") this.page = new MindMapSettingsPage(panel, port);
-    else if (this.activePage === "topic-notes") this.page = new TopicNoteSettingsPage(panel, port);
-    else this.page = new CustomMarkersSettingsPage(panel, port);
+    const active = SETTINGS_PAGES.find((entry) => entry.id === this.activePage) ?? SETTINGS_PAGES[0];
+    this.page = active.create(panel, port);
     this.tooltips = new AdaptiveTooltipController(containerEl);
   }
 

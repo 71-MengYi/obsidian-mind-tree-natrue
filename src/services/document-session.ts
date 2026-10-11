@@ -1,6 +1,7 @@
 import { cloneDocument } from "../domain/tree";
 import type { MindTreeDocument } from "../types";
 import { rebaseTreeSettings, restoreTreeSettingsHistory, type TreeSettingKey } from "../document-settings-state";
+import { SerialTaskQueue } from "./serial-lane";
 
 export class SaveConflictError extends Error {
   constructor() {
@@ -31,7 +32,7 @@ export class DocumentSession {
   private saveTask?: () => Promise<boolean>;
   private undoStack: MindTreeDocument[] = [];
   private redoStack: MindTreeDocument[] = [];
-  private writeTail: Promise<unknown> = Promise.resolve();
+  private readonly writeLane = new SerialTaskQueue();
 
   load(source: string): void {
     this.baselineSource = source;
@@ -83,9 +84,7 @@ export class DocumentSession {
 
   /** Saves, explicit version choices and identity writes share one atomic lane. */
   runExclusiveWrite<T>(task: () => Promise<T>): Promise<T> {
-    const next = this.writeTail.catch(() => undefined).then(task);
-    this.writeTail = next;
-    return next;
+    return this.writeLane.serial(task);
   }
 
   undo(document: MindTreeDocument): MindTreeDocument | undefined {

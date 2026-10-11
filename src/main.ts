@@ -1,19 +1,20 @@
 import { addIcon, normalizePath, Notice, Platform, Plugin, removeIcon, requestUrl, requireApiVersion, TFile, WorkspaceLeaf, type ViewState, type ViewStateResult } from "obsidian";
 import { around } from "monkey-around";
-import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile } from "./format/document";
+import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile, type ParseMindTreeOptions } from "./format/document";
 import { t } from "./i18n";
-import { createManagedMindTreeSnapshot } from "./services/document-conflict";
 import { ResourceIndexService, type ResourceIndexProgress, type ResourceIndexReport } from "./services/resource-index";
 import { LocalResourceCache } from "./services/local-resource-cache";
 import { SettingsPersistence, removeLegacyResourceIndex } from "./services/settings-persistence";
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
-import { PendingConflictStore, resolvePendingConflict, type PendingConflictEntry } from "./services/pending-conflict-store";
+import { PendingConflictStore } from "./services/pending-conflict-store";
+import { PendingConflictMaintenance } from "./services/pending-conflict-maintenance";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
 import { MindTreeOpenCoordinator } from "./services/mind-tree-open-coordinator";
 import { canonicalTreePath } from "./services/pending-conflict-store";
 import { normalizePluginData, type PluginData } from "./plugin-data";
 import { DEFAULT_SETTINGS, MindTreeSettingTab, type MindTreeSettings } from "./settings";
+import { createParseOptions } from "./settings-model";
 import {
   CHAIN_BROKEN_ICON,
   CHAIN_BROKEN_ICON_SVG,
@@ -21,7 +22,7 @@ import {
   SHARE_SQUARE_ICON_SVG,
 } from "./ui/icons";
 import { MindTreeView } from "./ui/mind-tree-view";
-import { CreateMindTreeModal, PluginUpdateModal, TextPromptModal } from "./ui/modals";
+import { CreateMindTreeModal, PluginUpdateModal, TextPromptModal } from "./ui/modals/index";
 import { LAYOUT_OPTIONS } from "./ui/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
 import { ReleaseClient, UpdateError } from "./services/updates/release-client";
@@ -54,6 +55,7 @@ export default class MindTreeNaturePlugin extends Plugin {
   private readonly updateActivity = new UpdateActivity();
   private updateUnloadTask: Promise<void> = Promise.resolve();
   private coreInitialized = false;
+  private conflictMaintenance!: PendingConflictMaintenance<TFile>;
 
 
   async onload(): Promise<void> {
@@ -111,6 +113,31 @@ export default class MindTreeNaturePlugin extends Plugin {
       "discardTemplateFile", "importExternalFile", "importClipboardImage", "renameLinkedFile",
       "moveLinkedFile", "trashLinkedFile"
     ]));
+    // Journal maintenance owns its debounce timers and decisions; vault reads,
+    // view refreshes and notices stay here as thin ports.
+    this.conflictMaintenance = new PendingConflictMaintenance<TFile>({
+      pendingConflicts: this.pendingConflicts,
+      resources: this.resources,
+      sessions: this.mindTreeSessions,
+      vaultFiles: () => this.app.vault.getFiles(),
+      documentIdAt: (file) => {
+        const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.["documentId"];
+        return typeof value === "string" && value ? value : undefined;
+      },
+      parseOptions: () => this.documentParseOptions(),
+      refreshOpenViews: (path) => {
+        for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+          if (leaf.view instanceof MindTreeView && leaf.view.file?.path === path) leaf.view.checkExternalVersion();
+        }
+      },
+      clock: {
+        setTimeout: (handler, delayMs) => window.setTimeout(handler, delayMs),
+        clearTimeout: (handle) => window.clearTimeout(handle)
+      },
+      noticeStorageError: (error) => new Notice(t("conflict.storageError", { message: String(error) }), 0),
+      noticeDiscarded: (paths) => new Notice(t("conflict.discarded", { paths: [...paths].sort().join("\n") }), 0),
+      isUnloading: () => this.unloading
+    });
     addIcon(SHARE_SQUARE_ICON, SHARE_SQUARE_ICON_SVG);
     this.register(() => removeIcon(SHARE_SQUARE_ICON));
     addIcon(CHAIN_BROKEN_ICON, CHAIN_BROKEN_ICON_SVG);
@@ -141,57 +168,12 @@ export default class MindTreeNaturePlugin extends Plugin {
         return true;
       }
     });
-    this.addCommand({
-      id: "add-child-node",
-      name: t("command.addChild"),
-      checkCallback: (checking) => {
-        const view = this.activeMindTreeView();
-        if (!view) return false;
-        if (!checking) view.addChildNode();
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "undo-mind-tree-change",
-      name: t("command.undo"),
-      checkCallback: (checking) => {
-        const view = this.activeMindTreeView();
-        if (!view) return false;
-        if (!checking) view.undo();
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "redo-mind-tree-change",
-      name: t("command.redo"),
-      checkCallback: (checking) => {
-        const view = this.activeMindTreeView();
-        if (!view) return false;
-        if (!checking) view.redo();
-        return true;
-      }
-    });
-    this.addCommand({
-      id: "fit-mind-tree-canvas",
-      name: t("command.fitCanvas"),
-      checkCallback: (checking) => {
-        const view = this.activeMindTreeView();
-        if (!view) return false;
-        if (!checking) view.fitCanvas();
-        return true;
-      }
-    });
+    this.addViewCommand("add-child-node", t("command.addChild"), (view) => view.addChildNode());
+    this.addViewCommand("undo-mind-tree-change", t("command.undo"), (view) => view.undo());
+    this.addViewCommand("redo-mind-tree-change", t("command.redo"), (view) => view.redo());
+    this.addViewCommand("fit-mind-tree-canvas", t("command.fitCanvas"), (view) => view.fitCanvas());
     for (const option of LAYOUT_OPTIONS) {
-      this.addCommand({
-        id: `set-mind-tree-layout-${option.value}`,
-        name: t(option.command),
-        checkCallback: (checking) => {
-          const view = this.activeMindTreeView();
-          if (!view) return false;
-          if (!checking) view.setLayoutMode(option.value);
-          return true;
-        }
-      });
+      this.addViewCommand(`set-mind-tree-layout-${option.value}`, t(option.command), (view) => view.setLayoutMode(option.value));
     }
 
     this.registerEvent(this.app.workspace.on("file-menu", (menu, file, _source, leaf) => {
@@ -274,10 +256,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     if (!this.coreInitialized) return;
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
     if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
-    if (this.scheduledConflictCleanup !== undefined) window.clearTimeout(this.scheduledConflictCleanup);
-    this.scheduledConflictCleanup = undefined;
-    if (this.discardedConflictNotice !== undefined) window.clearTimeout(this.discardedConflictNotice);
-    this.discardedConflictNotice = undefined;
+    if (this.conflictMaintenance !== undefined) this.conflictMaintenance.cancel();
     // Only a disposable local cache is flushed at unload, never old user settings.
     this.resourceCache?.save(this.resources?.entries() ?? []);
     this.settingsPersistence?.destroy();
@@ -458,12 +437,8 @@ export default class MindTreeNaturePlugin extends Plugin {
     new Notice(t("resourceIndex.failed"));
   }
 
-  private documentParseOptions() {
-    return {
-      defaultLayoutMode: this.settings.defaultLayoutMode, defaultTheme: this.settings.theme,
-      defaultNodeShape: this.settings.nodeShape, defaultCollectionMode: this.settings.defaultCollectionMode,
-      defaultConnectionStyle: this.settings.connectionStyle
-    };
+  private documentParseOptions(): Readonly<ParseMindTreeOptions> {
+    return createParseOptions(this.settings);
   }
 
   /** Session-owned I/O ports remain valid after the last view closes. */
@@ -526,13 +501,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     let identityWriteSource: string | undefined;
     const writeIdentity = async (): Promise<void> => {
       await this.app.vault.process(file, (source) => {
-        const parsed = parseMindTreeFile(source, {
-          defaultLayoutMode: this.settings.defaultLayoutMode,
-          defaultTheme: this.settings.theme,
-          defaultNodeShape: this.settings.nodeShape,
-          defaultCollectionMode: this.settings.defaultCollectionMode,
-          defaultConnectionStyle: this.settings.connectionStyle
-        });
+        const parsed = parseMindTreeFile(source, this.documentParseOptions());
         const currentDocumentId = parsed.document.documentId;
         // Vault.process applies this compare-and-set to the latest file contents.
         // A concurrent first-link operation therefore adopts the winning ID
@@ -554,13 +523,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       else await writeIdentity();
 
       const verifiedSource = await this.app.vault.read(this.app.vault.getFileByPath(file.path) ?? file);
-      const verified = parseMindTreeFile(verifiedSource, {
-        defaultLayoutMode: this.settings.defaultLayoutMode,
-        defaultTheme: this.settings.theme,
-        defaultNodeShape: this.settings.nodeShape,
-        defaultCollectionMode: this.settings.defaultCollectionMode,
-        defaultConnectionStyle: this.settings.connectionStyle
-      });
+      const verified = parseMindTreeFile(verifiedSource, this.documentParseOptions());
       if (verified.document.documentId !== persistedDocumentId) {
         throw new Error("The mind-tree identity changed before it could be verified.");
       }
@@ -635,101 +598,18 @@ export default class MindTreeNaturePlugin extends Plugin {
   }
 
   /**
-   * Keep the journal aligned with the vault: a record whose file was deleted
-   * (or whose path now holds a different document) is dropped instead of being
-   * reported forever, and a uniquely identified move re-points the record
-   * rather than turning the moved tree into a permanent conflict.
+   * Pending-version journal maintenance (rebind a uniquely identified move,
+   * drop records whose document is gone, report one notice per burst) lives in
+   * `services/pending-conflict-maintenance.ts`; these thin wrappers keep the
+   * existing call sites and unload wiring local.
    */
-  private async reportUnlocatedPendingVersions(): Promise<void> {
-    try {
-      const entries = await this.pendingConflicts.pendingRecords();
-      if (!entries.length) return;
-      const indexed = this.resources.entries();
-      const discarded: string[] = [];
-      for (const entry of entries) {
-        const documentId = this.pendingDocumentId(entry);
-        const live = this.vaultTreeAt(entry.path);
-        // Indexed identities only: a path that merely exists is not a relocation.
-        const identityPaths = documentId
-          ? indexed.filter((candidate) => candidate.resourceId === documentId).map((candidate) => canonicalTreePath(candidate.path))
-          : [];
-        // Same path, different established identity: the record now belongs to a
-        // document that no longer exists, so it must not block the live file.
-        const decision = resolvePendingConflict({
-          ...(documentId ? { recordDocumentId: documentId } : {}),
-          ...(live ? { recordedPathDocumentId: this.vaultDocumentId(live) } : {}),
-          recordedPathExists: Boolean(live),
-          identityPaths,
-          recordPath: entry.path
-        });
-        if (decision.kind === "live" || decision.kind === "retain") continue;
-        if (decision.kind === "rebind") {
-          const target = canonicalTreePath(decision.path);
-          // Never merge two records onto one locator; leave it for the next pass.
-          if (entries.some((other) => other.path === target)) continue;
-          await this.pendingConflicts.rekey(entry, target);
-          await this.mindTreeSessions.get(entry.path)?.conflict?.rename(target);
-          continue;
-        }
-        await this.pendingConflicts.remove(entry);
-        await this.discardSessionConflict(entry.path);
-        discarded.push(entry.path);
-      }
-      if (discarded.length) this.reportDiscardedVersions(discarded);
-    } catch (error) { new Notice(t("conflict.storageError", { message: String(error) }), 0); }
-  }
-
-  private scheduledConflictCleanup?: number;
-  private discardedConflictPaths = new Set<string>();
-  private discardedConflictNotice?: number;
-
-  /** One notice per delete burst instead of one per file. */
-  private reportDiscardedVersions(paths: readonly string[]): void {
-    for (const path of paths) this.discardedConflictPaths.add(path);
-    if (this.discardedConflictNotice !== undefined) window.clearTimeout(this.discardedConflictNotice);
-    this.discardedConflictNotice = window.setTimeout(() => {
-      this.discardedConflictNotice = undefined;
-      const reported = [...this.discardedConflictPaths];
-      this.discardedConflictPaths.clear();
-      if (reported.length) new Notice(t("conflict.discarded", { paths: reported.sort().join("\n") }), 0);
-    }, 800);
+  private reportUnlocatedPendingVersions(): Promise<void> {
+    return this.conflictMaintenance.reportUnlocated();
   }
 
   /** Delete/rename bursts settle first; the vault index is read afterwards. */
   private scheduleConflictCleanup(): void {
-    if (this.unloading) return;
-    if (this.scheduledConflictCleanup !== undefined) window.clearTimeout(this.scheduledConflictCleanup);
-    this.scheduledConflictCleanup = window.setTimeout(() => {
-      this.scheduledConflictCleanup = undefined;
-      void this.reportUnlocatedPendingVersions();
-    }, 800);
-  }
-
-  private vaultTreeAt(path: string): TFile | undefined {
-    const target = canonicalTreePath(path);
-    return this.app.vault.getFiles().find((file) => isMindTreePath(file.path) && canonicalTreePath(file.path) === target);
-  }
-
-  private vaultDocumentId(file: TFile): string | undefined {
-    const value: unknown = this.app.metadataCache.getFileCache(file)?.frontmatter?.["documentId"];
-    return typeof value === "string" && value ? value : undefined;
-  }
-
-  /** Identity from the frozen baseline: never from the in-memory candidate. */
-  private pendingDocumentId(entry: PendingConflictEntry): string | undefined {
-    return createManagedMindTreeSnapshot(entry.record.baselineSource, this.documentParseOptions()).documentId;
-  }
-
-  /** Unlock a session whose file is gone so the view stops reporting a conflict. */
-  private async discardSessionConflict(path: string): Promise<void> {
-    const session = this.mindTreeSessions.get(path);
-    if (!session?.conflict?.active) return;
-    await session.conflict.discard();
-    if (this.vaultTreeAt(path)) {
-      for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
-        if (leaf.view instanceof MindTreeView && leaf.view.file?.path === session.path) leaf.view.checkExternalVersion();
-      }
-    }
+    this.conflictMaintenance.schedule();
   }
 
   /** Restored leaves may predate routing hooks; keep one owner without focus changes. */
@@ -863,6 +743,23 @@ export default class MindTreeNaturePlugin extends Plugin {
     } catch (error) {
       new Notice(t("notice.createTreeFailed", { message: error instanceof Error ? error.message : String(error) }));
     }
+  }
+
+  /**
+   * Commands that act on the active tree share one guard: unavailable without
+   * an active Mind Tree view, and a `checking` pass must never run the action.
+   */
+  private addViewCommand(id: string, name: string, run: (view: MindTreeView) => void): void {
+    this.addCommand({
+      id,
+      name,
+      checkCallback: (checking) => {
+        const view = this.activeMindTreeView();
+        if (!view) return false;
+        if (!checking) run(view);
+        return true;
+      }
+    });
   }
 
   private activeMindTreeView(): MindTreeView | undefined {
