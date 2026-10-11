@@ -99,6 +99,12 @@ export interface NodeMarkerGeometry {
   readonly height: number;
 }
 
+/**
+ * Fixed 18px square and trailing gap for the icon/custom-marker column. These are
+ * layout inputs for marker geometry; `RESOURCE_CONTROL_SIZE`/`RESOURCE_CONTROL_GAP`
+ * below describe the separate resource-control column (20px) and must not be
+ * merged with them even though both gaps happen to be 2px.
+ */
 export const MANUAL_MARKER_SIZE = 18;
 export const NODE_MARKER_GAP = 2;
 export const MAX_FILE_BADGE_EXTENSION_LENGTH = 64;
@@ -226,17 +232,25 @@ export function createResourceBadgePresentation(
     if (normalizedKey && normalizedAlias) fileExtensionBadgeAliases.set(normalizedKey, normalizedAlias);
   }
   const customByValue = new Map<string, CustomMarkerDefinition>();
+  // Both keys are registered so a value cleaned under either rule resolves: the
+  // kind-aware key matches current files, the legacy key matches values an older
+  // version already stripped. See `legacyCustomMarkerKey`.
+  const registerCustom = (kind: "emoji" | "tag", definition: CustomMarkerDefinition): void => {
+    customByValue.set(customMarkerKey(kind, definition.value), definition);
+    const legacy = legacyCustomMarkerKey(kind, definition.value);
+    if (!customByValue.has(legacy)) customByValue.set(legacy, definition);
+  };
   for (const definition of customMarkerDefinitionsByKind(
     rules.customMarkers ?? EMPTY_CUSTOM_MARKER_RULES.customMarkers,
     "emoji"
   )) {
-    customByValue.set(customMarkerKey("emoji", definition.value), definition);
+    registerCustom("emoji", definition);
   }
   for (const definition of customMarkerDefinitionsByKind(
     rules.customMarkers ?? EMPTY_CUSTOM_MARKER_RULES.customMarkers,
     "tag"
   )) {
-    customByValue.set(customMarkerKey("tag", definition.value), definition);
+    registerCustom("tag", definition);
   }
   return {
     resolve: (node) => resolveResourceBadgesFromLookups(
@@ -263,7 +277,7 @@ function customMarkerDisplays(
   const result: CustomMarkerDisplay[] = [];
   for (const marker of node.markers ?? []) {
     if (marker.type !== "emoji" && marker.type !== "tag") continue;
-    const definition = definitions.get(customMarkerKey(marker.type, marker.value));
+    const definition = lookupCustomMarker(definitions, marker.type, marker.value);
     if (!definition) continue;
     result.push({ kind: marker.type, value: definition.value, id: definition.id });
   }
@@ -271,7 +285,31 @@ function customMarkerDisplays(
 }
 
 function customMarkerKey(kind: "emoji" | "tag", value: string): string {
+  // `kind` must reach the cleaner: emoji values keep the zero-width joiner that
+  // is part of a family sequence. Cleaning them with the text pattern would
+  // produce a key that never matches the registry entry built from the same
+  // definition, hiding the badge on every node.
+  return `${kind}\u0000${cleanCustomMarkerValue(value, kind)}`;
+}
+
+/**
+ * Key used before the kind-aware cleaner. Files written by 1.1.7 that loaded and
+ * re-saved an emoji marker already lost their zero-width joiner, so their stored
+ * value no longer equals the definition. Looking it up under the legacy key keeps
+ * those badges visible instead of making the upgrade hide them; the node value is
+ * left untouched so the degradation is never made worse.
+ */
+function legacyCustomMarkerKey(kind: "emoji" | "tag", value: string): string {
   return `${kind}\u0000${cleanCustomMarkerValue(value)}`;
+}
+
+function lookupCustomMarker(
+  definitions: ReadonlyMap<string, CustomMarkerDefinition>,
+  kind: "emoji" | "tag",
+  value: string
+): CustomMarkerDefinition | undefined {
+  return definitions.get(customMarkerKey(kind, value))
+    ?? definitions.get(legacyCustomMarkerKey(kind, value));
 }
 
 /**

@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
-import { setNodeMarker } from "../src/domain/markers";
+import { normalizeNodeMarkers, setNodeMarker } from "../src/domain/markers";
 import type { CustomMarkerDefinition } from "../src/domain/custom-markers";
 import { renderOutline } from "../src/format/outline";
 import { serializeMindTreeFile } from "../src/format/document";
@@ -114,6 +114,76 @@ test("custom emoji renders as an escaped 15px glyph centered in the fixed 18px m
   const titleFill = /<g class="mtn-depth-1"[^>]*>[\s\S]*?<text text-anchor="start"[^>]*fill="([^"]+)"/.exec(svg)?.[1];
   assert.ok(emojiFill !== undefined && titleFill !== undefined);
   assert.equal(emojiFill, titleFill);
+});
+
+test("a zero-width-joiner emoji survives normalization and still reserves its marker column", () => {
+  // End-to-end guard for the normalize -> registry-lookup -> geometry path. The
+  // registry key and the normalized node value are produced by the same cleaner,
+  // so a wrong character class on either side makes the lookup miss and the
+  // badge vanish without any error.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  const document = createEmptyDocument("Export");
+  const node = addNode(document, document.rootId, "Task");
+  setNodeMarker(node, { type: "emoji", value: family });
+  node.markers = normalizeNodeMarkers(node.markers);
+
+  const presentation = createPresentation([{ id: "mtn-emoji-family", kind: "emoji", value: family }]);
+  const geometry = getNodeMarkerGeometry(node, presentation);
+  assert.equal(geometry.markers.length, 1, "the family emoji must still render as one marker");
+  assert.equal(geometry.width, NODE_MARKER_GAP + MANUAL_MARKER_SIZE);
+
+  const svg = exportBranchSvg(document, presentation);
+  assert.match(svg, new RegExp(family), "the joined sequence must reach the SVG unescaped as one glyph");
+
+  // The same value under the text group keeps the stricter invisible-character
+  // list: the joiner is dropped, so the value is no longer a single cluster and
+  // cannot match the registry entry that stores the joined sequence.
+  const tagNode = addNode(document, document.rootId, "Tag");
+  setNodeMarker(tagNode, { type: "tag", value: family });
+  tagNode.markers = normalizeNodeMarkers(tagNode.markers);
+  assert.deepEqual(
+    tagNode.markers,
+    [{ type: "tag", value: "\u{1F468}\u{1F469}\u{1F467}\u{1F466}" }],
+    "text tags must still strip the joiner"
+  );
+  const tagGeometry = getNodeMarkerGeometry(tagNode, presentation);
+  assert.equal(tagGeometry.markers.length, 0, "a stripped tag must not match the joined registry value");
+});
+
+test("a marker value already degraded by an older version still resolves to its definition", () => {
+  // Versions before the kind-aware cleaner loaded a family emoji as an emoji
+  // marker, stripped its zero-width joiner while normalizing, and then saved the
+  // split sequence back to disk. Those files must keep rendering their badge
+  // after the upgrade, otherwise fixing the data loss would hide it instead.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  const degraded = "\u{1F468}\u{1F469}\u{1F467}\u{1F466}";
+  const definition = { id: "mtn-emoji-family", kind: "emoji" as const, value: family };
+
+  function markerNode(value: string, type: "emoji" | "tag"): MindTreeNode {
+    const document = createEmptyDocument("Legacy");
+    const node = addNode(document, document.rootId, "Task");
+    node.markers = [{ type, value }];
+    return node;
+  }
+
+  const storedGeometry = getNodeMarkerGeometry(
+    markerNode(degraded, "emoji"),
+    createPresentation([definition])
+  );
+  assert.equal(storedGeometry.markers.length, 1, "the degraded value must still resolve");
+  assert.equal(storedGeometry.width, NODE_MARKER_GAP + MANUAL_MARKER_SIZE);
+
+  // The fallback must never invent a match: an unrelated value stays hidden, and
+  // a tag must not adopt an emoji definition.
+  assert.equal(
+    getNodeMarkerGeometry(markerNode("\u{1F468}\u{1F469}", "emoji"), createPresentation([definition])).markers.length,
+    0
+  );
+  assert.equal(
+    getNodeMarkerGeometry(markerNode(degraded, "tag"), createPresentation([definition])).markers.length,
+    0,
+    "a tag must not match an emoji definition"
+  );
 });
 
 test("a built-in icon and a custom emoji keep one NODE_MARKER_GAP between their boxes", () => {

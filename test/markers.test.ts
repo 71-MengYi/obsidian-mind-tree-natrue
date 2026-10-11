@@ -106,6 +106,34 @@ test("marker normalization rejects invalid values and keeps one value per catego
   ]);
 });
 
+test("an emoji marker keeps its zero-width joiner while a text tag never does", () => {
+  // A family emoji is one grapheme cluster held together by U+200D. The Emoji
+  // group must not strip it: doing so splits the sequence into four separate
+  // emoji, the value stops matching its settings-registry entry, and the badge
+  // silently disappears from every node that uses it.
+  const family = "\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}";
+  assert.deepEqual(normalizeNodeMarkers([{ type: "emoji", value: family }]), [
+    { type: "emoji", value: family }
+  ]);
+  // The text group keeps the stricter list on purpose: a joiner there would
+  // only hide characters between visible words. The characters are removed
+  // rather than rejected, so what survives is the text around them.
+  const split = "\u{1F468}\u{1F469}\u{1F467}\u{1F466}";
+  assert.deepEqual(normalizeNodeMarkers([{ type: "tag", value: family }]), [
+    { type: "tag", value: split }
+  ]);
+  assert.deepEqual(normalizeNodeMarkers([{ type: "tag", value: "a\u200Db" }]), [
+    { type: "tag", value: "ab" }
+  ]);
+  // Surrounding invisible characters are still stripped from the emoji group.
+  assert.deepEqual(normalizeNodeMarkers([{ type: "emoji", value: "\u200b\u{1F3A8}\u200b" }]), [
+    { type: "emoji", value: "\u{1F3A8}" }
+  ]);
+  // Nothing left after cleaning -> the marker is dropped.
+  assert.deepEqual(normalizeNodeMarkers([{ type: "emoji", value: "\u200b" }]), []);
+  assert.deepEqual(normalizeNodeMarkers([{ type: "tag", value: "\u200b" }]), []);
+});
+
 test("visible markers widen the node without shrinking or rewrapping its title", () => {
   const document = createEmptyDocument("Markers");
   const title = "A long title whose text area reaches the configured wrapping width";

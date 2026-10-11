@@ -152,7 +152,7 @@ export function normalizeNodeMarkers(value: unknown): NodeMarker[] {
         accepted.set(category, { type: category, value: markerValue as NodePriority });
       }
     } else if (category === "emoji" || category === "tag") {
-      const cleaned = cleanCustomMarkerValue(markerValue);
+      const cleaned = cleanCustomMarkerValue(markerValue, category);
       if (cleaned.length > 0 && Array.from(cleaned).length <= MAX_CUSTOM_NODE_MARKER_VALUE_LENGTH) {
         accepted.set(category, { type: category, value: cleaned });
       }
