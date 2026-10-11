@@ -254,6 +254,8 @@
 
 **环境坑（本轮新增，重要）**
 
+- **⚠ 用户实测回归：搜索失效（同日 `fix` 修复，提交 `c14badb`）**。根因：`search-controller` 下沉时，`onLoadFile` 里原来的「清空 `searchCandidateCache`/`searchContentCache`」被改写成 `this.searchController?.destroy(); this.searchController = undefined;`，而控制器**只在 `buildShell()`（`onOpen` 时一次）创建并 `mount()`**，没有任何地方重建。于是打开任意导图后 `searchController` 恒为 `undefined`：`Mod+F` 命中 `if (!event.defaultPrevented || !this.searchController) return;` 直接返回，工具栏搜索按钮的 `searchController?.open()` 变成空操作。修复：`SearchController` 新增 `reset()`（只丢上一份文档的候选/正文缓存，**保留面板与 DOM**，语义等同旧的两行清理），`onLoadFile` 改调 `reset()`；`destroy()` 仍只在 `onClose` 与 shell 重建时出现。并新增 `test/search-view-wiring.test.ts` 三条源码级断言（已确认在修复前版本上会失败）。
+  **教训（对所有重构都适用）**：`MindTreeView` 的接线没有 DOM/集成测试，凡是生命周期改写（销毁 / 重建 / 清缓存 / 注册），必须用 `git show <base>:src/ui/mind-tree-view.ts` **逐段对照**旧实现，不能只靠"类型检查 + 已有测试"通过就认为等价——这次 `npm run check` 与 686 条用例全绿，功能却坏了。
 - **workspace-write 沙箱不允许删除文件，也不允许写 `.git/index`**：`Remove-Item` 与 `git add/commit` 都会报 "访问被拒绝 / Permission denied"。两者都需要一次性提权（工具参数 `sandbox_permissions: danger-full-access`），Lead 已用它将删除与提交各批量完成一次。给后续 agent：**不要**因为删除失败而用"清空文件"绕过。
 - `edit` 偶发 `ReplaceFileW EIO (Win32 1175)`：这是并发读写导致的瞬时错误，**原样重试即可**（本轮出现 10 余次，重试全部成功）。
 - 多 agent 并发改同一文件时行号会漂移，必须"重读再改"；`input-limits.ts`、`domain/tree.ts`、`resource-index.ts`、`mind-tree-view.ts` 被 2–3 条线改过。
