@@ -41,6 +41,9 @@ import {
 import { buildLinkedResourcePath, classifyFile, linkedFileTitle } from "../format/resource-id";
 import { renderBranchMarkdown } from "../format/outline";
 import { t } from "../i18n";
+import { clamp } from "../numeric";
+import { createParseOptions } from "../settings-model";
+import { applyMindTreeThemeDataset } from "./theme-dataset";
 import { UpdateActivity } from "../services/updates/update-activity";
 import { UpdateError } from "../services/updates/release-client";
 import type { UpdateViewPresentation } from "../services/updates/workspace-update-host";
@@ -117,22 +120,11 @@ import {
 import { openMarkerPopover, type MarkerPopoverHandle } from "./marker-popover";
 import { shouldHandleMindTreePaste } from "./paste-routing";
 import { createBottomStatusBarState, MindTreeViewShell, type StatusMessageState } from "./components";
-import { MindTreeSearchPanel } from "./search/search-panel";
 import {
-  buildSearchCandidates,
-  buildSearchParentIndex,
-  nodeAncestorIds,
-  normalizeSearchPath,
-  resolveSearchMarkdownFiles
-} from "./search/search-payload";
-import {
-  readSearchFiles,
-  searchMindTree,
-  type FileCandidate,
-  type SearchCandidate,
-  type SearchContext,
-  type SearchResult
-} from "./search/search-core";
+  createSearchController,
+  type SearchController
+} from "./controllers/search-controller";
+import { normalizeSearchPath, resolveSearchMarkdownFiles } from "./search/search-payload";
 import {
   CanvasInteractionController,
   ClipboardController,
@@ -192,7 +184,7 @@ import {
   MoveFilesModal,
   type CandidateAction,
   type DeleteBranchAction
-} from "./modals";
+} from "./modals/index";
 
 /** A visible node center captured before a layout pass changes world coordinates. */
 interface LayoutViewportAnchor {
@@ -289,21 +281,8 @@ export class MindTreeView extends TextFileView {
   private fileDropTargetEl?: HTMLElement;
   private fileDropPlacement?: DropPlacement;
   private markerPopover?: MarkerPopoverHandle;
-  /** Right-hand search window; kept open across focus changes by design. */
-  private searchPanel?: MindTreeSearchPanel;
-  /** Node list the current search payload was built from; rebuilt after edits. */
-  private searchCandidateCache?: {
-    revision: number;
-    candidates: readonly SearchCandidate[];
-    nodeAncestors: (nodeId: NodeId) => readonly NodeId[] | undefined;
-    files: Promise<readonly FileCandidate<TFile>[]>;
-  };
-  /** Markdown text keyed by path:mtime so repeated keystrokes stop re-reading. */
-  private readonly searchContentCache = new Map<string, string>();
-  /** Bumped by every render so a document change invalidates cached candidates. */
-  private searchRevision = 0;
-  /** Document object whose search payload the panel currently displays. */
-  private searchedDocument?: MindTreeDocument;
+  /** Right-hand search window, its caches and its revision counter. */
+  private searchController?: SearchController;
   /** Lazily created hover preview for the theme list in the tree settings menu. */
   private themePreview?: ThemePreviewPanel;
   private cutInProgress = false;
@@ -373,16 +352,16 @@ export class MindTreeView extends TextFileView {
     // host's global search while this leaf is active. Native find stays intact
     // for node-title editors and dialogs.
     this.scope.register(["Mod"], "f", (event) => {
-      if (event.defaultPrevented || !this.searchPanel) return;
+      if (event.defaultPrevented || !this.searchController) return;
       if (this.rootEl?.contains(event.target as Node)) {
         // The field already owns the keystroke; re-open just refocuses it.
         event.preventDefault();
-        this.openSearchPanel();
+        this.searchController?.open();
         return false;
       }
       if (isTextEditingTarget(event.target)) return;
       event.preventDefault();
-      this.openSearchPanel();
+      this.searchController?.open();
       return false;
     });
   }
@@ -440,10 +419,8 @@ export class MindTreeView extends TextFileView {
     this.connectionRenderer = undefined;
     this.canvasInteractionController?.destroy();
     this.canvasInteractionController = undefined;
-    this.searchPanel?.destroy();
-    this.searchPanel = undefined;
-    this.searchCandidateCache = undefined;
-    this.searchContentCache.clear();
+    this.searchController?.destroy();
+    this.searchController = undefined;
     this.shell?.destroy();
     this.shell = undefined;
     await super.onClose();
@@ -468,8 +445,8 @@ export class MindTreeView extends TextFileView {
     this.primarySelectedId = undefined;
     this.refreshTopToolbar();
     // A different document must never serve the previous tree's search payload.
-    this.searchCandidateCache = undefined;
-    this.searchContentCache.clear();
+    this.searchController?.destroy();
+    this.searchController = undefined;
     this.editingNodeId = undefined;
     this.editingDraftValue = "";
     this.attachSharedSession(file.path);
@@ -495,7 +472,7 @@ export class MindTreeView extends TextFileView {
     this.refreshBottomStatusBar();
     // The panel must re-answer for the new document only after it is loaded;
     // asking earlier would keep the previous tree's rows or a stale spinner.
-    this.searchPanel?.setContext();
+    this.refreshSearchContext();
     this.ownerWindow().setTimeout(() => void this.scanSameFolder(file), 250);
   }
 
@@ -746,13 +723,7 @@ export class MindTreeView extends TextFileView {
 
   /** Global preferences only fill YAML properties absent from the file. */
   private parseOptions(): Readonly<ParseMindTreeOptions> {
-    return {
-      defaultLayoutMode: this.plugin.settings.defaultLayoutMode,
-      defaultTheme: this.plugin.settings.theme,
-      defaultNodeShape: this.plugin.settings.nodeShape,
-      defaultCollectionMode: this.plugin.settings.defaultCollectionMode,
-      defaultConnectionStyle: this.plugin.settings.connectionStyle
-    };
+    return createParseOptions(this.plugin.settings);
   }
 
   /**
@@ -1340,10 +1311,8 @@ export class MindTreeView extends TextFileView {
     this.textMeasurer = undefined;
     this.resourceBadgeMeasurer?.destroy();
     this.resourceBadgeMeasurer = undefined;
-    this.searchPanel?.destroy();
-    this.searchPanel = undefined;
-    this.searchCandidateCache = undefined;
-    this.searchContentCache.clear();
+    this.searchController?.destroy();
+    this.searchController = undefined;
     this.shell?.destroy();
     this.shell = new MindTreeViewShell(this.contentEl, {
       menu: { settings: t("view.settings"), keyboardHelp: t("shortcut.help") },
@@ -1377,7 +1346,7 @@ export class MindTreeView extends TextFileView {
         fit: () => this.fitCanvas(),
         zoomOut: () => this.zoomByStep(-ZOOM_STEP),
         zoomIn: () => this.zoomByStep(ZOOM_STEP),
-        search: () => this.openSearchPanel(),
+        search: () => this.searchController?.open(),
         showCopyMenu: (event) => this.showCopyMenu(event),
         importText: () => this.showTextImportModal(),
         showExportMenu: (event) => this.showExportMenu(event)
@@ -1417,7 +1386,35 @@ export class MindTreeView extends TextFileView {
       }
     });
     this.rootEl = this.shell.element;
-    this.searchPanel = this.createSearchPanel(this.rootEl);
+    this.searchController = createSearchController<TFile>({
+      labels: {
+        title: t("search.panel.title"),
+        placeholder: t("search.panel.placeholder"),
+        close: t("search.panel.close"),
+        count: t("search.panel.count"),
+        empty: t("search.panel.empty"),
+        loading: t("search.panel.loading"),
+        truncated: t("search.panel.truncated"),
+        clear: t("search.panel.clear")
+      },
+      parent: this.rootEl,
+      readDocument: () => this.document,
+      hasParseError: () => Boolean(this.parseError),
+      readSessionToken: () => this.documentSessionToken,
+      isViewClosed: () => this.viewClosed,
+      readOwnPath: () => (this.file ? normalizeSearchPath(this.file.path) : undefined),
+      resolveSearchMarkdownFiles: (candidates, ownPath) =>
+        resolveSearchMarkdownFiles(this.plugin.resources, candidates, ownPath),
+      readFileText: (file) => this.app.vault.cachedRead(file),
+      jumpToNode: (nodeId) => this.jumpToSearchedNode(nodeId),
+      openFileAtLine: (path, line) => void this.openSearchedFileAtLine(path, line),
+      // Path rows show node names; the id stays the fallback for a pruned node.
+      readNodeTitle: (nodeId) => {
+        const node = this.document?.nodes[nodeId];
+        return node ? parseNodeTitle(node.title).plainText : undefined;
+      }
+    });
+    this.searchController.mount();
     this.canvasEl = this.shell.canvas.element;
     this.panLayerEl = this.shell.canvas.panLayer;
     this.worldEl = this.shell.canvas.world;
@@ -1585,7 +1582,7 @@ export class MindTreeView extends TextFileView {
         topics: (count) => t("statusBar.topics", { count }),
         files: (count) => t("statusBar.files", { count }),
         depth: (count) => t("statusBar.depth", { count }),
-        saved: t("statusBar.saved"),
+        saved: t("status.saved"),
         unsaved: t("statusBar.unsaved")
       }
     }));
@@ -1764,10 +1761,10 @@ export class MindTreeView extends TextFileView {
   private render(layoutAnchor?: LayoutViewportAnchor): void {
     if (!this.rootEl) return;
     // The search payload is derived from this document, so every reflow invalidates it.
-    this.searchRevision += 1;
+    this.searchController?.invalidate();
     // An open search window shows rows from the previous document state until it
     // is asked again; edits change the document object, so refresh its answers.
-    if (this.searchPanel?.isOpen && this.searchedDocument !== this.document) this.searchPanel.setContext();
+    this.refreshSearchContext();
     this.refreshTopToolbar();
     if (this.syncVersionPreview()) return;
     if (this.parseError) {
@@ -1783,10 +1780,7 @@ export class MindTreeView extends TextFileView {
     if (!document) return;
     // Theme, connection geometry, layout and shape all belong to this document.
     // CSS attributes avoid duplicating rendering branches.
-    this.rootEl.dataset.mtnTheme = document.settings.theme;
-    this.rootEl.dataset.mtnNodeShape = document.settings.nodeShape;
-    this.rootEl.dataset.mtnConnectionStyle = document.settings.connectionStyle;
-    this.rootEl.dataset.mtnLayout = document.settings.layoutMode;
+    applyMindTreeThemeDataset(this.rootEl, document.settings);
     this.rootEl.toggleClass("is-readonly", this.mutationLocked());
     // Theme attributes must be present before reading computed typography.
     this.textMeasurer?.refreshStyles();
@@ -1850,6 +1844,15 @@ export class MindTreeView extends TextFileView {
     });
     this.applyViewport();
     this.refreshBottomStatusBar();
+  }
+
+  /**
+   * Hand the current document object to the search controller so an open window
+   * re-answers for it. Kept as its own method so the controller is re-read
+   * instead of a field narrowed by an earlier lifecycle assignment.
+   */
+  private refreshSearchContext(): void {
+    this.searchController?.setContext();
   }
 
   private renderConnections(positionMap: Map<NodeId, PositionedNode>): void {
@@ -2110,25 +2113,7 @@ export class MindTreeView extends TextFileView {
     }
 
     if (linkedFiles.length > 0) {
-      const createdIds: NodeId[] = [];
-      this.commit((draft) => {
-        const effectiveParentId = draft.nodes[parentId] ? parentId : draft.rootId;
-        const parent = getNode(draft, effectiveParentId);
-        parent.collapsed = false;
-        let nextIndex = insertionIndex;
-        for (const { file, reference } of linkedFiles) {
-          const node = addNode(draft, effectiveParentId, linkedFileTitle(file.path), nextIndex);
-          node.resource = reference;
-          node.titleSync = this.plugin.settings.titleSync ? "bidirectional" : "off";
-          createdIds.push(node.id);
-          if (nextIndex !== undefined) nextIndex += 1;
-        }
-      });
-      const lastCreatedId = createdIds.at(-1);
-      if (lastCreatedId) {
-        this.selectOnly(lastCreatedId);
-        this.centerNodeInViewport(lastCreatedId);
-      }
+      this.insertLinkedFiles(parentId, linkedFiles, insertionIndex);
       new Notice(t("notice.filesDropped", { count: linkedFiles.length }));
     } else if (failures.length === 0) {
       new Notice(t("notice.noDroppedFiles"));
@@ -2136,6 +2121,37 @@ export class MindTreeView extends TextFileView {
     if (failures.length > 0) {
       new Notice(t("notice.fileDropFailed", { count: failures.length, details: failures.join("; ") }));
     }
+  }
+
+  /**
+   * Insert imported or dropped files as siblings of `parentId` and reveal the
+   * last one. Drops pass an insertion cursor, pastes append: everything else —
+   * fallback to the root, expanding the parent, title sync, selection — is
+   * identical, so both entry points share this commit.
+   */
+  private insertLinkedFiles(
+    targetParentId: NodeId,
+    items: ReadonlyArray<{ file: TFile; reference: FileResourceRef }>,
+    insertionIndex?: number
+  ): void {
+    const createdIds: NodeId[] = [];
+    this.commit((draft) => {
+      const parentId = draft.nodes[targetParentId] ? targetParentId : draft.rootId;
+      const parent = getNode(draft, parentId);
+      parent.collapsed = false;
+      let nextIndex = insertionIndex;
+      for (const { file, reference } of items) {
+        const node = addNode(draft, parentId, linkedFileTitle(file.path), nextIndex);
+        node.resource = reference;
+        node.titleSync = this.plugin.settings.titleSync ? "bidirectional" : "off";
+        createdIds.push(node.id);
+        if (nextIndex !== undefined) nextIndex += 1;
+      }
+    });
+    const lastCreatedId = createdIds.at(-1);
+    if (!lastCreatedId) return;
+    this.selectOnly(lastCreatedId);
+    this.centerNodeInViewport(lastCreatedId);
   }
 
   /** Read all string payloads and resolve direct paths, links and Obsidian URIs. */
@@ -2317,24 +2333,8 @@ export class MindTreeView extends TextFileView {
       return;
     }
 
-    const createdIds: NodeId[] = [];
     if (imported.length > 0) {
-      this.commit((draft) => {
-        const parentId = draft.nodes[context.parentId] ? context.parentId : draft.rootId;
-        const parent = getNode(draft, parentId);
-        parent.collapsed = false;
-        for (const { file, reference } of imported) {
-          const node = addNode(draft, parentId, linkedFileTitle(file.path));
-          node.resource = reference;
-          node.titleSync = this.plugin.settings.titleSync ? "bidirectional" : "off";
-          createdIds.push(node.id);
-        }
-      });
-      const lastId = createdIds.at(-1);
-      if (lastId) {
-        this.selectOnly(lastId);
-        this.centerNodeInViewport(lastId);
-      }
+      this.insertLinkedFiles(context.parentId, imported);
       new Notice(t("notice.imagesPasted", { count: imported.length }));
     }
     if (failures.length > 0) {
@@ -2680,18 +2680,26 @@ export class MindTreeView extends TextFileView {
     return undefined;
   }
 
+  /**
+   * The document an association may still mutate. A closed, replaced, error or
+   * locked view must never let a stale target write into a new document, so the
+   * whole guard lives in one place instead of being repeated per entry point.
+   */
+  private liveDraft(): MindTreeDocument | undefined {
+    if (!this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked()) return undefined;
+    return this.document;
+  }
+
   private isAssociationTargetCurrent(target: AssociationTarget): boolean {
-    return isAssociationTargetAvailable(
-      target, this.documentSessionToken, !this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document
-    );
+    return isAssociationTargetAvailable(target, this.documentSessionToken, this.liveDraft());
   }
 
   private requireAssociationTarget(target: AssociationTarget, draft = this.document): MindTreeNode {
-    return requireAssociationTarget(target, this.documentSessionToken, !this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked() ? undefined : draft);
+    return requireAssociationTarget(target, this.documentSessionToken, this.liveDraft() === undefined ? undefined : draft);
   }
 
   private isResourceTargetCurrent(target: ResourceTarget): boolean {
-    return isResourceTargetCurrent(target, this.documentSessionToken, !this.acceptingAssociations || this.viewClosed || this.parseError || this.mutationLocked() ? undefined : this.document);
+    return isResourceTargetCurrent(target, this.documentSessionToken, this.liveDraft());
   }
 
   /** A single guarded mutation boundary for every existing/new file association. */
@@ -3397,99 +3405,9 @@ export class MindTreeView extends TextFileView {
   }
 
   /**
-   * Persistent right-hand search window. It deliberately has no blur-to-close
-   * behaviour: only the × button and Escape dismiss it, so the user can click a
-   * node in the tree and keep reading the result list.
-   */
-  private createSearchPanel(parent: HTMLElement): MindTreeSearchPanel {
-    return new MindTreeSearchPanel(parent, {
-      title: t("search.panel.title"),
-      placeholder: t("search.panel.placeholder"),
-      close: t("search.panel.close"),
-      count: t("search.panel.count"),
-      empty: t("search.panel.empty"),
-      loading: t("search.panel.loading"),
-      truncated: t("search.panel.truncated"),
-      clear: t("search.panel.clear")
-    }, {
-      search: (query) => this.runSearch(query),
-      jumpToNode: (nodeId) => this.jumpToSearchedNode(nodeId),
-      openFileAtLine: (path, line) => void this.openSearchedFileAtLine(path, line),
-      // Path rows show node names; the id stays the fallback for a pruned node.
-      nodeTitle: (nodeId) => {
-        const node = this.document?.nodes[nodeId];
-        return node ? parseNodeTitle(node.title).plainText : undefined;
-      }
-    });
-  }
-
-  private openSearchPanel(): void {
-    if (!this.document) return;
-    this.searchPanel?.open();
-  }
-
-  /** Resolve the current payload for one query; stale reads are simply dropped. */
-  private async runSearch(query: string): Promise<SearchResult | undefined> {
-    const context = await this.buildSearchContext();
-    if (!context || this.viewClosed) return undefined;
-    this.searchedDocument = this.document;
-    return searchMindTree(context, query);
-  }
-
-  /**
-   * Build the searchable payload: node titles always, file names always, and
-   * Markdown content only for files whose path is worth reading.
-   *
-   * Both the candidate list and the identity verification are cached per
-   * document revision. Verification re-reads every linked file, so repeating it
-   * on each keystroke would make a large tree feel unresponsive; the content
-   * cache below then keeps the first payload build the only expensive one.
-   */
-  private async buildSearchContext(): Promise<SearchContext | undefined> {
-    const document = this.document;
-    if (!document || this.parseError) return undefined;
-    const revision = this.searchRevision;
-    const token = this.documentSessionToken;
-    const ownPath = this.file ? normalizeSearchPath(this.file.path) : undefined;
-    if (this.searchCandidateCache?.revision !== revision) {
-      // Ancestry stays lazy: only the cards that survive the result limit ask
-      // for their root-to-node chain, so a deep tree does not pay for every node.
-      const nodeAncestors = nodeAncestorIds(buildSearchParentIndex(document), new Set(Object.keys(document.nodes)));
-      const candidates = buildSearchCandidates(document, ownPath);
-      this.searchCandidateCache = {
-        revision,
-        candidates,
-        nodeAncestors,
-        files: resolveSearchMarkdownFiles(this.plugin.resources, candidates, ownPath)
-      };
-    }
-    const cache = this.searchCandidateCache;
-    // The read budget bounds the read burst; the caches make later keystrokes almost free.
-    const contents = await readSearchFiles<TFile>({
-      resolve: () => cache.files,
-      read: (file) => this.readSearchFileText(file)
-    }, () => true);
-    if (this.viewClosed || token !== this.documentSessionToken || this.document !== document) return undefined;
-    return { candidates: cache.candidates, fileContents: contents.contents, nodeAncestorIds: cache.nodeAncestors };
-  }
-
-  /** Bounded, path+mtime keyed cache; every read is a plain vault read. */
-  private async readSearchFileText(file: TFile): Promise<string> {
-    const key = `${file.path}\u0000${file.stat.mtime}`;
-    const cached = this.searchContentCache.get(key);
-    if (cached !== undefined) return cached;
-    const text = await this.app.vault.cachedRead(file);
-    if (this.searchContentCache.size >= SEARCH_CONTENT_CACHE_LIMIT) {
-      const oldest = this.searchContentCache.keys().next().value;
-      if (oldest !== undefined) this.searchContentCache.delete(oldest);
-    }
-    this.searchContentCache.set(key, text);
-    return text;
-  }
-
-  /**
    * Reveal a search hit in the canvas: hidden branches are expanded first, then
-   * the node is centered at the current zoom.
+   * the node is centered at the current zoom. The search controller only asks
+   * for this; mutation, history and viewport policy stay in the view.
    */
   private jumpToSearchedNode(nodeId: NodeId): void {
     const document = this.document;
@@ -3584,8 +3502,7 @@ export class MindTreeView extends TextFileView {
     const token = this.documentSessionToken;
     await this.fileAssociations.collect({
       total: files.length,
-      isCurrent: () => this.acceptingAssociations && !this.viewClosed && !this.parseError && !this.mutationLocked()
-        && token === this.documentSessionToken && Boolean(this.document),
+      isCurrent: () => this.liveDraft() !== undefined && token === this.documentSessionToken,
       progress: (value) => {
         this.collectionProgress = value;
         this.renderStatusMessage();
@@ -3859,13 +3776,6 @@ export class MindTreeView extends TextFileView {
       : { message, kind: "normal" });
   }
 }
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
-}
-
-/** Bounded Markdown cache for the search window: enough for a long session. */
-const SEARCH_CONTENT_CACHE_LIMIT = 300;
 
 function deduplicateFiles(files: TFile[]): TFile[] {
   return [...new Map(files.map((file) => [file.path, file])).values()];
