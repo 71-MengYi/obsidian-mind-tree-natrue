@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { addNode, createEmptyDocument, moveNode } from "../src/domain/tree";
+import { addNode, createEmptyDocument, moveNodes } from "../src/domain/tree";
 import {
   connectionPath,
   getNodeBoxSize,
@@ -185,7 +185,7 @@ test("first-level branches use ordered unique slots and descendants inherit them
   assert.equal(branchColorCss(slots.get(document.rootId)), "var(--mtn-theme-root-accent)");
   assert.equal(BRANCH_COLOR_COUNT, 12);
 
-  moveNode(document, second.id, first.id, "before");
+  moveNodes(document, [second.id], first.id, "before");
   const reordered = getBranchColorSlots(document);
   assert.equal(reordered.get(second.id), 1);
   assert.equal(reordered.get(first.id), 2);
@@ -359,7 +359,7 @@ test("reparenting keeps every depth free of vertical overlap", () => {
   addNode(document, second.id, "Second child");
   addNode(document, document.rootId, "Third");
 
-  moveNode(document, first.id, second.id, "inside");
+  moveNodes(document, [first.id], second.id, "inside");
   const layout = layoutTree(document, document.rootId, true, 160);
   const depths = new Set(layout.nodes.map((node) => node.depth));
   for (const depth of depths) {

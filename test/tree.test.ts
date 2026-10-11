@@ -12,21 +12,20 @@ import {
   deleteBranches,
   deleteNodeOnly,
   deleteNodesOnly,
+  extractBranches,
   findParentId,
   getDepth,
   getTopLevelSelectedNodeIds,
   getTreeStatistics,
-  insertBranch,
+  insertBranches,
   insertParentNode,
-  moveNode,
   moveNodeAmongSiblings,
   moveNodes,
   renameNode,
   setAllCollapsed,
   setCollapsedAfterDepth,
   updateFileReferencePaths,
-  validateDocument,
-  extractBranch
+  validateDocument
 } from "../src/domain/tree";
 
 test("creates a document with exactly one protected root", () => {
@@ -62,9 +61,9 @@ test("adds, reorders, and reparents nodes without duplicating parents", () => {
 
   assert.equal(getDepth(document, first.id), 1);
   assert.equal(getDepth(document, child.id), 2);
-  moveNode(document, child.id, second.id, "inside");
+  moveNodes(document, [child.id], second.id, "inside");
   assert.equal(findParentId(document, child.id), second.id);
-  moveNode(document, second.id, first.id, "before");
+  moveNodes(document, [second.id], first.id, "before");
   assert.deepEqual(document.nodes[document.rootId]?.childIds, [second.id, first.id]);
   assert.equal(validateDocument(document).valid, true);
 });
@@ -194,7 +193,7 @@ test("rejects moving a node into its own descendant atomically", () => {
   const parent = addNode(document, document.rootId, "Parent");
   const child = addNode(document, parent.id, "Child");
   const before = cloneDocument(document);
-  assert.throws(() => moveNode(document, parent.id, child.id, "inside"), /descendants/i);
+  assert.throws(() => moveNodes(document, [parent.id], child.id, "inside"), /descendants/i);
   assert.deepEqual(document, before);
 });
 
@@ -202,7 +201,7 @@ test("rejects placing a node beside the root atomically", () => {
   const document = createEmptyDocument();
   const child = addNode(document, document.rootId, "Child");
   const before = cloneDocument(document);
-  assert.throws(() => moveNode(document, child.id, document.rootId, "before"), /before or after the root/i);
+  assert.throws(() => moveNodes(document, [child.id], document.rootId, "before"), /before or after the root/i);
   assert.deepEqual(document, before);
 });
 
@@ -314,10 +313,10 @@ test("branch copy regenerates every node ID on insert", () => {
   };
   branch.titleSync = "bidirectional";
   addNode(source, branch.id, "Leaf");
-  const payload = extractBranch(source, branch.id);
+  const payload = extractBranches(source, [branch.id]);
 
   const target = createEmptyDocument("Target");
-  const insertedRoot = insertBranch(target, target.rootId, payload);
+  const insertedRoot = insertBranches(target, target.rootId, payload)[0]!;
   const insertedIds = collectBranchIds(target, insertedRoot);
   assert.equal(insertedIds.length, 2);
   assert.equal(insertedIds.some((id) => payload.nodes[id] !== undefined), false);

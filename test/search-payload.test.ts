@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSearchCandidates, buildSearchParentIndex, nodeAncestorIds, normalizeSearchPath, resolveSearchMarkdownFiles, searchedAncestorIds } from "../src/ui/search/search-payload";
+import { buildSearchCandidates, buildSearchParentIndex, nodeAncestorIds, normalizeSearchPath, resolveSearchMarkdownFiles } from "../src/ui/search/search-payload";
 import type { FileResourceRef, MindTreeDocument, MindTreeNode } from "../src/types";
 
 /**
@@ -153,13 +153,16 @@ test("result cards carry the root-to-node path so every ancestor stays clickable
     node("leaf", "Leaf", fileRef("res-leaf", "Notes/Leaf.md")),
     node("other", "Other")
   ]);
-  // The eager map mirrors `SearchCandidate.ancestorIds`: root first, no self.
-  const paths = searchedAncestorIds(document);
-  assert.deepEqual(paths.get("root"), []);
-  assert.deepEqual(paths.get("mid"), ["root"]);
-  assert.deepEqual(paths.get("leaf"), ["root", "mid"]);
-  assert.deepEqual(paths.get("other"), []);
+  // The lazy ancestor walk mirrors `SearchCandidate.ancestorIds`: root first, no self.
+  const ancestry = nodeAncestorIds(buildSearchParentIndex(document), new Set(Object.keys(document.nodes)));
+  assert.deepEqual(ancestry("root"), []);
+  assert.deepEqual(ancestry("mid"), ["root"]);
+  assert.deepEqual(ancestry("leaf"), ["root", "mid"]);
+  assert.deepEqual(ancestry("other"), []);
 
+  const paths = new Map<string, readonly string[]>(
+    Object.keys(document.nodes).map((nodeId) => [nodeId, ancestry(nodeId) ?? []])
+  );
   const candidates = buildSearchCandidates(document, undefined, paths);
   const leaf = candidates.find((entry) => entry.nodeId === "leaf");
   assert.deepEqual(leaf?.ancestorIds, ["root", "mid"]);
@@ -173,13 +176,15 @@ test("a cycling or duplicated parent chain terminates without repeated ancestors
   ]);
   // findParentId prefers the first parent that lists the child, so this cycle
   // must still terminate and never list the node twice.
-  const paths = searchedAncestorIds(document);
-  for (const chain of paths.values()) {
+  const ancestry = nodeAncestorIds(buildSearchParentIndex(document), new Set(Object.keys(document.nodes)));
+  for (const nodeId of Object.keys(document.nodes)) {
+    const chain = ancestry(nodeId) ?? [];
     assert.equal(new Set(chain).size, chain.length, "no ancestor may repeat");
   }
   // A self-referencing parent must not appear in its own ancestor list either.
   const selfParent = documentWith([node("solo", "Solo", undefined, ["solo"])]);
-  assert.deepEqual(searchedAncestorIds(selfParent).get("solo"), []);
+  const soloAncestry = nodeAncestorIds(buildSearchParentIndex(selfParent), new Set(["solo"]));
+  assert.deepEqual(soloAncestry("solo"), []);
 });
 
 test("candidates without an ancestor map stay path-free instead of throwing", () => {

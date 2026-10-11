@@ -212,7 +212,7 @@ test("a captured repair remains checked when the duplicate scan is asynchronous"
 
 test("safety UI hides version choices and has an independent accessible repair action", () => {
   const ui = readFileSync(new URL("../src/ui/components/version-comparison.ts", import.meta.url), "utf8");
-  const panel = readFileSync(new URL("../src/ui/components/document-safety-panel.ts", import.meta.url), "utf8");
+  const panel = readFileSync(new URL("../src/ui/components/version-comparison.ts", import.meta.url), "utf8");
   const view = readFileSync(new URL("../src/ui/mind-tree-view.ts", import.meta.url), "utf8");
   assert.match(ui, /this\.currentButton\.hidden = this\.externalButton\.hidden = !comparison/);
   assert.match(panel, /conflict\.restoreIdentity/);
