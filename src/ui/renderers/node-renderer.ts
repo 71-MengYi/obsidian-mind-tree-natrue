@@ -18,6 +18,7 @@ import {
   getNodeTitleEditorSize,
   NODE_HORIZONTAL_INSETS
 } from "../layout";
+import { readableTextColor } from "../color";
 import { branchColorCss } from "../presentation";
 import type { NodeTextMeasurer } from "../text-measurer";
 import type { ImageNodePresentation, ImageNodeVisual } from "../image-nodes";
@@ -381,10 +382,3 @@ function markerLabel(type: "progress" | "priority", value: string): string {
   return t("marker.priority.blue");
 }
 
-function readableTextColor(hex: string): string {
-  const value = Number.parseInt(hex.slice(1), 16);
-  const red = (value >> 16) & 0xff;
-  const green = (value >> 8) & 0xff;
-  const blue = value & 0xff;
-  return red * 0.299 + green * 0.587 + blue * 0.114 > 150 ? "#1f2937" : "#ffffff";
-}

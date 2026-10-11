@@ -9,6 +9,7 @@ import {
   type CustomMarkerDefinition
 } from "../domain/custom-markers";
 import { isMarkdownPath, stripNonMarkdownResourceId } from "../format/resource-id";
+import { evictOldest } from "../lru-cache";
 import type { MindTreeNode } from "../types";
 
 /**
@@ -124,6 +125,8 @@ const EMPTY_BADGE_RULES: FileBadgeRules = {
   fileExtensionBadgeAliases: Object.freeze({})
 };
 const EMPTY_CUSTOM_MARKER_RULES: CustomMarkerRules = { customMarkers: [] };
+/** Shared empty result: callers only read it, and it avoids per-node allocation. */
+const NO_RESOURCE_BADGES: readonly ResourceBadge[] = Object.freeze([]);
 
 /** Normalize user-facing `.PDF` and `pdf` keys to one case-insensitive form. */
 export function normalizeFileBadgeExtension(value: string): string | undefined {
@@ -171,24 +174,20 @@ export function fileBadgeExtensionCandidates(extension: string): readonly string
   return finalExtension === normalized ? [normalized] : [normalized, finalExtension];
 }
 
+/**
+ * Single-node convenience for callers outside a render pass. Badge rules are
+ * derived by the shared presentation so `ignored`/alias precedence has exactly
+ * one implementation; a per-node render pass should reuse a presentation.
+ */
 export function resolveResourceBadges(
   node: Readonly<MindTreeNode>,
   rules: FileBadgeRules,
   labels: ResourceBadgeLabels
 ): readonly ResourceBadge[] {
-  const ignored = new Set(rules.ignoredFileBadgeExtensions
-    .map(normalizeFileBadgeExtension)
-    .filter((value): value is string => value !== undefined));
-  const aliases = new Map<string, string>();
-  for (const [key, value] of Object.entries(rules.fileExtensionBadgeAliases)) {
-    const normalizedKey = normalizeFileBadgeExtension(key);
-    const normalizedAlias = normalizeFileBadgeAlias(value);
-    if (normalizedKey && normalizedAlias) aliases.set(normalizedKey, normalizedAlias);
-  }
-  return resolveResourceBadgesFromLookups(node, ignored, aliases, labels);
+  return createResourceBadgePresentation(rules, labels).resolve(node);
 }
 
-function resolveResourceBadgesFromLookups(
+function resolveResourceBadgesForPresentation(
   node: Readonly<MindTreeNode>,
   ignored: ReadonlySet<string>,
   aliases: ReadonlyMap<string, string>,
@@ -200,17 +199,17 @@ function resolveResourceBadgesFromLookups(
   if (specialBadges.length > 0) return specialBadges;
 
   const resource = node.resource;
-  if (resource?.type !== "file") return [];
+  if (resource?.type !== "file") return NO_RESOURCE_BADGES;
   const extension = deriveFileBadgeExtension(resource.pathHint);
-  if (!extension) return [];
+  if (!extension) return NO_RESOURCE_BADGES;
   const candidates = fileBadgeExtensionCandidates(extension);
-  if (candidates.some((candidate) => ignored.has(candidate))) return [];
+  if (candidates.some((candidate) => ignored.has(candidate))) return NO_RESOURCE_BADGES;
   const alias = candidates.map((candidate) => aliases.get(candidate)).find((value) => value !== undefined);
   // Markdown is opt-in, not excluded from rule matching: plugin.md can use a
   // specific alias and ordinary notes can use an md alias. Without a matching
   // alias, preserve their existing badge-free appearance instead of adding MD.
   // Dedicated mind-tree/drawing badges have already returned above.
-  if (alias === undefined && isMarkdownPath(resource.pathHint)) return [];
+  if (alias === undefined && isMarkdownPath(resource.pathHint)) return NO_RESOURCE_BADGES;
   return [{ kind: "extension", label: alias ?? extension.toUpperCase() }];
 }
 
@@ -253,7 +252,7 @@ export function createResourceBadgePresentation(
     registerCustom("tag", definition);
   }
   return {
-    resolve: (node) => resolveResourceBadgesFromLookups(
+    resolve: (node) => resolveResourceBadgesForPresentation(
       node,
       ignoredFileBadgeExtensions,
       fileExtensionBadgeAliases,
@@ -413,10 +412,7 @@ export class BrowserResourceBadgeMeasurer implements ResourceBadgeMeasurer {
         fontWeight: computed?.fontWeight || undefined
       }
       : fallbackResourceBadgeMeasurer.measure(badge);
-    if (this.cache.size >= MAX_BADGE_MEASUREMENT_CACHE_ENTRIES) {
-      const oldest = this.cache.keys().next().value as string | undefined;
-      if (oldest !== undefined) this.cache.delete(oldest);
-    }
+    evictOldest(this.cache, MAX_BADGE_MEASUREMENT_CACHE_ENTRIES);
     this.cache.set(key, measured);
     return measured;
   }

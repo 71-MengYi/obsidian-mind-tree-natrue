@@ -1,3 +1,5 @@
+import { clamp } from "../numeric";
+
 export type TooltipSide = "bottom" | "top" | "right" | "left";
 export interface TooltipRect { left: number; top: number; right: number; bottom: number }
 export interface TooltipSize { width: number; height: number }
@@ -7,8 +9,6 @@ export interface TooltipLayout extends TooltipSize {
 export const TOOLTIP_GAP = 8;
 export const TOOLTIP_MARGIN = 8;
 export const TOOLTIP_MAX_WIDTH = 320;
-
-const clamp = (value: number, low: number, high: number) => Math.max(low, Math.min(value, high));
 
 /** Each region is wholly outside the trigger, so fitting can never cover it. */
 function region(anchor: TooltipRect, viewport: TooltipRect, side: TooltipSide): TooltipRect {

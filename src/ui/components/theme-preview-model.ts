@@ -1,4 +1,5 @@
 import { DEFAULT_DOCUMENT_SETTINGS } from "../../document-settings";
+import { clamp } from "../../numeric";
 import type { MindTreeDocument, MindTreeNode, MindTreeTheme, NodeId } from "../../types";
 
 /** Localized sample titles keep one preview readable in both interface languages. */
@@ -66,8 +67,6 @@ export function themePreviewDocument(theme: MindTreeTheme, titles: ThemePreviewT
     updatedAt: THEME_PREVIEW_TIMESTAMP
   };
 }
-
-const clamp = (value: number, low: number, high: number): number => Math.max(low, Math.min(value, high));
 
 /**
  * Place the preview beside its anchor without ever covering it: prefer the

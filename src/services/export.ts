@@ -1,5 +1,5 @@
 import { nodeTitleMode } from "../format/node-title";
-import { renderRichTitleSvg } from "../ui/text-measurer";
+import { escapeTitleXml, renderRichTitleSvg } from "../ui/text-measurer";
 import type {
   MindTreeConnectionStyle,
   MindTreeDocument,
@@ -11,7 +11,7 @@ import type {
   NodeId,
   PositionedNode
 } from "../types";
-import { collectBranchIds } from "../domain/tree";
+import { DEFAULT_NODE_TITLE, collectBranchIds } from "../domain/tree";
 import {
   getIconNodeMarkers,
   getNodeHighlightColor
@@ -29,6 +29,7 @@ import {
   NODE_VERTICAL_PADDING,
   wrapNodeTitle
 } from "../ui/layout";
+import { readableTextColor } from "../ui/color";
 import { getBranchColorSlots } from "../ui/presentation";
 import { fallbackNodeTextMeasurer, type NodeTextMeasurer } from "../ui/text-measurer";
 import {
@@ -58,7 +59,7 @@ const PADDING = 36;
  * rendered outside the Obsidian document, so the emoji font stack has to travel
  * with the markup or rasterized PNGs lose their color glyphs.
  */
-const EMOJI_FONT_FAMILY = escapeXml("'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',system-ui,sans-serif");
+const EMOJI_FONT_FAMILY = escapeTitleXml("'Apple Color Emoji','Segoe UI Emoji','Noto Color Emoji',system-ui,sans-serif");
 
 /**
  * Colors resolved by the live Obsidian view. This is intentionally a runtime
@@ -167,7 +168,7 @@ export function renderBranchSvg(
     // Use the same title-only track as the DOM renderer. Trailing markers and
     // file controls change the outer rectangle, never wrapping or shifting text.
     const textWidth = Math.max(1, shifted.contentWidth - NODE_HORIZONTAL_INSETS);
-    const measurement = textMeasurer.measure(node.title || "未命名节点", position.depth, nodeWrapWidth, nodeTitleMode(node, position.depth));
+    const measurement = textMeasurer.measure(node.title || DEFAULT_NODE_TITLE, position.depth, nodeWrapWidth, nodeTitleMode(node, position.depth));
     const lines = measurement.lines;
     const captionTop = imageAsset
       ? shifted.y + NODE_VERTICAL_PADDING + imageAsset.height + IMAGE_CAPTION_GAP
@@ -180,11 +181,11 @@ export function renderBranchSvg(
     // browser node instead of centering the complete multiline text block.
     const textX = shifted.x + NODE_HORIZONTAL_PADDING;
     const tspans = lines.map((line, index) =>
-      `<tspan x="${textX}" y="${firstBaseline + index * lineHeight}">${escapeXml(line)}</tspan>`).join("");
+      `<tspan x="${textX}" y="${firstBaseline + index * lineHeight}">${escapeTitleXml(line)}</tspan>`).join("");
     // Title text and custom emoji share one body color, so the exported marker
     // inherits exactly what the canvas span gets from `--mtn-node-text`.
     const textColor = highlight
-      ? readableSvgTextColor(highlight)
+      ? readableTextColor(highlight)
       : position.depth === 0
         ? rootTextColor
         : tierPalette
@@ -236,7 +237,7 @@ export function renderBranchSvg(
         // exactly like the canvas span they replace.
         cursor += MANUAL_MARKER_SIZE;
         placedMarkers += 1;
-        return `<text x="${startX + MANUAL_MARKER_SIZE / 2}" y="${markerY}" font-size="15" text-anchor="middle" font-family="${EMOJI_FONT_FAMILY}" fill="${textColor}">${escapeXml(item.label)}</text>`;
+        return `<text x="${startX + MANUAL_MARKER_SIZE / 2}" y="${markerY}" font-size="15" text-anchor="middle" font-family="${EMOJI_FONT_FAMILY}" fill="${textColor}">${escapeTitleXml(item.label)}</text>`;
       }
       // Tags and file badges share one measured box, so layout and export can
       // never disagree about where the marker column ends.
@@ -259,12 +260,12 @@ export function renderBranchSvg(
       : position.depth === 0 ? tierPalette?.rootShadow : tierPalette?.shadow;
     const shadowStyle = nodeShadow && nodeShadow !== "none" ? ` style="filter:${nodeShadow}"` : "";
     const imageSvg = imageAsset
-      ? `<image class="mtn-node-image" x="${shifted.x + NODE_HORIZONTAL_PADDING}" y="${shifted.y + NODE_VERTICAL_PADDING}" width="${imageAsset.width}" height="${imageAsset.height}" href="${escapeXml(imageAsset.dataUrl)}" preserveAspectRatio="xMidYMid meet"/>`
+      ? `<image class="mtn-node-image" x="${shifted.x + NODE_HORIZONTAL_PADDING}" y="${shifted.y + NODE_VERTICAL_PADDING}" width="${imageAsset.width}" height="${imageAsset.height}" href="${escapeTitleXml(imageAsset.dataUrl)}" preserveAspectRatio="xMidYMid meet"/>`
       : "";
     const richTitle = measurement.richLines
       ? `<g transform="translate(${textX} ${captionTop + (captionHeight - measurement.height!) / 2})" color="${textColor}">${renderRichTitleSvg(measurement)}</g>`
       : undefined;
-    const titleSvg = richTitle ?? `<text text-anchor="start" font-family="${escapeXml(textStyle.fontFamily)}" font-size="${fontSize}" font-style="${escapeXml(textStyle.fontStyle)}" font-weight="${escapeXml(textStyle.fontWeight)}" letter-spacing="${textStyle.letterSpacing}" word-spacing="${textStyle.wordSpacing}" font-kerning="${textStyle.fontKerning}" font-stretch="${textStyle.fontStretch}" font-variant-caps="${textStyle.fontVariantCaps}" text-rendering="${textStyle.textRendering}" fill="${textColor}">${tspans}</text>`;
+    const titleSvg = richTitle ?? `<text text-anchor="start" font-family="${escapeTitleXml(textStyle.fontFamily)}" font-size="${fontSize}" font-style="${escapeTitleXml(textStyle.fontStyle)}" font-weight="${escapeTitleXml(textStyle.fontWeight)}" letter-spacing="${textStyle.letterSpacing}" word-spacing="${textStyle.wordSpacing}" font-kerning="${textStyle.fontKerning}" font-stretch="${textStyle.fontStretch}" font-variant-caps="${textStyle.fontVariantCaps}" text-rendering="${textStyle.textRendering}" fill="${textColor}">${tspans}</text>`;
     return `<g class="${className}"${shadowStyle}><rect x="${shifted.x}" y="${shifted.y}" width="${shifted.width}" height="${shifted.height}" rx="${radius}" fill="${leafWithoutBorder && !highlight ? "none" : fill}" stroke="none"/>${imageSvg}${titleSvg}${iconMarkerSvg}${trailingMarkerSvg}</g>`;
   }).join("");
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${canvasColor}"/>${paths}${nodes}</svg>`;
@@ -403,7 +404,7 @@ function renderResourceBadgeSvg(
       : badge.kind === "tag"
         ? { className: "mtn-tag-marker", fill: extensionFill, stroke: "none", text: extensionText }
         : { className: "mtn-extension-marker", fill: extensionFill, stroke: "none", text: extensionText };
-  return `<g class="${appearance.className}"><rect x="${x}" y="${y}" width="${size.width}" height="${size.height}" rx="5" fill="${appearance.fill}" stroke="${appearance.stroke}"/><text x="${x + size.width / 2}" y="${centerY}" dominant-baseline="middle" text-anchor="middle" font-family="${escapeXml(size.fontFamily ?? "system-ui,sans-serif")}" font-size="${size.fontSize ?? 10}" font-weight="${escapeXml(size.fontWeight ?? "600")}" fill="${appearance.text}">${escapeXml(badge.label)}</text></g>`;
+  return `<g class="${appearance.className}"><rect x="${x}" y="${y}" width="${size.width}" height="${size.height}" rx="5" fill="${appearance.fill}" stroke="${appearance.stroke}"/><text x="${x + size.width / 2}" y="${centerY}" dominant-baseline="middle" text-anchor="middle" font-family="${escapeTitleXml(size.fontFamily ?? "system-ui,sans-serif")}" font-size="${size.fontSize ?? 10}" font-weight="${escapeTitleXml(size.fontWeight ?? "600")}" fill="${appearance.text}">${escapeTitleXml(badge.label)}</text></g>`;
 }
 
 export function downloadMarkdown(markdown: string, title: string): void {
@@ -466,10 +467,6 @@ function downloadBlob(blob: Blob, filename: string): void {
   window.setTimeout(() => URL.revokeObjectURL(url), 1_000);
 }
 
-function escapeXml(value: string): string {
-  return value.replace(/[<>&"']/g, (character) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", "\"": "&quot;", "'": "&apos;" })[character] ?? character);
-}
-
 function safeFileName(value: string): string {
   return value.replace(/[\\/:*?"<>|]/g, "-").trim() || "mind-tree";
 }
@@ -481,14 +478,6 @@ function safeSvgColor(value: string | undefined, fallback: string): string {
   if (/^(?:rgb|rgba|hsl|hsla)\([0-9.,%\s/+-]+\)$/i.test(color)) return color;
   if (/^[a-z]{3,20}$/i.test(color)) return color;
   return fallback;
-}
-
-function readableSvgTextColor(hex: string): string {
-  const value = Number.parseInt(hex.slice(1), 16);
-  const red = (value >> 16) & 0xff;
-  const green = (value >> 8) & 0xff;
-  const blue = value & 0xff;
-  return red * 0.299 + green * 0.587 + blue * 0.114 > 150 ? "#1f2937" : "#ffffff";
 }
 
 /** Mix an accent into a surface using the same ratio as CSS color-mix. */

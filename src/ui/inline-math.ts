@@ -7,6 +7,7 @@ import { MathJaxTexFont } from "@mathjax/mathjax-tex-font/js/svg.js";
 import type { LiteElement } from "@mathjax/src/js/adaptors/lite/Element.js";
 import "@mathjax/src/js/input/tex/base/BaseConfiguration.js";
 import "@mathjax/src/js/input/tex/ams/AmsConfiguration.js";
+import { evictOldest } from "../lru-cache";
 
 export interface InlineMath { readonly svg: string; readonly width: number; readonly height: number; readonly ascent: number }
 const adaptor = liteAdaptor();
@@ -46,7 +47,7 @@ export function renderInlineMath(source: string): InlineMath | undefined {
       }
     }
   } catch { /* Invalid or unsupported TeX is displayed verbatim, also in exports. */ }
-  if (cache.size >= 1000) cache.delete(cache.keys().next().value!);
+  evictOldest(cache, 1000);
   cache.set(source, result);
   return result;
 }

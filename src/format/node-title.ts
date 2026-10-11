@@ -1,5 +1,6 @@
 import MarkdownIt from "markdown-it";
 import mark from "markdown-it-mark";
+import { evictOldest } from "../lru-cache";
 import type { MindTreeNode } from "../types";
 import { buildLinkedResourcePath } from "./resource-id";
 
@@ -95,7 +96,7 @@ export function parseNodeTitle(source: string): NodeTitleContent {
     plainText: runs.map((run) => run.text).join(""),
     hasCodeOrMath: runs.some((run) => run.kind !== "text"), protectedRanges: env.ranges
   };
-  if (cache.size >= 2000) cache.delete(cache.keys().next().value!);
+  evictOldest(cache, 2000);
   cache.set(source, result);
   return result;
 }

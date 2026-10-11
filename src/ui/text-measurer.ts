@@ -1,4 +1,5 @@
 import { parseNodeTitle, type TitleRun } from "../format/node-title";
+import { evictOldest } from "../lru-cache";
 import { renderInlineMath, type InlineMath } from "./inline-math";
 /**
  * Font information that affects title geometry. Keeping it explicit lets the
@@ -258,10 +259,7 @@ export class BrowserNodeTextMeasurer implements NodeTextMeasurer {
     };
     const rich = mode === "title" ? measureRichTitle(normalized, width, style, measureText) : undefined;
     const measurement = rich ?? measureWith(normalized, depth, width, style, (line) => measureText(line, style), mode);
-    if (this.cache.size >= MAX_MEASUREMENT_CACHE_ENTRIES) {
-      const oldest = this.cache.keys().next().value as string | undefined;
-      if (oldest !== undefined) this.cache.delete(oldest);
-    }
+    evictOldest(this.cache, MAX_MEASUREMENT_CACHE_ENTRIES);
     this.cache.set(key, measurement);
     return measurement;
   }

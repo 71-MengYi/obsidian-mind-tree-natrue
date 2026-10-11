@@ -1,3 +1,5 @@
+import { clamp } from "../numeric";
+
 /** Canvas navigation is session state and is never serialized into an .mtn.md file. */
 export interface ViewportState {
   x: number;
@@ -151,8 +153,4 @@ export function pinchViewport(
     x: newCenter.x - (oldCenter.x - viewport.x) * zoom / viewport.zoom,
     y: newCenter.y - (oldCenter.y - viewport.y) * zoom / viewport.zoom
   };
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
 }

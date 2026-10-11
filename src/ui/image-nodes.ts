@@ -1,4 +1,5 @@
 import type { TFile } from "obsidian";
+import { clamp } from "../numeric";
 import type { FileResourceRef, MindTreeNode, NodeId } from "../types";
 
 export interface ImageDisplaySize {
@@ -192,8 +193,4 @@ export class BrowserImageNodePresentation implements ImageNodePresentation {
 
 function validNaturalSize(width: number, height: number): boolean {
   return Number.isFinite(width) && Number.isFinite(height) && width > 0 && height > 0;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  return Math.max(minimum, Math.min(maximum, value));
 }
