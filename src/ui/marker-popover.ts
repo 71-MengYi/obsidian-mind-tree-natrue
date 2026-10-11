@@ -65,7 +65,7 @@ const HIGHLIGHT_CHOICES: readonly MarkerChoice[] = NODE_HIGHLIGHT_COLORS.map((co
 export function openMarkerPopover(options: MarkerPopoverOptions): MarkerPopoverHandle {
   const panel = options.ownerDocument.body.createDiv("mtn-marker-popover");
   panel.setAttribute("role", "dialog");
-  panel.setAttribute("aria-label", t("menu.markers"));
+  panel.setAttribute("aria-label", t("toolbar.markers"));
   let closed = false;
   let tooltips: AdaptiveTooltipController | undefined;
 

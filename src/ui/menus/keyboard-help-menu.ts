@@ -21,13 +21,13 @@ export class KeyboardHelpMenu {
       ["Enter", t("shortcut.addSiblingBelow")], ["Shift + Enter", t("shortcut.addSiblingAbove")],
       ["Tab", t("shortcut.addChild")], ["Shift + Tab", t("shortcut.addParent")],
       [`${commandKey} + ↑`, t("shortcut.moveSiblingUp")], [`${commandKey} + ↓`, t("shortcut.moveSiblingDown")],
-      [`${commandKey} + E`, t("shortcut.createNote")], [`${commandKey} + S`, t("shortcut.save")],
-      [`${commandKey} + F`, t("shortcut.search")],
+      [`${commandKey} + E`, t("shortcut.createNote")], [`${commandKey} + S`, t("statusBar.save")],
+      [`${commandKey} + F`, t("toolbar.search")],
       ["↑ / ↓", t("shortcut.navigateSiblings")], ["← / →", t("shortcut.navigateHierarchy")],
       [t("shortcut.spaceKey"), t("shortcut.editNode")], ["Delete / Backspace", t("shortcut.deleteBranch")],
       [`${commandKey} + A`, t("shortcut.selectAll")], [`${commandKey} + C`, t("shortcut.copyBranch")],
       [`${commandKey} + X`, t("shortcut.cutBranch")], [`${commandKey} + V`, t("shortcut.pasteBranch")],
-      [`${commandKey} + Z`, t("shortcut.undo")], [`${commandKey} + Shift + Z`, t("shortcut.redo")],
+      [`${commandKey} + Z`, t("toolbar.undo")], [`${commandKey} + Shift + Z`, t("toolbar.redo")],
       ["Escape", t("shortcut.cancel")]
     ];
     for (const [keys, action] of shortcuts) {

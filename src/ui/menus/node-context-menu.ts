@@ -62,7 +62,7 @@ export class NodeContextMenu {
         }
       });
     }
-    menu.addItem((item) => item.setTitle(t("menu.markers")).setIcon("tags").onClick(guarded(actions.showMarkers)));
+    menu.addItem((item) => item.setTitle(t("toolbar.markers")).setIcon("tags").onClick(guarded(actions.showMarkers)));
     menu.addSeparator();
     menu.addItem((item) => item.setTitle(t("menu.addChild")).setIcon("corner-down-right").onClick(guarded(actions.addChild)));
     if (!state.isRoot) menu.addItem((item) => item.setTitle(t("menu.addSibling")).setIcon("list-plus").onClick(guarded(actions.addSibling)));

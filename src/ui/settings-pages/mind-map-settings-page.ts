@@ -22,7 +22,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
     this.element = parent;
     parent.createEl("h3", { text: t("settings.tabs.mindMap") });
 
-    new Setting(parent).setName(t("settings.defaultLayout.name")).setDesc(t("settings.defaultLayout.desc"))
+    new Setting(parent).setName(t("settings.defaultLayout.name")).setDesc(t("settings.defaultValue.desc"))
       .addDropdown((dropdown) => {
         for (const option of LAYOUT_OPTIONS) dropdown.addOption(option.value, t(option.label));
         return dropdown.setValue(port.settings.defaultLayoutMode).onChange(async (value) => {
@@ -30,7 +30,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
           await port.save();
         });
       });
-    new Setting(parent).setName(t("settings.defaultCollectionMode.name")).setDesc(t("settings.defaultCollectionMode.desc"))
+    new Setting(parent).setName(t("settings.defaultCollectionMode.name")).setDesc(t("settings.defaultValue.desc"))
       .addDropdown((dropdown) => {
         for (const option of COLLECTION_MODE_OPTIONS) dropdown.addOption(option.value, t(option.label));
         return dropdown.setValue(port.settings.defaultCollectionMode).onChange(async (value) => {
@@ -57,7 +57,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
           port.settings.newNoteOpenMode = value as typeof port.settings.newNoteOpenMode;
           await port.save();
         }));
-    new Setting(parent).setName(t("settings.theme.name")).setDesc(t("settings.theme.desc"))
+    new Setting(parent).setName(t("settings.theme.name")).setDesc(t("settings.defaultValue.desc"))
       .addDropdown((dropdown) => {
         for (const option of THEME_OPTIONS) dropdown.addOption(option.value, t(option.label));
         return dropdown.setValue(port.settings.theme).onChange(async (value) => {
@@ -65,7 +65,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
           await port.save();
         });
       });
-    new Setting(parent).setName(t("settings.connection.name")).setDesc(t("settings.connection.desc"))
+    new Setting(parent).setName(t("settings.connection.name")).setDesc(t("settings.defaultValue.desc"))
       .addDropdown((dropdown) => {
         for (const option of CONNECTION_OPTIONS) dropdown.addOption(option.value, t(option.label));
         return dropdown.setValue(port.settings.connectionStyle).onChange(async (value) => {
@@ -73,7 +73,7 @@ export class MindMapSettingsPage implements SettingsPageObject {
           await port.save();
         });
       });
-    new Setting(parent).setName(t("settings.nodeShape.name")).setDesc(t("settings.nodeShape.desc"))
+    new Setting(parent).setName(t("settings.nodeShape.name")).setDesc(t("settings.defaultValue.desc"))
       .addDropdown((dropdown) => {
         for (const option of NODE_SHAPE_OPTIONS) dropdown.addOption(option.value, t(option.label));
         return dropdown.setValue(port.settings.nodeShape).onChange(async (value) => {
