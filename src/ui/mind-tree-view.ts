@@ -446,8 +446,9 @@ export class MindTreeView extends TextFileView {
     this.primarySelectedId = undefined;
     this.refreshTopToolbar();
     // A different document must never serve the previous tree's search payload.
-    this.searchController?.destroy();
-    this.searchController = undefined;
+    // Only the caches are dropped: the panel outlives the file switch, so
+    // destroying the controller here would leave Mod+F and the toolbar inert.
+    this.searchController?.reset();
     this.editingNodeId = undefined;
     this.editingDraftValue = "";
     this.attachSharedSession(file.path);

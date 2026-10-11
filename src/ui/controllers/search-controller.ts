@@ -77,6 +77,12 @@ export interface SearchController {
   open(): void;
   /** Every reflow invalidates the derived payload; the revision only grows. */
   invalidate(): void;
+  /**
+   * Drop the cached answers of the previous document while keeping the panel
+   * (and its DOM) alive. Call this on file load: destroying the controller
+   * instead would leave `open()` inert because nothing recreates it.
+   */
+  reset(): void;
   /** Drop cached answers when the host document object changed. */
   setContext(): void;
   destroy(): void;
@@ -186,6 +192,13 @@ export function createSearchController<TFile extends SearchVaultFile>(
 
     invalidate(): void {
       revision += 1;
+    },
+
+    reset(): void {
+      // Mirror the pre-controller view: only the derived answers of a different
+      // document are dropped, so an open window re-answers via setContext().
+      candidateCache = undefined;
+      contentCache.clear();
     },
 
     setContext(): void {
