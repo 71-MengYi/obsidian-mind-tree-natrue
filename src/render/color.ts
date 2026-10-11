@@ -1,6 +1,6 @@
 /**
- * Shared color helpers. They live in the UI layer because every caller writes
- * the returned literal into DOM/SVG output.
+ * Shared color helpers. They live in the render layer because every caller
+ * writes the returned literal into DOM/SVG output.
  */
 
 /**

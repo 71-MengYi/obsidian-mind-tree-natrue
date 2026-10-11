@@ -1,5 +1,5 @@
 import { nodeTitleMode, type TitleCommitResult } from "../../format/node-title";
-import { renderRichTitleSvg } from "../text-measurer";
+import { renderRichTitleSvg } from "../../render/text-measurer";
 import { setIcon } from "obsidian";
 import {
   getVisibleNodeMarkers,
@@ -12,16 +12,16 @@ import { SHARE_SQUARE_ICON } from "../icons";
 import {
   getNodeMarkerGeometry,
   type ResourceBadgePresentation
-} from "../resource-badges";
+} from "../../render/resource-badges";
 import {
   getNodeSizeClass,
   getNodeTitleEditorSize,
   NODE_HORIZONTAL_INSETS
-} from "../layout";
-import { readableTextColor } from "../color";
-import { branchColorCss } from "../presentation";
-import type { NodeTextMeasurer } from "../text-measurer";
-import type { ImageNodePresentation, ImageNodeVisual } from "../image-nodes";
+} from "../../render/layout";
+import { readableTextColor } from "../../render/color";
+import { branchColorCss } from "../../render/presentation";
+import type { NodeTextMeasurer } from "../../render/text-measurer";
+import type { ImageNodePresentation, ImageNodeVisual } from "../../render/image-nodes";
 import { createNodeVisualState, type NodeVisualState } from "./node-render-model";
 
 export interface NodeRenderState {

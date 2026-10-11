@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { performance } from "node:perf_hooks";
 import { addNode, createEmptyDocument, findParentId, getDepth } from "../src/domain/tree";
 import { parseMindTreeFile, serializeMindTreeFile } from "../src/format/document";
-import { layoutTree } from "../src/ui/layout";
+import { layoutTree } from "../src/render/layout";
 
 test("a 1,000-node document parses, indexes, lays out, and serializes within two seconds", () => {
   const document = createEmptyDocument("Performance root");

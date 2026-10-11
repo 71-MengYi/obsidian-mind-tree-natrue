@@ -10,7 +10,7 @@ import {
   wheelDeltaToPixels,
   ZOOM_STEP,
   zoomViewportAt
-} from "../src/ui/viewport";
+} from "../src/render/viewport";
 
 test("viewport CSS snaps positioned pan to device pixels and keeps zoom separate", () => {
   const presentation = viewportToCssPresentation({ x: 80.24, y: 40.26, zoom: 1.3 }, 2);

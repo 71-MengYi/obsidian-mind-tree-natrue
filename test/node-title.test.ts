@@ -2,14 +2,14 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { parseNodeTitle, fileTitleFromNode, validateNodeTitle, nodeTitleMode } from "../src/format/node-title";
 import { createEmptyDocument, addNode } from "../src/domain/tree";
-import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
-import { renderInlineMath } from "../src/ui/inline-math";
-import { renderRichTitleSvg } from "../src/ui/text-measurer";
+import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
+import { renderInlineMath } from "../src/render/inline-math";
+import { renderRichTitleSvg } from "../src/render/text-measurer";
 import { renderBranchSvg } from "../src/services/export";
 import { renderBranchMarkdown } from "../src/format/outline";
 import { scanTextLinkSpans } from "../src/services/text-url";
 import { SharedMindTreeSession } from "../src/services/mind-tree-session-registry";
-import { getNodeSize } from "../src/ui/layout";
+import { getNodeSize } from "../src/render/layout";
 
 test("inline titles parse nested formats and preserve literal syntax safely", () => {
   const parsed = parseNodeTitle("中文 **bold *italic*** ~~gone~~ ==mark== `a*b` $x^2$");

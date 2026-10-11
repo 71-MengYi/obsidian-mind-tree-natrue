@@ -7,8 +7,8 @@ import { renderOutline } from "../src/format/outline";
 import { serializeMindTreeFile } from "../src/format/document";
 import { renderBranchSvg } from "../src/services/export";
 import type { MindTreeDocument, MindTreeNode } from "../src/types";
-import { getNodeBoxSize, NODE_HORIZONTAL_INSETS, NODE_HORIZONTAL_PADDING } from "../src/ui/layout";
-import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
+import { getNodeBoxSize, NODE_HORIZONTAL_INSETS, NODE_HORIZONTAL_PADDING } from "../src/render/layout";
+import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
 import {
   createResourceBadgePresentation,
   getNodeMarkerGeometry,
@@ -18,7 +18,7 @@ import {
   type FileBadgeRules,
   type ResourceBadgeMeasurer,
   type ResourceBadgePresentation
-} from "../src/ui/resource-badges";
+} from "../src/render/resource-badges";
 
 const WRAP_WIDTH = 240;
 const emptyBadgeRules: FileBadgeRules = { ignoredFileBadgeExtensions: [], fileExtensionBadgeAliases: {} };

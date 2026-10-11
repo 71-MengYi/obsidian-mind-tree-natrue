@@ -8,10 +8,10 @@ import type {
   MindTreeNodeShape,
   MindTreeTheme
 } from "../../types";
-import { MAX_NODE_WRAP_WIDTH, MIN_NODE_WRAP_WIDTH, normalizeNodeWrapWidth } from "../layout";
+import { MAX_NODE_WRAP_WIDTH, MIN_NODE_WRAP_WIDTH, normalizeNodeWrapWidth } from "../../render/layout";
 import {
   COLLECTION_MODE_OPTIONS, CONNECTION_OPTIONS, LAYOUT_OPTIONS, NODE_SHAPE_OPTIONS, THEME_OPTIONS
-} from "../presentation";
+} from "../../render/presentation";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
 
 /** Global appearance/export preferences and runtime defaults for trees without their own value. */

@@ -12,7 +12,7 @@ import type {
   MindTreeNodeShape,
   MindTreeTheme
 } from "./types";
-import { DEFAULT_NODE_WRAP_WIDTH } from "./ui/layout";
+import { DEFAULT_NODE_WRAP_WIDTH } from "./render/layout";
 
 /** Persisted cross-tree preferences, kept free of Obsidian UI dependencies. */
 export interface MindTreeSettings {

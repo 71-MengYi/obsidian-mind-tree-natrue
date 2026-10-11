@@ -1,5 +1,5 @@
 import { DisposerBag } from "../components/ui-object";
-import { wheelDeltaToPixels } from "../viewport";
+import { wheelDeltaToPixels } from "../../render/viewport";
 
 /** The modal owns the DOM; this controller owns only its interaction state. */
 export interface DeleteDetailTarget {

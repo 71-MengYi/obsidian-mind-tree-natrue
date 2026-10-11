@@ -1,5 +1,5 @@
 import { nodeTitleMode } from "../format/node-title";
-import { escapeTitleXml, renderRichTitleSvg } from "../ui/text-measurer";
+import { escapeTitleXml, renderRichTitleSvg } from "../render/text-measurer";
 import type {
   MindTreeConnectionStyle,
   MindTreeDocument,
@@ -28,10 +28,10 @@ import {
   NODE_VERTICAL_INSETS,
   NODE_VERTICAL_PADDING,
   wrapNodeTitle
-} from "../ui/layout";
-import { readableTextColor } from "../ui/color";
-import { getBranchColorSlots } from "../ui/presentation";
-import { fallbackNodeTextMeasurer, type NodeTextMeasurer } from "../ui/text-measurer";
+} from "../render/layout";
+import { readableTextColor } from "../render/color";
+import { getBranchColorSlots } from "../render/presentation";
+import { fallbackNodeTextMeasurer, type NodeTextMeasurer } from "../render/text-measurer";
 import {
   fallbackResourceBadgePresentation,
   getNodeMarkerGeometry,
@@ -40,8 +40,8 @@ import {
   type ResourceBadge,
   type ResourceBadgePresentation,
   type ResourceBadgeSize
-} from "../ui/resource-badges";
-import { getThemePreset, resolveThemeConnection } from "../ui/theme-presets";
+} from "../render/resource-badges";
+import { getThemePreset, resolveThemeConnection } from "../render/theme-presets";
 import {
   fitImageToDefault,
   IMAGE_CAPTION_GAP,
@@ -50,7 +50,7 @@ import {
   persistedImageSize,
   type ImageNodePresentation,
   type ImageNodeVisual
-} from "../ui/image-nodes";
+} from "../render/image-nodes";
 
 const PADDING = 36;
 

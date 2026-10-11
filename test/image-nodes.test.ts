@@ -11,10 +11,10 @@ import {
   fitImageToDefault,
   persistedImageSize,
   resizeImageFromWidth
-} from "../src/ui/image-nodes";
-import { getNodeBoxSize } from "../src/ui/layout";
-import { fallbackResourceBadgePresentation } from "../src/ui/resource-badges";
-import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
+} from "../src/render/image-nodes";
+import { getNodeBoxSize } from "../src/render/layout";
+import { fallbackResourceBadgePresentation } from "../src/render/resource-badges";
+import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
 
 test("image nodes fit the compact default box without enlarging small files", () => {
   assert.deepEqual(fitImageToDefault(400, 300), { width: 180, height: 135 });

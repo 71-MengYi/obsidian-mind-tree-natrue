@@ -6,17 +6,17 @@ import {
   DEFAULT_SETTINGS,
   type MindTreeSettings
 } from "./settings-model";
-import { normalizeNodeWrapWidth } from "./ui/layout";
+import { normalizeNodeWrapWidth } from "./render/layout";
 import {
   COLLECTION_MODE_OPTIONS,
   LAYOUT_OPTIONS,
   THEME_OPTIONS
-} from "./ui/presentation";
+} from "./render/presentation";
 import {
   MAX_FILE_BADGE_RULE_ENTRIES,
   normalizeFileBadgeAlias,
   normalizeFileBadgeExtension
-} from "./ui/resource-badges";
+} from "./render/resource-badges";
 
 export interface PluginData {
   settings: Partial<MindTreeSettings>;

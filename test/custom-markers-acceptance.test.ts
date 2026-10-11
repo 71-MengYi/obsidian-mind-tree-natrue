@@ -12,9 +12,9 @@ import {
   getNodeMarkerGeometry,
   MANUAL_MARKER_SIZE,
   NODE_MARKER_GAP
-} from "../src/ui/resource-badges";
-import { NODE_HORIZONTAL_PADDING } from "../src/ui/layout";
-import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
+} from "../src/render/resource-badges";
+import { NODE_HORIZONTAL_PADDING } from "../src/render/layout";
+import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
 
 /**
  * End-to-end acceptance for user-managed markers, exercised through the same

@@ -23,8 +23,8 @@ import {
   NODE_HORIZONTAL_INSETS,
   NODE_HORIZONTAL_PADDING,
   wrapNodeTitle
-} from "../src/ui/layout";
-import { getNodeMarkerGeometry } from "../src/ui/resource-badges";
+} from "../src/render/layout";
+import { getNodeMarkerGeometry } from "../src/render/resource-badges";
 
 test("recognizes Excalidraw only from official Frontmatter values", () => {
   assert.equal(classifyFileSubtype({ "excalidraw-plugin": "raw" }), "excalidraw");

@@ -4,8 +4,8 @@ import { addNode, createEmptyDocument } from "../src/domain/tree";
 import type { CustomMarkerDefinition } from "../src/domain/custom-markers";
 import { renderOutline } from "../src/format/outline";
 import { renderBranchSvg } from "../src/services/export";
-import { fallbackNodeTextMeasurer } from "../src/ui/text-measurer";
-import { layoutTree } from "../src/ui/layout";
+import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
+import { layoutTree } from "../src/render/layout";
 import {
   createResourceBadgePresentation,
   deriveFileBadgeExtension,
@@ -19,7 +19,7 @@ import {
   resolveResourceBadges,
   type FileBadgeRules,
   type ResourceBadgeMeasurer
-} from "../src/ui/resource-badges";
+} from "../src/render/resource-badges";
 
 const emptyRules: FileBadgeRules = {
   ignoredFileBadgeExtensions: [],

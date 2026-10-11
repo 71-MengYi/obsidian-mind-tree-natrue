@@ -23,7 +23,7 @@ import {
 } from "./ui/icons";
 import { MindTreeView } from "./ui/mind-tree-view";
 import { CreateMindTreeModal, PluginUpdateModal, TextPromptModal } from "./ui/modals/index";
-import { LAYOUT_OPTIONS } from "./ui/presentation";
+import { LAYOUT_OPTIONS } from "./render/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
 import { ReleaseClient, UpdateError } from "./services/updates/release-client";
 import { UpdateStore } from "./services/updates/update-store";

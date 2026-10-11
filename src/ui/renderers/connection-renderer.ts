@@ -1,7 +1,7 @@
 import type { MindTreeDocumentSettings, NodeId, PositionedNode } from "../../types";
-import { branchColorCss } from "../presentation";
-import { connectionPath, type TreeLayout } from "../layout";
-import { resolveThemeConnection } from "../theme-presets";
+import { branchColorCss } from "../../render/presentation";
+import { connectionPath, type TreeLayout } from "../../render/layout";
+import { resolveThemeConnection } from "../../render/theme-presets";
 
 export interface ConnectionRenderState {
   readonly layout: TreeLayout;

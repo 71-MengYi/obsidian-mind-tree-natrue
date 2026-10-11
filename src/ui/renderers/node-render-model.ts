@@ -6,7 +6,7 @@ import {
   getNodeResourceControls,
   type ResourceBadge,
   type ResourceBadgePresentation
-} from "../resource-badges";
+} from "../../render/resource-badges";
 
 export interface NodeVisualState {
   readonly hasResourceControls: boolean;

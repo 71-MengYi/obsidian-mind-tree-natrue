@@ -14,15 +14,15 @@ import {
   NODE_HORIZONTAL_INSETS,
   NODE_VERTICAL_INSETS,
   wrapNodeTitle
-} from "../src/ui/layout";
-import { BRANCH_COLOR_COUNT, branchColorCss, getBranchColorSlots } from "../src/ui/presentation";
+} from "../src/render/layout";
+import { BRANCH_COLOR_COUNT, branchColorCss, getBranchColorSlots } from "../src/render/presentation";
 import {
   estimateFallbackTextWidth,
   fallbackNodeTextStyle,
   type NodeTextMeasurer,
   type NodeTextStyle
-} from "../src/ui/text-measurer";
-import { getThemePreset, resolveThemeConnection } from "../src/ui/theme-presets";
+} from "../src/render/text-measurer";
+import { getThemePreset, resolveThemeConnection } from "../src/render/theme-presets";
 
 test("node width follows content while only the root retains a minimum height", () => {
   const root = getNodeSize(0, "A");

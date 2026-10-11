@@ -1,6 +1,6 @@
 import type { App, TFile, ViewState, WorkspaceLeaf } from "obsidian";
 import { MIND_TREE_VIEW_TYPE } from "../../view-routing";
-import type { ViewportState } from "../../ui/viewport";
+import type { ViewportState } from "../../render/viewport";
 import { UpdateError, updateTimeout } from "./release-client";
 import type { UpdateHost, UpdateRuntime, PreparedPluginUpdate } from "./update-coordinator";
 import type { PluginReloadBridge } from "./plugin-reload-bridge";

@@ -1,5 +1,5 @@
 import type { NodeId } from "../../types";
-import { wheelDeltaToPixels, ZOOM_STEP } from "../viewport";
+import { wheelDeltaToPixels, ZOOM_STEP } from "../../render/viewport";
 
 interface PointerGesture {
   readonly mode: "marquee" | "pan";

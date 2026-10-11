@@ -4,7 +4,7 @@ import {
   MAX_FILE_BADGE_RULE_ENTRIES,
   normalizeFileBadgeAlias,
   normalizeFileBadgeExtension
-} from "../resource-badges";
+} from "../../render/resource-badges";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
 import { PluginUpdateSection } from "./plugin-update-section";
 

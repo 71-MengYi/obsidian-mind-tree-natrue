@@ -6,7 +6,7 @@ import type {
 } from "../../types";
 import {
   COLLECTION_MODE_OPTIONS, CONNECTION_OPTIONS, LAYOUT_OPTIONS, NODE_SHAPE_OPTIONS, THEME_OPTIONS
-} from "../presentation";
+} from "../../render/presentation";
 import { bindThemeMenuHover, captureShownMenuElement } from "./theme-menu-hover";
 
 interface Choice<T extends string | number> { readonly value: T; readonly label: string; }

@@ -1,7 +1,7 @@
 import type { MindTreeDocumentSettings } from "../../types";
 import type { VersionPreviewState } from "../../services/version-conflict-coordinator";
 import { t } from "../../i18n";
-import { COLLECTION_MODE_OPTIONS, CONNECTION_OPTIONS, LAYOUT_OPTIONS, NODE_SHAPE_OPTIONS, THEME_OPTIONS } from "../presentation";
+import { COLLECTION_MODE_OPTIONS, CONNECTION_OPTIONS, LAYOUT_OPTIONS, NODE_SHAPE_OPTIONS, THEME_OPTIONS } from "../../render/presentation";
 import { ReadOnlyTreePreview, type TreePreviewOptions } from "./read-only-tree-preview";
 import { DisposableUiObject } from "./ui-object";
 import { changedVersionSettings } from "./version-preview-model";

@@ -2,7 +2,7 @@ import type { NodeId } from "../../types";
 import {
   resizeImageFromWidth,
   type ImageDisplaySize
-} from "../image-nodes";
+} from "../../render/image-nodes";
 import type { GesturePointer } from "./touch-gesture";
 
 export interface ImageResizeStartState {

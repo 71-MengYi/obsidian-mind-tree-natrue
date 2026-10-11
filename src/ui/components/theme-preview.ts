@@ -1,6 +1,6 @@
 import type { MindTreeNodeAlignment, MindTreeTheme } from "../../types";
 import { t } from "../../i18n";
-import { THEME_OPTIONS } from "../presentation";
+import { THEME_OPTIONS } from "../../render/presentation";
 import { ReadOnlyTreePreview, type TreePreviewOptions } from "./read-only-tree-preview";
 import { DisposableUiObject } from "./ui-object";
 import {

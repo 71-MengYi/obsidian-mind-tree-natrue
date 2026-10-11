@@ -4,7 +4,7 @@ import {
   TouchGestureMachine, type GesturePointer, type TouchGestureClock,
   type TouchGestureActions, type TouchTarget
 } from "../src/ui/controllers/touch-gesture";
-import { pinchViewport, MAX_ZOOM, MIN_ZOOM } from "../src/ui/viewport";
+import { pinchViewport, MAX_ZOOM, MIN_ZOOM } from "../src/render/viewport";
 import { keyboardAvoidanceDelta, KeyboardAvoidanceOffset } from "../src/ui/controllers/keyboard-avoidance-controller";
 
 class Clock implements TouchGestureClock {

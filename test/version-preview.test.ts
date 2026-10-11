@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
 import { serializeMindTreeFile } from "../src/format/document";
 import { previewDocument, changedVersionSettings } from "../src/ui/components/version-preview-model";
-import { layoutTree } from "../src/ui/layout";
+import { layoutTree } from "../src/render/layout";
 
 test("temporary folds are independent per pane and cannot change serialized data or selected versions", () => {
   const document = createEmptyDocument("Root");

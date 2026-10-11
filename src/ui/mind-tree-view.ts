@@ -140,23 +140,24 @@ import {
 import {
   layoutTree,
   type TreeLayout
-} from "./layout";
-import { BrowserNodeTextMeasurer, fallbackNodeTextMeasurer } from "./text-measurer";
+} from "../render/layout";
+import { BrowserNodeTextMeasurer } from "./text-measurer";
+import { fallbackNodeTextMeasurer } from "../render/text-measurer";
+import { BrowserResourceBadgeMeasurer } from "./resource-badges";
 import {
-  BrowserResourceBadgeMeasurer,
   createResourceBadgePresentation,
   fallbackResourceBadgeMeasurer,
   type ResourceBadgePresentation
-} from "./resource-badges";
+} from "../render/resource-badges";
+import { BrowserImageNodePresentation } from "./image-nodes";
 import {
-  BrowserImageNodePresentation,
   fallbackImageNodePresentation,
   type ImageDisplaySize,
   type ImageNodeVisual
-} from "./image-nodes";
+} from "../render/image-nodes";
 import {
   getBranchColorSlots,
-} from "./presentation";
+} from "../render/presentation";
 import { ConnectionRenderer, NodeRenderer } from "./renderers";
 import {
   CollapseLevelMenu, CopyMenu, ExportMenu, KeyboardHelpMenu, NodeContextMenu, TreeSettingsMenu
@@ -171,7 +172,7 @@ import {
   zoomViewportAt,
   viewportToCssPresentation,
   type ViewportState
-} from "./viewport";
+} from "../render/viewport";
 import {
   DeleteBranchModal,
   confirmLargeExternalFiles,

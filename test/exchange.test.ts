@@ -13,8 +13,8 @@ import {
 } from "../src/services/clipboard";
 import { renderBranchSvg } from "../src/services/export";
 import { DocumentSession } from "../src/services/document-session";
-import type { NodeTextMeasurer } from "../src/ui/text-measurer";
-import { layoutTree } from "../src/ui/layout";
+import type { NodeTextMeasurer } from "../src/render/text-measurer";
+import { layoutTree } from "../src/render/layout";
 import type { FileResourceRef } from "../src/types";
 
 test("renders readable Markdown links and parses list structure", () => {
