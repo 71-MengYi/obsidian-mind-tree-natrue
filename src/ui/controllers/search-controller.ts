@@ -111,6 +111,11 @@ export function createSearchController<TFile extends SearchVaultFile>(
    * document revision. Verification re-reads every linked file, so repeating it
    * on each keystroke would make a large tree feel unresponsive; the content
    * cache below then keeps the first payload build the only expensive one.
+   *
+   * `buildContext` closes over `readFileText`, which is declared after it. That
+   * is safe only because nothing runs a search during construction: `mount()` /
+   * `open()` must stay the first callers, or a search would hit the temporal
+   * dead zone.
    */
   const buildContext = async (): Promise<SearchContext | undefined> => {
     const document = ports.readDocument();
