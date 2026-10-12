@@ -384,6 +384,8 @@ export const RESOURCE_CONTROL_GAP = 2;
 
 export interface NodeResourceControls {
   readonly hasOpenButton: boolean;
+  /** Static "go to linked node" mark; the source node of a one-way node link. */
+  readonly hasNodeLink: boolean;
   readonly titleSyncDisabled: boolean;
   readonly width: number;
   readonly height: number;
@@ -393,15 +395,22 @@ export interface NodeResourceControls {
  * Shared by the renderer and the node box model. Every linked resource can be
  * opened, but only a vault file has a filename whose title sync can be disabled.
  * In particular, a URL's titleSync: "off" must not reserve a second icon slot.
+ *
+ * A node link already *is* the node's association, so it owns the single
+ * trailing slot: a resource on the same node stops rendering its own controls
+ * (a stale one stays reachable from the context menu) and the open button is
+ * always the last item when it does render.
  */
 export function getNodeResourceControls(node?: Readonly<MindTreeNode>): NodeResourceControls {
-  const hasOpenButton = node?.resource !== undefined;
-  const titleSyncDisabled = node?.resource?.type === "file" && node.titleSync !== "bidirectional";
-  const count = hasOpenButton ? (titleSyncDisabled ? 2 : 1) : 0;
+  const hasNodeLink = Boolean(node?.nodeLink);
+  const hasOpenButton = node?.resource !== undefined && !hasNodeLink;
+  const titleSyncDisabled = hasOpenButton && node?.resource?.type === "file" && node.titleSync !== "bidirectional";
+  const count = (hasOpenButton ? (titleSyncDisabled ? 2 : 1) : 0) + (hasNodeLink ? 1 : 0);
   return {
     hasOpenButton,
+    hasNodeLink,
     titleSyncDisabled,
     width: count * (RESOURCE_CONTROL_SIZE + RESOURCE_CONTROL_GAP),
-    height: hasOpenButton ? RESOURCE_CONTROL_SIZE : 0
+    height: hasOpenButton || hasNodeLink ? RESOURCE_CONTROL_SIZE : 0
   };
 }

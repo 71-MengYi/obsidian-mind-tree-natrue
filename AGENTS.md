@@ -58,8 +58,8 @@
 ```
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
-├── src/                        源码（141 个 .ts，唯一的开发区域）
-├── test/                       单元测试（71 个 *.test.ts + test/helpers/）
+├── src/                        源码（143 个 .ts，唯一的开发区域）
+├── test/                       单元测试（74 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -96,7 +96,7 @@ src/
 ├── view-routing.ts            视图类型常量；isMindTreePath 转发自 format/resource-id（唯一判定）
 ├── numeric.ts                 clamp（唯一实现）
 ├── lru-cache.ts               evictOldest（唯一淘汰实现）
-├── domain/      (7)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts、custom-markers.ts、url.ts
+├── domain/      (8)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts、custom-markers.ts、url.ts、node-link.ts（单向节点关联）
 ├── format/      (6)  .mtn.md 格式：document.ts、outline.ts、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
 ├── render/      (9)  ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、color、inline-math
@@ -106,7 +106,7 @@ src/
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
     ├── renderers/       (4) node-renderer、connection-renderer、node-render-model
     ├── menus/           (6) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览
-    ├── modals/         (10) 新建/删除/移动/导入/文件建议/更新提示等对话框
+    ├── modals/         (11) 新建/删除/移动/导入/文件建议/节点关联选择/更新提示等对话框
     ├── settings-pages/  (7) 基础设置、思维导图、主题笔记、插件更新分区、管理标记
     └── search/          (3) 搜索核心（search-core）、右侧搜索面板、搜索载荷
 ```
@@ -211,6 +211,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 树操作：`addNode` / `moveNodes` / `deleteBranches` / `extractBranches` / `insertBranches` … | `domain/tree.ts` | 纯函数树命令（配合撤销栈） |
 | `getDocumentTreeIndex` | `domain/tree-index.ts` | 父节点/深度/文档序索引（WeakMap 失效） |
 | `normalizeRuntimeNode` / `normalizeNodeMarkers` | `domain/runtime-node.ts` / `domain/markers.ts` | 不可信数据的运行时校验 |
+| 节点关联：`createNodeLink` / `removeNodeLinks` / `collectNodeLinks` / `isNodeLinkParticipant` / `nodeTitlePath` / `NodeLinkError` | `domain/node-link.ts` | 同一文档内的**单向**节点引用：校验（自引用/已有资源/已有出边）、写入与清除目标 id；不复制节点、不改动 `childIds` |
+| 引用修复：`pruneNodeLinksAfterRemoval` / `pruneDanglingNodeLinks` | `domain/tree.ts` | 删除节点与加载不可信数据时清理指向不存在节点的关联 |
 
 ### 3.3 docs 概念名 ↔ 代码落点
 
@@ -235,7 +237,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 ### 3.4 领域模型（`src/types.ts`）
 
 - `MindTreeDocument`：`schemaVersion?`、`documentId?`、`rootId`、`nodes`、6 项文档设置。
-- `MindTreeNode`：`id`、`title`、`childIds`、`createdAt`/`updatedAt`、`resource?`、`titleSync?`、`markers?`、`style?`、`collapsed?`。
+- `MindTreeNode`：`id`、`title`、`childIds`、`createdAt`/`updatedAt`、`resource?`、`titleSync?`、`markers?`、`style?`、`collapsed?`、`nodeLink?`（同文档单向节点关联，只存目标 id，不复制也不改动 `childIds`）。
 - `ResourceRef` = `FileResourceRef | UrlResourceRef`：文件用稳定 `resourceId` + `pathHint`；URL 只存地址。
 - 运行时（不落盘）状态一律放视图/会话：选择、视口、折叠预览、标签派生视觉。
 
@@ -262,7 +264,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，71 个文件，686 个用例）+ `test/helpers/`（1 个共享桩）。
+- 位置：`test/*.test.ts`（**平铺**，74 个文件，760 个用例）+ `test/helpers/`（1 个共享桩）。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -276,6 +278,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `test/layout.test.ts` | 三档字号/行高、只有根节点 32px 最小高度、十套主题十二色、所有连线 1px、五种布局方向 |
 | `test/performance.test.ts` | 1000 节点"解析+索引+布局+序列化" < 2 秒基线 |
 | `test/format.test.ts` / `test/document-conflict.test.ts` / `test/identity-repair.test.ts` | 格式拒绝、迁移逐级、失败不覆盖、身份保护 |
+| `test/node-link.test.ts` | 关联节点只写一条指针、不复制也不改动子节点；拒绝自引用/已有资源/第二条出边；删除清理入边；粘贴不携带关联；大纲块 id 与单向 `id->id` 链接域 |
+| `test/node-renderer.test.ts` | 节点尾部控制列的真实渲染：只有 nodeLink 时必须**仅**渲染链接标志（不能再出现无资源的打开按钮，否则会溢出错位）；点击链接标志调用 `goToLinkedNode`；有关联资源的节点只渲染打开按钮；资源与关联并存时链接标志独占槽位；只读预览禁用图标 |
 
 约定：**新增行为必须带测试**；不允许为了让测试变绿而删除或放宽既有断言（除非需求本身变化，并在 `docs/` 里写明）。
 
@@ -376,6 +380,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改单树设置 | `src/document-settings.ts`、`src/document-settings-state.ts`、`src/ui/menus/tree-settings-menu.ts` | `docs/03-document-format.md` §7、`docs/05-technical-design.md` §9.4 | `test/document-settings-state.test.ts`、`test/format.test.ts` |
 | 改文件格式/解析/迁移 | `src/format/document.ts`、`migrations.ts`、`document-identity.ts` | `docs/03-document-format.md` 全篇、`docs/05-technical-design.md` §9.4 | `test/format.test.ts`、`test/identity-repair.test.ts`、`test/document-conflict.test.ts` |
 | 改树操作（增/删/移/复制） | `src/domain/tree.ts`、`src/domain/clipboard-payload.ts` | `docs/02-interface-interactions.md` §6.4–6.5、§6.10 | `test/tree.test.ts`、`test/exchange.test.ts` |
+| 改节点关联（关联/取消关联、跳转标志、大纲链接域） | `src/domain/node-link.ts`、`src/domain/tree.ts`（删除清理）、`src/format/outline.ts`、`src/render/resource-badges.ts`（关联槽位）、`src/ui/renderers/*`、`src/ui/association-target.ts`、`src/ui/menus/node-context-menu.ts`、`src/ui/components/top-toolbar.ts`、`src/ui/modals/node-link-picker-modal.ts` | `docs/02-interface-interactions.md` §5.3/§5.5/§6.6、`docs/03-document-format.md` §7.6 | `test/node-link.test.ts`、`test/node-renderer.test.ts`、`test/ui-modules.test.ts`、`test/top-toolbar.test.ts` |
 | 改布局/节点尺寸 | `src/render/layout.ts`、`src/render/text-measurer.ts`（Canvas 适配在 `src/ui/text-measurer.ts`） | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/performance.test.ts` |
 | 改节点渲染/徽标/样式 | `src/ui/renderers/*`、`src/render/resource-badges.ts`（DOM 适配在 `src/ui/resource-badges.ts`）、`styles.css` | `docs/02-interface-interactions.md` §5.5 | `test/styles.test.ts`、`test/resource-badges.test.ts`、`test/ui-modules.test.ts` |
 | 改画布交互/手势/拖拽 | `src/ui/controllers/*`、`src/render/viewport.ts`、`src/ui/drop-placement.ts` | `docs/02-interface-interactions.md` §6.3、`docs/05-technical-design.md` §12.1 | `test/pointer-operations.test.ts`、`test/touch-gesture.test.ts`、`test/touch-routing.test.ts`、`test/drop-placement.test.ts` |
@@ -421,4 +426,4 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ---
 
-*最后核对：2026-10-11 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；本轮「合并/简化」重构的落点、未完成项与环境坑见 `docs/memory.md` 2026-10-11 条目。*
+*最后核对：2026-10-13 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」与 2026-10-13 的关联节点 UI 缺陷修复，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*

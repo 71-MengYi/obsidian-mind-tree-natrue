@@ -3,6 +3,8 @@ export type SaveIndicatorState = "saved" | "dirty" | "error";
 export interface TopToolbarState {
   readonly zoom: number;
   readonly hasSelection: boolean;
+  /** The primary selected node takes part in a node link on either side. */
+  readonly nodeLinked: boolean;
 }
 
 export interface BottomStatusBarState {

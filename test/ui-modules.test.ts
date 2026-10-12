@@ -28,6 +28,8 @@ test("UI disposer releases resources once in reverse ownership order", () => {
 
 test("toolbar and keyboard help expose the established semantic order", () => {
   assert.deepEqual(TOP_TOOLBAR_ORDER.slice(0, 4), ["expand-all", "collapse-all", "collapse-level", "markers"]);
+  // The node-link command lives directly to the right of the marker button.
+  assert.equal(TOP_TOOLBAR_ORDER.indexOf("link-node"), TOP_TOOLBAR_ORDER.indexOf("markers") + 1);
   assert.deepEqual(TOP_TOOLBAR_ORDER.slice(-3), ["copy", "import", "export"]);
   assert.equal(KEYBOARD_HELP_ACTIONS[0], "add-sibling-below");
   assert.equal(KEYBOARD_HELP_ACTIONS.at(-1), "cancel");
@@ -37,15 +39,25 @@ test("toolbar and keyboard help expose the established semantic order", () => {
 });
 
 test("node menu description changes only for applicable resource and tree state", () => {
-  const plain = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: true });
+  const plain = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: true, nodeLinked: false });
   assert.deepEqual(plain.slice(0, 4), ["add-note", "add-file-template", "link-file", "link-web"]);
   assert.ok(plain.includes("add-sibling"));
   assert.ok(plain.includes("toggle-collapse"));
   assert.ok(plain.includes("move-files"));
-  const linkedRoot = nodeMenuItemOrder({ hasFileResource: true, hasResource: true, isDesktopApp: true, isRoot: true, hasChildren: false });
+  // The node link sits directly under the marker entry, for every node state.
+  assert.equal(plain.indexOf("node-link"), plain.indexOf("markers") + 1);
+  const linkedRoot = nodeMenuItemOrder({ hasFileResource: true, hasResource: true, isDesktopApp: true, isRoot: true, hasChildren: false, nodeLinked: true });
   assert.deepEqual(linkedRoot.slice(0, 4), ["title-sync", "open-resource", "open-default-app", "unlink-resource"]);
+  assert.equal(linkedRoot.indexOf("node-link"), linkedRoot.indexOf("markers") + 1);
   assert.ok(!linkedRoot.includes("add-sibling"));
   assert.ok(!linkedRoot.includes("delete-branch"));
+  // A node link is already this node's association, so the creation entries and
+  // the resource open/remove entries are not offered without a real resource.
+  const nodeLinkedOnly = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: false, nodeLinked: true });
+  assert.deepEqual(nodeLinkedOnly.slice(0, 3), ["markers", "node-link", "add-child"]);
+  for (const item of ["add-note", "add-file-template", "link-file", "link-web"] as const) {
+    assert.equal(nodeLinkedOnly.includes(item), false);
+  }
 });
 
 test("resource menu never offers replacement, and default-app opening is desktop-only for files and URLs", () => {
@@ -114,6 +126,32 @@ test("all linked resources expose the same open control but only files expose di
     assert.equal(visual.hasResourceControls, true);
     assert.equal(visual.titleSyncDisabled, false);
   }
+});
+
+test("a node link reserves the trailing control column without a resource", () => {
+  const node: MindTreeNode = {
+    id: "node", title: "Topic", childIds: [], createdAt: "now", updatedAt: "now",
+    nodeLink: "target"
+  };
+  const visual = createNodeVisualState(node, false, false, undefined, (id) => id === "target");
+  assert.equal(visual.hasResourceControls, true);
+  assert.equal(visual.hasResource, false);
+  assert.equal(visual.hasNodeLink, true);
+  assert.equal(visual.nodeLinkTargetId, "target");
+  assert.equal(visual.nodeLinkMissing, false);
+  // A vanished target keeps the mark but reports that it cannot navigate.
+  const missing = createNodeVisualState(node, false, false, undefined, () => false);
+  assert.equal(missing.nodeLinkMissing, true);
+  assert.equal(createNodeVisualState({ ...node, nodeLink: undefined }, false, false).hasNodeLink, false);
+  // A stale resource on a linked node is suppressed: the link owns the single
+  // trailing slot, so the rendered box cannot overflow it.
+  const staleResource: MindTreeNode = { ...node,
+    resource: { type: "file", resourceId: "note", pathHint: "Topic.md", fileKind: "note" },
+    titleSync: "off" };
+  const stale = createNodeVisualState(staleResource, false, false, undefined, () => true);
+  assert.equal(stale.hasNodeLink, true);
+  assert.equal(stale.hasResource, false);
+  assert.equal(stale.titleSyncDisabled, false);
 });
 
 test("status bar model maps statistics and session state without DOM access", () => {

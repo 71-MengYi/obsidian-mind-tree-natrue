@@ -32,7 +32,9 @@ export function isAssociationTargetAvailable(
   document: Readonly<MindTreeDocument> | undefined
 ): boolean {
   const node = document?.nodes[target.nodeId];
-  return currentSessionToken === target.documentSessionToken && Boolean(node && !node.resource);
+  // A node link already is this node's association ("关联节点"), so a file
+  // resource must not be attached on top of it.
+  return currentSessionToken === target.documentSessionToken && Boolean(node && !node.resource && !node.nodeLink);
 }
 
 export class AssociationTargetChangedError extends Error {

@@ -13,6 +13,8 @@ export interface NodeContextMenuState {
   readonly collapsed: boolean;
   readonly deleteCount: number;
   readonly branchHasFiles: boolean;
+  /** True when this node points at another node or is pointed at by one. */
+  readonly nodeLinked: boolean;
 }
 
 export interface NodeContextMenuActions {
@@ -26,6 +28,8 @@ export interface NodeContextMenuActions {
   readonly openDefaultApp: () => void;
   readonly unlinkResource: () => void;
   readonly showMarkers: () => void;
+  /** Create a node link, or remove every link this node takes part in. */
+  readonly toggleNodeLink: () => void;
   readonly addChild: () => void;
   readonly addSibling: () => void;
   readonly toggleCollapsed: () => void;
@@ -63,6 +67,8 @@ export class NodeContextMenu {
       });
     }
     menu.addItem((item) => item.setTitle(t("toolbar.markers")).setIcon("tags").onClick(guarded(actions.showMarkers)));
+    menu.addItem((item) => item.setTitle(state.nodeLinked ? t("menu.unlinkNode") : t("menu.linkNode"))
+      .setIcon(state.nodeLinked ? CHAIN_BROKEN_ICON : "link").onClick(guarded(actions.toggleNodeLink)));
     menu.addSeparator();
     menu.addItem((item) => item.setTitle(t("menu.addChild")).setIcon("corner-down-right").onClick(guarded(actions.addChild)));
     if (!state.isRoot) menu.addItem((item) => item.setTitle(t("menu.addSibling")).setIcon("list-plus").onClick(guarded(actions.addSibling)));

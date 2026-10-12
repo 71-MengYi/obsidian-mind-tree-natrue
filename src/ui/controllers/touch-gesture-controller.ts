@@ -169,6 +169,7 @@ export class TouchGestureController {
     const nodeId = node.dataset.nodeId;
     if (element?.closest(".mtn-image-resize-handle")) return { kind: "resize", nodeId };
     if (element?.closest(".mtn-fold-button")) return { kind: "control", nodeId, action: "fold" };
+    if (element?.closest(".mtn-link-mark")) return { kind: "control", nodeId, action: "node-link" };
     if (element?.closest(".mtn-resource-open")) return { kind: "control", nodeId, action: "open" };
     return { kind: "node", nodeId, draggable: this.actions.canDragNode(nodeId) };
   }

@@ -33,6 +33,13 @@ import {
   updateFileReferencePaths
 } from "../domain/tree";
 import {
+  NodeLinkError,
+  createNodeLink,
+  getNodeLinkTargetId,
+  isNodeLinkParticipant,
+  removeNodeLinks
+} from "../domain/node-link";
+import {
   MindTreeFormatError,
   parseMindTreeFile,
   serializeMindTreeFile,
@@ -183,6 +190,8 @@ import {
   TemplateSuggestModal,
   UrlPromptModal,
   MoveFilesModal,
+  NodeLinkSuggestModal,
+  nodeLinkCandidates,
   type CandidateAction,
   type DeleteBranchAction
 } from "./modals/index";
@@ -1321,6 +1330,7 @@ export class MindTreeView extends TextFileView {
       toolbar: {
         expandAll: t("toolbar.expandAll"), collapseAll: t("toolbar.collapseAll"),
         collapseLevel: t("toolbar.collapseLevel"), markers: t("toolbar.markers"),
+        linkNode: t("toolbar.linkNode"), unlinkNode: t("toolbar.unlinkNode"),
         fit: t("toolbar.fit"), zoomOut: t("toolbar.zoomOut"), zoomIn: t("toolbar.zoomIn"),
         search: t("toolbar.search"), copy: t("toolbar.copy"),
         importText: t("toolbar.import"), exportTree: t("toolbar.export")
@@ -1344,6 +1354,10 @@ export class MindTreeView extends TextFileView {
           if (!nodeId) return;
           const rect = button.getBoundingClientRect();
           this.showMarkerPopover(nodeId, { x: rect.left, y: rect.bottom + 6 });
+        },
+        linkNode: () => {
+          const nodeId = this.primarySelectedId;
+          if (nodeId) this.toggleNodeLink(nodeId);
         },
         fit: () => this.fitCanvas(),
         zoomOut: () => this.zoomByStep(-ZOOM_STEP),
@@ -1408,7 +1422,7 @@ export class MindTreeView extends TextFileView {
       resolveSearchMarkdownFiles: (candidates, ownPath) =>
         resolveSearchMarkdownFiles(this.plugin.resources, candidates, ownPath),
       readFileText: (file) => this.app.vault.cachedRead(file),
-      jumpToNode: (nodeId) => this.jumpToSearchedNode(nodeId),
+      jumpToNode: (nodeId) => this.revealNode(nodeId),
       openFileAtLine: (path, line) => void this.openSearchedFileAtLine(path, line),
       // Path rows show node names; the id stays the fallback for a pruned node.
       readNodeTitle: (nodeId) => {
@@ -1510,6 +1524,7 @@ export class MindTreeView extends TextFileView {
       activateControl: (id, action) => {
         if (!this.document?.nodes[id]) return;
         if (action === "fold") this.commit((draft) => toggleCollapsed(draft, id), id);
+        else if (action === "node-link") this.goToLinkedNode(id);
         else void this.openResource(id);
       },
       panBy: (x, y) => {
@@ -1841,6 +1856,7 @@ export class MindTreeView extends TextFileView {
         this.suppressContextMenu = false;
       },
       openResource: (nodeId) => void this.openResource(nodeId),
+      goToLinkedNode: (nodeId) => this.goToLinkedNode(nodeId),
       beginImageResize: (event, nodeId, image) => this.beginImageResize(event, nodeId, image),
       editorReady: (editor) => this.keyboardAvoidanceController?.watch(editor)
     });
@@ -2485,7 +2501,8 @@ export class MindTreeView extends TextFileView {
       hasChildren: node.childIds.length > 0,
       collapsed: Boolean(node.collapsed),
       deleteCount: this.getSelectedBranchNodeIds(nodeId).length,
-      branchHasFiles
+      branchHasFiles,
+      nodeLinked: isNodeLinkParticipant(document, nodeId)
     }, {
       isCurrent: () => {
         if (this.isResourceTargetCurrent(menuTarget)) return true;
@@ -2507,6 +2524,7 @@ export class MindTreeView extends TextFileView {
         delete draftNode.titleSync;
       }),
       showMarkers: () => this.showMarkerPopover(nodeId, { x: event.clientX, y: event.clientY }),
+      toggleNodeLink: () => this.toggleNodeLink(nodeId),
       addChild: () => { this.selectOnly(nodeId); this.addChildNode(); },
       addSibling: () => {
         let createdId = "";
@@ -2545,6 +2563,83 @@ export class MindTreeView extends TextFileView {
       }),
       onClose: () => { this.markerPopover = undefined; }
     });
+  }
+
+  /**
+   * Single command behind both the menu entry and the toolbar button: an
+   * uninvolved node opens the target picker, a node that already takes part in
+   * a link removes every link it belongs to.
+   */
+  private toggleNodeLink(nodeId: NodeId): void {
+    const document = this.document;
+    const node = document?.nodes[nodeId];
+    if (!document || !node || this.mutationLocked()) return;
+    if (isNodeLinkParticipant(document, nodeId)) {
+      let removed = 0;
+      this.commit((draft) => { removed = removeNodeLinks(draft, nodeId); });
+      if (removed > 0) new Notice(t("notice.nodeLinkRemoved", { count: removed }));
+      return;
+    }
+    // A node with a linked resource already owns its trailing open control and
+    // its file-name sync; node links are only offered to plain topic nodes.
+    if (node.resource) {
+      new Notice(t("notice.nodeLinkBlockedByResource"));
+      return;
+    }
+    const candidates = nodeLinkCandidates(document, nodeId, t("node.untitled"));
+    if (candidates.length === 0) {
+      new Notice(t("modal.nodeLink.empty"));
+      return;
+    }
+    const token = this.documentSessionToken;
+    new NodeLinkSuggestModal(this.app, candidates, (targetId) => {
+      // The picker is asynchronous: the view can switch documents or lock
+      // before the user chooses, so the captured session is revalidated.
+      if (this.documentSessionToken !== token || this.mutationLocked()) return;
+      this.createNodeLinkFor(token, nodeId, targetId);
+    }).open();
+  }
+
+  private createNodeLinkFor(documentSessionToken: string, sourceId: NodeId, targetId: NodeId): void {
+    const document = this.document;
+    if (!document || this.documentSessionToken !== documentSessionToken) return;
+    const target = document.nodes[targetId];
+    if (!document.nodes[sourceId] || !target) {
+      new Notice(t("notice.nodeLinkMissing"));
+      return;
+    }
+    try {
+      this.commit((draft) => createNodeLink(draft, sourceId, targetId));
+    } catch (error) {
+      new Notice(this.describeNodeLinkError(error));
+      return;
+    }
+    // `commit` can decline silently (a rejected editor draft, a session lock);
+    // only report success once the pointer is actually part of the document.
+    if (this.document?.nodes[sourceId]?.nodeLink !== targetId) return;
+    new Notice(t("notice.nodeLinkCreated", { title: target.title || t("node.untitled") }));
+  }
+
+  private describeNodeLinkError(error: unknown): string {
+    if (error instanceof NodeLinkError) {
+      if (error.code === "source-has-resource") return t("notice.nodeLinkBlockedByResource");
+      if (error.code === "missing-target") return t("notice.nodeLinkMissing");
+      // A stale picker may target a node that already links, or a vanished
+      // source: both mean the captured menu/picker target is out of date.
+      return t("notice.resourceTargetChanged");
+    }
+    return error instanceof Error ? error.message : String(error);
+  }
+
+  /** Follow this node's one-way link; a missing target only reports. */
+  private goToLinkedNode(nodeId: NodeId): void {
+    const targetId = getNodeLinkTargetId(this.document?.nodes[nodeId]);
+    if (!targetId) return;
+    if (!this.document?.nodes[targetId]) {
+      new Notice(t("notice.nodeLinkMissing"));
+      return;
+    }
+    this.revealNode(targetId);
   }
 
   private showCopyMenu(event: MouseEvent): void {
@@ -3407,11 +3502,11 @@ export class MindTreeView extends TextFileView {
   }
 
   /**
-   * Reveal a search hit in the canvas: hidden branches are expanded first, then
-   * the node is centered at the current zoom. The search controller only asks
-   * for this; mutation, history and viewport policy stay in the view.
+   * Reveal a node in the canvas: hidden branches are expanded first, then the
+   * node is centered at the current zoom. Shared by search hits and followed
+   * node links; mutation, history and viewport policy stay in the view.
    */
-  private jumpToSearchedNode(nodeId: NodeId): void {
+  private revealNode(nodeId: NodeId): void {
     const document = this.document;
     if (!document || !document.nodes[nodeId]) return;
     if (this.mutationLocked()) return;
@@ -3445,7 +3540,7 @@ export class MindTreeView extends TextFileView {
       .find((node) => node.resource?.type === "file"
         && node.resource.pathHint && normalizePath(node.resource.pathHint) === normalized)?.id;
     if (this.file && normalizePath(this.file.path) === normalized) {
-      if (nodeId) this.jumpToSearchedNode(nodeId);
+      if (nodeId) this.revealNode(nodeId);
       return;
     }
     const file = this.app.vault.getAbstractFileByPath(normalized);
@@ -3735,9 +3830,14 @@ export class MindTreeView extends TextFileView {
 
   private refreshTopToolbar(): void {
     const nodeId = this.primarySelectedId;
+    const document = this.document;
     this.shell?.toolbar.update({
       zoom: this.viewport.zoom,
-      hasSelection: Boolean(!this.parseError && nodeId && this.selectedIds.has(nodeId) && this.document?.nodes[nodeId])
+      hasSelection: Boolean(!this.parseError && nodeId && this.selectedIds.has(nodeId) && document?.nodes[nodeId]),
+      // The toolbar entry is a single command that flips between linking and
+      // unlinking whichever node is currently primary-selected.
+      nodeLinked: Boolean(document && nodeId && document.nodes[nodeId]
+        && isNodeLinkParticipant(document, nodeId))
     });
   }
 

@@ -12,6 +12,7 @@ import {
   fallbackResourceBadgeMeasurer,
   fileBadgeExtensionCandidates,
   getNodeMarkerGeometry,
+  getNodeResourceControls,
   MANUAL_MARKER_SIZE,
   NODE_MARKER_GAP,
   normalizeFileBadgeAlias,
@@ -498,4 +499,33 @@ test("an empty custom marker registry keeps the previous marker geometry unchang
   });
   assert.deepEqual(getNodeMarkerGeometry(node, emptyRegistry), getNodeMarkerGeometry(node, legacyRules));
   assert.deepEqual(document, original);
+});
+
+test("a node link owns the single trailing control slot and suppresses a stale resource", () => {
+  const document = createEmptyDocument("Links");
+  const node = addNode(document, document.rootId, "Topic");
+  assert.deepEqual(getNodeResourceControls(node), {
+    hasOpenButton: false, hasNodeLink: false, titleSyncDisabled: false, width: 0, height: 0
+  });
+  node.nodeLink = "target";
+  assert.deepEqual(getNodeResourceControls(node), {
+    hasOpenButton: false, hasNodeLink: true, titleSyncDisabled: false, width: 22, height: 20
+  });
+  // The link mark is a control, never a marker: badge geometry stays untouched.
+  assert.equal(getNodeMarkerGeometry(node).width, 0);
+  // A resource left on a linked node never reserves or renders a second slot:
+  // the rendered box must keep matching the reserved control width.
+  node.resource = { type: "file", resourceId: "note", pathHint: "Topic.md", fileKind: "note" };
+  node.titleSync = "off";
+  assert.deepEqual(getNodeResourceControls(node), {
+    hasOpenButton: false, hasNodeLink: true, titleSyncDisabled: false, width: 22, height: 20
+  });
+  delete node.nodeLink;
+  assert.deepEqual(getNodeResourceControls(node), {
+    hasOpenButton: true, hasNodeLink: false, titleSyncDisabled: true, width: 44, height: 20
+  });
+  node.titleSync = "bidirectional";
+  assert.deepEqual(getNodeResourceControls(node), {
+    hasOpenButton: true, hasNodeLink: false, titleSyncDisabled: false, width: 22, height: 20
+  });
 });

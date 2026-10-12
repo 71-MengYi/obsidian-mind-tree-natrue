@@ -33,6 +33,10 @@ export function normalizeRuntimeNode(id: string, value: unknown): MindTreeNode {
     updatedAt: stringValue(record["updatedAt"]) ?? createdAt
   };
   if (record["resource"] !== undefined) node.resource = normalizeRuntimeResource(record["resource"]);
+  const nodeLink = stringValue(record["nodeLink"]);
+  // A self-reference is never a usable navigation target; drop it here so the
+  // rest of the app can assume `nodeLink` points at another node.
+  if (nodeLink && nodeLink !== id) node.nodeLink = nodeLink;
   const markers = normalizeNodeMarkers(record["markers"]);
   if (markers.length > 0) node.markers = markers;
   if (typeof record["collapsed"] === "boolean") node.collapsed = record["collapsed"];
@@ -48,7 +52,7 @@ export function normalizeRuntimeNode(id: string, value: unknown): MindTreeNode {
   const nestedUnknown = asRecord(record["unknownFields"]);
   if (nestedUnknown) copyUnknownFields(nestedUnknown, unknownFields, new Set());
   copyUnknownFields(record, unknownFields, new Set([
-    "id", "title", "childIds", "resource", "markers", "collapsed",
+    "id", "title", "childIds", "resource", "nodeLink", "markers", "collapsed",
     "titleSync", "style", "createdAt", "updatedAt", "unknownFields"
   ]));
   if (Object.keys(unknownFields).length > 0) node.unknownFields = unknownFields;

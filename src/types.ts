@@ -93,6 +93,15 @@ export interface MindTreeNode {
   title: string;
   childIds: NodeId[];
   resource?: ResourceRef;
+  /**
+   * One-way reference to another node in the same document ("关联节点").
+   * It is a navigation pointer, never a subtree copy: creating or removing it
+   * must leave both nodes' children untouched. A node may carry at most one
+   * outgoing reference, while several nodes may point at the same target.
+   * The "source must have no resource" rule is enforced when creating a link,
+   * not when reading a file, so hand-edited data never loses fields on open.
+   */
+  nodeLink?: NodeId;
   markers?: NodeMarker[];
   collapsed?: boolean;
   titleSync?: "off" | "bidirectional";

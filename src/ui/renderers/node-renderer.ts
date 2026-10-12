@@ -55,6 +55,8 @@ export interface NodeRenderActions {
   readonly beginEdit: (nodeId: NodeId) => void;
   readonly showContextMenu: (event: MouseEvent, nodeId: NodeId) => void;
   readonly openResource: (nodeId: NodeId) => void;
+  /** Reveal the node this node links to; the view owns selection and viewport. */
+  readonly goToLinkedNode: (nodeId: NodeId) => void;
   readonly beginImageResize: (event: PointerEvent, nodeId: NodeId, image: ImageNodeVisual) => void;
   readonly editorReady?: (editor: HTMLTextAreaElement) => void;
 }
@@ -101,12 +103,14 @@ export class NodeRenderer {
       node,
       state.selectedIds.has(node.id),
       state.editingNodeId === node.id,
-      state.resourceBadgePresentation
+      state.resourceBadgePresentation,
+      (nodeId) => Boolean(state.document.nodes[nodeId])
     );
     element.toggleClass("is-selected", visual.selected);
     element.toggleClass("is-editing", visual.editing);
     element.toggleClass("is-leaf", visual.leaf);
-    element.toggleClass("has-resource", visual.hasResourceControls);
+    element.toggleClass("has-resource", visual.hasResource);
+    element.toggleClass("has-node-link", visual.hasNodeLink);
     element.toggleClass("is-title-sync-off", visual.titleSyncDisabled);
     element.toggleClass("has-markers", visual.markerDisplayWidth > 0);
     element.toggleClass("has-image", Boolean(image));
@@ -138,9 +142,12 @@ export class NodeRenderer {
 
     if (state.readOnly) {
       // Keep the original geometry/appearance, but previews cannot open a
-      // resource or begin an edit/drag. Only temporary fold controls are live.
-      const open = element.querySelector<HTMLButtonElement>(".mtn-resource-open");
-      if (open) { open.disabled = true; open.tabIndex = -1; }
+      // resource, follow a node link or begin an edit/drag. Only temporary fold
+      // controls are live.
+      for (const control of element.querySelectorAll<HTMLButtonElement>(".mtn-resource-open, .mtn-link-mark")) {
+        control.disabled = true;
+        control.tabIndex = -1;
+      }
       return;
     }
 
@@ -305,6 +312,27 @@ export class NodeRenderer {
       });
       setIcon(syncStatus, "unlink");
     }
+    if (visual.nodeLinkTargetId) {
+      // A node link is navigation, not a resource: same static gray treatment
+      // and size as the open control.
+      const linkButton = controls.createEl("button", {
+        cls: `mtn-link-mark${visual.nodeLinkMissing ? " is-missing" : ""}`,
+        attr: {
+          type: "button",
+          "aria-label": visual.nodeLinkMissing ? t("node.nodeLinkMissing") : t("node.goToLinkedNode")
+        }
+      });
+      setIcon(linkButton, "link");
+      linkButton.addEventListener("pointerdown", (event) => event.stopPropagation());
+      linkButton.addEventListener("dblclick", (event) => event.stopPropagation());
+      linkButton.addEventListener("click", (event) => {
+        event.preventDefault(); event.stopPropagation(); actions.goToLinkedNode(node.id);
+      });
+    }
+    // The open control exists only when a resource actually renders one. A node
+    // link takes that slot instead of reserving a second one, so the rendered
+    // box always matches the reserved control width.
+    if (!visual.hasResource) return;
     const openButton = controls.createEl("button", {
       cls: "mtn-resource-open fa-share-square-o",
       attr: { type: "button", "aria-label": t("node.openLinkedResource") }

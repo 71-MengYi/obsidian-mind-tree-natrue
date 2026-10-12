@@ -1,6 +1,6 @@
 /** Stable semantic order used by the command-style top toolbar renderer. */
 export const TOP_TOOLBAR_ORDER = [
-  "expand-all", "collapse-all", "collapse-level", "markers",
+  "expand-all", "collapse-all", "collapse-level", "markers", "link-node",
   "fit", "zoom-out", "zoom", "zoom-in", "search",
   "copy", "import", "export"
 ] as const;
@@ -18,7 +18,7 @@ export type NodeResourceMenuItemId =
   | "open-resource" | "open-default-app" | "unlink-resource";
 
 export type NodeMenuItemId = NodeResourceMenuItemId
-  | "markers" | "add-child" | "add-sibling"
+  | "markers" | "node-link" | "add-child" | "add-sibling"
   | "toggle-collapse" | "expand-all" | "collapse-all" | "delete-branch" | "delete-node-only"
   | "move-files" | "copy-branch" | "copy-markdown" | "export-png";
 
@@ -28,13 +28,22 @@ export interface NodeMenuContractState {
   readonly isDesktopApp: boolean;
   readonly isRoot: boolean;
   readonly hasChildren: boolean;
+  /** The node takes part in a node link on either side. */
+  readonly nodeLinked: boolean;
 }
 
 /** One resource section description for both the real menu and contract tests. */
-export function nodeResourceMenuItemOrder(state: Pick<NodeMenuContractState, "hasFileResource" | "hasResource" | "isDesktopApp">): NodeResourceMenuItemId[] {
+export function nodeResourceMenuItemOrder(
+  state: Pick<NodeMenuContractState, "hasFileResource" | "hasResource" | "isDesktopApp"> & {
+    /** A node link already counts as this node's association. */
+    readonly nodeLinked?: boolean;
+  }
+): NodeResourceMenuItemId[] {
   const items: NodeResourceMenuItemId[] = [];
   if (state.hasFileResource) items.push("title-sync");
-  if (!state.hasResource) items.push("add-note", "add-file-template", "link-file", "link-web");
+  // Creating or linking a resource is not offered once the node links another
+  // node: the node link occupies that association slot.
+  if (!state.hasResource && !state.nodeLinked) items.push("add-note", "add-file-template", "link-file", "link-web");
   if (state.hasResource) {
     items.push("open-resource");
     if (state.isDesktopApp) items.push("open-default-app");
@@ -51,7 +60,8 @@ export function guardNodeMenuAction(isCurrent: () => boolean, action: () => void
 /** Pure menu description used by tests and the visual menu composer. */
 export function nodeMenuItemOrder(state: NodeMenuContractState): NodeMenuItemId[] {
   const items: NodeMenuItemId[] = [...nodeResourceMenuItemOrder(state)];
-  items.push("markers", "add-child");
+  // The node link sits directly under the marker entry in every menu surface.
+  items.push("markers", "node-link", "add-child");
   if (!state.isRoot) items.push("add-sibling");
   if (state.hasChildren) items.push("toggle-collapse", "expand-all", "collapse-all");
   if (!state.isRoot) items.push("delete-branch", "delete-node-only");

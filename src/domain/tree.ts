@@ -277,6 +277,7 @@ export function deleteBranch(document: MindTreeDocument, nodeId: NodeId): NodeId
   parent.childIds = parent.childIds.filter((id) => id !== nodeId);
   const removed = collectBranchIds(document, nodeId);
   for (const id of removed) delete document.nodes[id];
+  pruneNodeLinksAfterRemoval(document, removed);
   touch(document, parent);
   invalidateDocumentTreeIndex(document);
   return removed;
@@ -337,6 +338,7 @@ export function deleteNodeOnly(document: MindTreeDocument, nodeId: NodeId): void
   const index = parent.childIds.indexOf(nodeId);
   parent.childIds.splice(index, 1, ...node.childIds);
   delete document.nodes[nodeId];
+  pruneNodeLinksAfterRemoval(document, [nodeId]);
   touch(document, parent);
   invalidateDocumentTreeIndex(document);
 }
@@ -561,6 +563,40 @@ export function validateDocument(document: MindTreeDocument): ValidationResult {
   return { valid: issues.length === 0, issues, unreachableNodeIds };
 }
 
+/**
+ * Drop node-link references that point at removed nodes. Kept next to
+ * `updateFileReferencePaths` because both repair references after a structural
+ * change; the surviving node keeps its children exactly as they are.
+ */
+export function pruneNodeLinksAfterRemoval(document: MindTreeDocument, removedIds: Iterable<NodeId>): number {
+  const removed = new Set(removedIds);
+  if (removed.size === 0) return 0;
+  let pruned = 0;
+  for (const node of Object.values(document.nodes)) {
+    if (!node.nodeLink || !removed.has(node.nodeLink)) continue;
+    delete node.nodeLink;
+    pruned += 1;
+  }
+  return pruned;
+}
+
+/**
+ * Defensive repair for untrusted persisted data: a self-reference or a target
+ * outside the node map can never be navigated to, so it is dropped instead of
+ * failing the whole document. Never deletes nodes or child relationships.
+ */
+export function pruneDanglingNodeLinks(document: MindTreeDocument): number {
+  let pruned = 0;
+  for (const [id, node] of Object.entries(document.nodes)) {
+    if (!node.nodeLink) continue;
+    if (node.nodeLink === id || !document.nodes[node.nodeLink]) {
+      delete node.nodeLink;
+      pruned += 1;
+    }
+  }
+  return pruned;
+}
+
 /** Extract one or more independent branches into a single clipboard forest. */
 export function extractBranches(document: MindTreeDocument, nodeIds: Iterable<NodeId>): BranchClipboardPayload {
   const selected = new Set([...nodeIds].filter((id) => Boolean(document.nodes[id])));
@@ -630,8 +666,12 @@ export function insertBranches(
     const resource = source.resource?.type === "url" && !isSafeHttpUrl(source.resource.url)
       ? undefined
       : source.resource;
+    // A pasted branch has no link map, so an incoming `nodeLink` would dangle
+    // into a foreign id space. Copies are always plain data.
+    const cloned = cloneJson(source);
+    delete cloned.nodeLink;
     document.nodes[id] = {
-      ...cloneJson(source),
+      ...cloned,
       id,
       childIds: source.childIds.map((childId) => idMap.get(childId)).filter((value): value is string => Boolean(value)),
       ...(resource ? { resource: cloneJson(resource) } : { resource: undefined }),

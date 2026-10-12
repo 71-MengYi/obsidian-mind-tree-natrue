@@ -457,6 +457,13 @@
   --mtn-node-control-width: 44px;
 }
 
+.mtn-node.has-node-link {
+  /* One 20px navigation mark plus the 2px title-to-control gap. A node link
+     owns the trailing association slot, so it never combines with the open
+     control (see `getNodeResourceControls`). */
+  --mtn-node-control-width: 22px;
+}
+
 .mtn-node.is-selected {
   z-index: 6;
   outline: 2px dashed var(--mtn-node-accent);
@@ -786,6 +793,7 @@
 }
 
 .mtn-title-sync-off,
+.mtn-node-controls > .mtn-link-mark,
 .mtn-node-controls > .mtn-resource-open {
   box-sizing: border-box;
   display: inline-flex;
@@ -805,6 +813,23 @@
   color: var(--text-warning);
 }
 
+.mtn-node-controls > .mtn-link-mark,
+.mtn-node-controls > .mtn-link-mark:hover,
+.mtn-node-controls > .mtn-link-mark:active {
+  appearance: none;
+  border: 0;
+  background: transparent;
+  color: var(--text-muted);
+  box-shadow: none;
+  transform: none;
+  cursor: pointer;
+}
+
+.mtn-node-controls > .mtn-link-mark.is-missing {
+  color: var(--text-warning);
+  cursor: default;
+}
+
 .mtn-node-controls > .mtn-resource-open,
 .mtn-node-controls > .mtn-resource-open:hover,
 .mtn-node-controls > .mtn-resource-open:active {
@@ -818,12 +843,17 @@
 }
 
 .mtn-title-sync-off svg,
+.mtn-node-controls > .mtn-link-mark svg,
 .mtn-node-controls > .mtn-resource-open svg {
   width: 18px;
   height: 18px;
 }
 
 .mtn-title-sync-off svg {
+  stroke-width: 2px;
+}
+
+.mtn-node-controls > .mtn-link-mark svg {
   stroke-width: 2px;
 }
 

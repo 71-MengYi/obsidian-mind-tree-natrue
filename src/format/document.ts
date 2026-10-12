@@ -6,7 +6,7 @@ import {
   documentSettingsUsedDefaults,
   normalizeDocumentSettings
 } from "../document-settings";
-import { createEmptyDocument, validateDocument } from "../domain/tree";
+import { createEmptyDocument, pruneDanglingNodeLinks, validateDocument } from "../domain/tree";
 import { normalizeRuntimeNode } from "../domain/runtime-node";
 import {
   GUNZIP_INPUT_CHUNK_BYTES,
@@ -242,6 +242,9 @@ function normalizeDocument(value: unknown): MindTreeDocument {
     createdAt,
     updatedAt
   };
+  // Untrusted data may point a node link outside the node map; dropping it never
+  // invalidates the file, it only removes a navigation target that cannot exist.
+  pruneDanglingNodeLinks(result);
   if (Object.keys(unknownFields).length > 0) result.unknownFields = unknownFields;
   return result;
 }
@@ -367,6 +370,7 @@ function nodeToMachineData(node: MindTreeNode): Record<string, unknown> {
     title: node.title,
     childIds: node.childIds,
     ...(node.resource ? { resource: node.resource } : {}),
+    ...(node.nodeLink ? { nodeLink: node.nodeLink } : {}),
     ...(node.markers && node.markers.length > 0 ? { markers: node.markers } : {}),
     ...(node.collapsed ? { collapsed: true } : {}),
     ...(node.titleSync ? { titleSync: node.titleSync } : {}),

@@ -164,7 +164,8 @@ export class ReadOnlyTreePreview extends DisposableUiObject {
       nodeWrapWidth: this.options.nodeWrapWidth, textMeasurer: this.text, resourceBadgePresentation: badges,
       imageNodePresentation: this.images, readOnly: true }, {
       finishEdit: () => "rejected", updateEditDraft: noop, cancelEdit: noop, saveImmediately: noop, focusCanvas: noop,
-      nodePointerDown: noop, beginEdit: noop, showContextMenu: noop, openResource: noop, beginImageResize: noop,
+      nodePointerDown: noop, beginEdit: noop, showContextMenu: noop, openResource: noop,
+      goToLinkedNode: noop, beginImageResize: noop,
       toggleCollapsed: (id) => { this.folds.set(id, !document.nodes[id]?.collapsed); this.render(); }
     });
     const width = this.canvas.clientWidth, height = this.canvas.clientHeight;

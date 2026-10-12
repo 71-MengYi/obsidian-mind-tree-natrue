@@ -115,6 +115,8 @@ interface MindTreeNode {
   title: string;
   childIds: NodeId[];
   resource?: ResourceRef;
+  /** 单向节点关联的目标节点 id；可选，最多一条出边。不复制子树、不同步数据。 */
+  nodeLink?: NodeId;
   markers?: NodeMarker[];
   collapsed?: boolean;
   titleSync?: 'off' | 'bidirectional';
@@ -156,6 +158,10 @@ type ResourceRef =
 
 图片节点继续使用 `fileKind: 'image'`，不增加独立节点类型。`NodeStyle.imageWidth/imageHeight` 只记录该引用在导图中的显示尺寸并写入压缩 JSON，必须作为有效正数成对出现；它们不改变源图片，也不进入 YAML 或 Markdown 大纲。同一图片被多个节点引用时，各节点可保存不同显示尺寸。
 
+`nodeLink` 是同一文档内的单向节点引用（“关联节点”），只进入压缩 JSON：它不复制、不移动、不同步任何节点，改动它不得改变任一节点的 `childIds`。读取时会丢弃指向不存在节点或指向自身的值（与不可达节点同样属于可修复的防御性清理，不使文件失效）；删除节点时指向它的引用同步清除。剪贴板与文本导入产生的副本永远不携带 `nodeLink`。因为只是可选增量字段，它不提升 `schemaVersion`，也不进入 YAML。
+
+`nodeLink` 与 `resource` 在**创建时**互斥（发起关联的节点不能有资源，已被节点关联的节点也不再接受新的文件关联），但读取不做互斥清理：历史数据若同时含两者，两者都原样保留，只由尾部渲染（链接标志占用唯一的“关联槽位”）与右键菜单体现互斥，不静默丢弃任何字段。
+
 `fileSubtype: 'excalidraw'` 是关联文件 Frontmatter 的派生缓存，仅当 `excalidraw-plugin` 为 `raw` 或 `parsed` 时存在；文件名和扩展名不参与判断。关联文件可解析时以当前 Frontmatter 校正该缓存，文件暂时无法解析时保留最后状态。该字段不改变 Markdown 文件的 `fileKind: 'note'`。普通非 Markdown 文件的扩展名显示标签由 `pathHint` 与全局插件设置在运行时派生，不属于节点字段，也不进入本格式。
 
 加载时必须校验：
@@ -170,6 +176,21 @@ type ResourceRef =
 ### 7.6 大纲、AI 分析与外部编辑
 
 大纲表达标题、层级、可读资源链接以及节点标记。标记以稳定的可读后缀输出，例如 `〔progress:done〕`、`〔priority:red〕` 和 `〔highlight:#75ACA6〕`；关联 `.mtn.md` 的节点还会根据资源路径派生 `〔mind-tree〕` 后缀。大纲仍不承载折叠、其他样式或视口状态。它用于 Markdown 阅读、搜索和 AI 分析，不是编辑导图的输入渠道。
+
+参与节点关联的节点会在行尾追加块 id ` ^<节点id>`（块 id 复用节点自身的稳定 id，只保留 Obsidian 块 id 允许的字母、数字与连字符），并在大纲列表之后、`<!-- mtn:outline:end -->` 之前追加一段明文链接域，每行一条单向关系：
+
+```markdown
+<!-- mtn:outline:start -->
+- 根
+  - 甲 ^a1b2c3d4-...
+  - 乙 ^9f8e7d6c-...
+  - 甲的子节点
+<!-- mtn:links -->
+a1b2c3d4-...->9f8e7d6c-...
+<!-- mtn:outline:end -->
+```
+
+链接域只用来告知外部读者存在关联关系，画布里仍是两份彼此独立的数据（不复制、不同步）：甲的子节点不会出现在乙之下，乙的子节点也不会出现在甲之下。没有关联时整段链接域不输出。链接域必须位于 `OUTLINE_END` 之内，因为保存只重建 `OUTLINE_START` 与 `OUTLINE_END` 之间的区域，域外文本会被当作保留的用户正文。复制/导出 Markdown 分支只保留行尾块 id，不附带链接域。
 
 - AI 工具读取文件时，应分析从文件开头到提示文字之前的内容；看到“这段话之后的内容是压缩json，无需读取和分析。”后停止读取和分析后续数据。
 - 打开导图时根据 `.mtn.md` 扩展名、文件头 `schemaVersion` 与底部压缩数据区识别并恢复导图；`documentId` 按可选资源身份读取，不解析大纲，也不比较大纲差异。

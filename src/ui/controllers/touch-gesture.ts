@@ -15,11 +15,13 @@ export interface GesturePointer {
 export type TouchTarget =
   | { readonly kind: "canvas" }
   | { readonly kind: "node"; readonly nodeId: NodeId; readonly draggable: boolean }
-  | { readonly kind: "control"; readonly nodeId: NodeId; readonly action: "fold" | "open" }
+  | { readonly kind: "control"; readonly nodeId: NodeId; readonly action: TouchControlAction }
   | { readonly kind: "resize"; readonly nodeId: NodeId };
 
 export type TouchPair = readonly [GesturePointer, GesturePointer];
 export type TouchGestureMode = "idle" | "pending" | "armed" | "pan" | "drag" | "resize" | "pinch";
+/** Trailing node controls that must not start a drag on touch. */
+export type TouchControlAction = "fold" | "open" | "node-link";
 
 export interface TouchGestureClock {
   now(): number;
@@ -32,7 +34,7 @@ export interface TouchGestureActions {
   selectNode(nodeId: NodeId): void;
   editNode(nodeId: NodeId): void;
   showNodeMenu(nodeId: NodeId, point: GesturePointer): void;
-  activateControl(nodeId: NodeId, action: "fold" | "open"): void;
+  activateControl(nodeId: NodeId, action: TouchControlAction): void;
   panBy(x: number, y: number): void;
   pinch(previous: TouchPair, current: TouchPair): void;
   startNodeDrag(nodeId: NodeId, point: GesturePointer): void;

@@ -23,6 +23,7 @@ class TestElement extends EventTarget {
     return child;
   }
   createDiv(_className: string): TestElement { return this.createEl("div"); }
+  setAttribute(name: string, value: string): void { this.attributes[name] = value; }
   setText(text: string): void { this.text = text; }
   remove(): void {}
   click(): void { if (!this.disabled) this.dispatchEvent(new Event("click")); }
@@ -39,6 +40,7 @@ runInNewContext(bundle, { module, exports: module.exports, require(id: string) {
 function fixture() {
   const labels: TopToolbarLabels = {
     expandAll: "Expand", collapseAll: "Collapse", collapseLevel: "Level", markers: "Markers",
+    linkNode: "Link node", unlinkNode: "Unlink node",
     fit: "Fit", zoomOut: "Zoom out", zoomIn: "Zoom in", search: "Search",
     copy: "Copy", importText: "Import", exportTree: "Export"
   };
@@ -46,7 +48,8 @@ function fixture() {
   const record = (label: keyof TopToolbarLabels) => () => { calls.push(label); };
   const toolbar = new module.exports.TopToolbar(new TestElement(), labels, {
     expandAll: record("expandAll"), collapseAll: record("collapseAll"), showCollapseLevel: record("collapseLevel"),
-    showMarkers: record("markers"), fit: record("fit"), zoomOut: record("zoomOut"), zoomIn: record("zoomIn"),
+    showMarkers: record("markers"), linkNode: record("linkNode"),
+    fit: record("fit"), zoomOut: record("zoomOut"), zoomIn: record("zoomIn"),
     search: record("search"), showCopyMenu: record("copy"), importText: record("importText"), showExportMenu: record("exportTree")
   });
   const button = (label: keyof TopToolbarLabels) => {
@@ -59,7 +62,7 @@ function fixture() {
 
 test("node actions are disabled before selection and follow selection being made or cleared", () => {
   const { toolbar, button, calls } = fixture();
-  const nodeActions = ["markers", "copy", "exportTree"] as const;
+  const nodeActions = ["markers", "linkNode", "copy", "exportTree"] as const;
   for (const label of nodeActions) {
     assert.equal(button(label).disabled, true);
     button(label).click();
@@ -67,7 +70,7 @@ test("node actions are disabled before selection and follow selection being made
   assert.deepEqual(calls, []);
   for (const hasSelection of [true, false, true]) {
     calls.length = 0;
-    toolbar.update({ zoom: 1.25, hasSelection });
+    toolbar.update({ zoom: 1.25, hasSelection, nodeLinked: false });
     for (const label of nodeActions) {
       assert.equal(button(label).disabled, !hasSelection);
       button(label).click();
@@ -82,7 +85,7 @@ test("whole-tree and canvas actions remain available without a selection while z
   const globalActions = ["expandAll", "collapseAll", "collapseLevel", "fit", "zoomOut", "zoomIn", "search", "importText"] as const;
   for (const hasSelection of [false, true, false]) {
     calls.length = 0;
-    toolbar.update({ zoom: 0.85, hasSelection });
+    toolbar.update({ zoom: 0.85, hasSelection, nodeLinked: false });
     for (const label of globalActions) {
       assert.equal(button(label).disabled, false);
       button(label).click();
@@ -90,5 +93,20 @@ test("whole-tree and canvas actions remain available without a selection while z
     assert.deepEqual(calls, [...globalActions]);
     assert.equal(toolbar.element.children.find((child) => child.dataset.role === "zoom")?.text, "85%");
   }
+  toolbar.destroy();
+});
+
+test("the link entry is one command whose accessible name follows the node link state", () => {
+  const labels = { linkNode: "Link node", unlinkNode: "Unlink node" };
+  const { toolbar, button, calls } = fixture();
+  const linkButton = button("linkNode");
+  assert.equal(linkButton.attributes["aria-label"], labels.linkNode);
+  toolbar.update({ zoom: 1, hasSelection: true, nodeLinked: true });
+  assert.equal(linkButton.attributes["aria-label"], labels.unlinkNode);
+  assert.equal(linkButton.disabled, false);
+  linkButton.click();
+  assert.deepEqual(calls, ["linkNode"]);
+  toolbar.update({ zoom: 1, hasSelection: true, nodeLinked: false });
+  assert.equal(linkButton.attributes["aria-label"], labels.linkNode);
   toolbar.destroy();
 });

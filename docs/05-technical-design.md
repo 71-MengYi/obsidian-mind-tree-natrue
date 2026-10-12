@@ -12,6 +12,7 @@
 | `MindTreeView` | 注册自定义视图、管理生命周期和状态提示。 |
 | `TreeCanvas` | 渲染、布局、选择、缩放、拖拽和可访问性。 |
 | `TreeCommandService` | 封装新增、移动、删除、标记等原子命令及撤销/重做。 |
+| `NodeLinkService` | 同一文档内的单向节点引用：校验发起节点、写入/清除目标 id，并在删除节点时清理指向它的引用；不复制任何节点，也不改动 `childIds`。 |
 | `DocumentRepository` | 解析、校验、序列化和原子保存 `.mtn.md`。 |
 | `MindTreeMigrationFactory` | 按 `schemaVersion` 登记并逐级执行文件结构迁移，向当前领域模型提供唯一兼容入口。 |
 | `OutlineRenderer` | 根据树数据单向生成 Markdown 无序列表。 |

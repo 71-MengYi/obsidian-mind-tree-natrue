@@ -269,4 +269,67 @@
 - `.audit/` 仍是 gitignored 草稿区（含本次报告与旧等价性指纹工具），未清理。
 - `manifest.json` 1.1.7→1.1.8 仍是开工前既有的未提交改动，**未提交**（由发布方确认）。
 
+## 2026-10-12 · 关联节点：单向引用 + 跳转标志（`feat`）
+
+**需求（中途变更，务必按最终口径读）**：最初讨论的是"软链接式映射、子节点完全复制、修改双向同步、关联/被关联双方都加标志、链接域 `id<-->id`"。**用户随后收窄为**：不复制、不同步、不改动任何一方的子节点；只在**发起关联的源节点**尾部（打开按钮之前）加一个可点击的链接标志，点击后跳转到被关联节点；链接域符号改为**单向** `idA->idB`；源节点已有关联资源时提示"该节点已存在笔记，无法关联"并拒绝。**镜像/同步引擎与"丢弃子节点确认弹窗"均未实现，不要再按旧描述补。**
+
+**数据模型与格式**
+
+- `MindTreeNode.nodeLink?: NodeId`（`src/types.ts`）：同文档内的**有向**引用，节点最多一条出边；入边可多条（枢纽场景），允许 A→B 与 B→A 并存（纯跳转，不构成数据共享）。只进压缩 JSON，**不提升 `schemaVersion`**、不进 YAML、不新增文档设置项。
+- 创建前置条件（`createNodeLink` 内校验，UI 只是提前给提示）：源/目标存在、`sourceId !== targetId`、源 `resource === undefined`、源 `nodeLink === undefined`。**目标不做任何限制**。
+- 大纲（`src/format/outline.ts`）：参与关联的节点行尾追加 ` ^<节点id>`（块 id 复用节点自身稳定 id，只保留 `[A-Za-z0-9-]`）；大纲列表之后、`OUTLINE_END` **之前**追加 `<!-- mtn:links -->`，每行 `<源id>-><目标id>`，无关联时整块不输出。**必须在 `OUTLINE_END` 之内**：`serializeMindTreeFile` 只重建 `OUTLINE_START..OUTLINE_END` 之间的内容，写在域外会被当成用户正文跨保存累积。`renderBranchMarkdown` 保留 `^id`、不带链接域。
+
+**落点**
+
+- 领域：`src/domain/node-link.ts`（新）：`NodeLinkEdge`、`NodeLinkError`(code)、`getNodeLinkTargetId`、`isNodeLinkParticipant`、`collectNodeLinks`（文档序）、`createNodeLink`、`removeNodeLinks`（清自身的出边 + 所有入边，返回条数；子节点一律不动）、`nodeTitlePath`（`根 → … → 节点`，供选择器/提示）。
+- 引用修复（放在 `src/domain/tree.ts`，与 `updateFileReferencePaths` 同类，且避免 `node-link ↔ tree` 循环导入）：`pruneNodeLinksAfterRemoval`（`deleteBranch`/`deleteNodeOnly` 内调用）、`pruneDanglingNodeLinks`（`normalizeDocument` 加载期调用，丢弃自引用/指向不存在节点的值）；`insertBranches` 明确剥离副本里的 `nodeLink`。
+- 持久化：`domain/runtime-node.ts` 读 `nodeLink` 并加入 unknownFields 忽略键；`format/document.ts` 的 `nodeToMachineData` 写出。
+- 渲染：`render/resource-badges.ts` 的 `NodeResourceControls` 新增 `hasNodeLink`，控制列固定顺序 **同步关闭标志 → 链接标志 → 打开按钮**（打开按钮永远最后）；`node-render-model` 暴露 `hasResource`（是否真有资源）/`hasNodeLink`/`nodeLinkTargetId`/`nodeLinkMissing`，`hasResourceControls` 改为"控制列宽度 > 0"（否则只有 nodeLink 的节点不会渲染尾部）；`node-renderer` 渲染 `button.mtn-link-mark`（`setIcon "link"`，缺失目标加 `.is-missing`）。
+- UI：`ui-contracts.ts` 的 `TOP_TOOLBAR_ORDER` 在 `markers` 后插入 `link-node`、`NodeMenuItemId` 加 `node-link`；`node-context-menu.ts` 在「节点标记」正下方加「关联节点/取消关联节点」（图标 `link` ↔ `CHAIN_BROKEN_ICON`）；`top-toolbar.ts` 新增按钮并在 `update()` 内切换图标与 `aria-label`；`models.ts` 的 `TopToolbarState` 加 `nodeLinked`；`touch-gesture.ts` 的控制动作联合加 `"node-link"`；`ui/modals/node-link-picker-modal.ts`（新）用 `FuzzySuggestModal` 按标题路径选目标；`mind-tree-view.ts` 新增 `toggleNodeLink` / `createNodeLinkFor` / `goToLinkedNode`，并把搜索跳转的"展开折叠祖先 → 选中 → 居中"抽成 `revealNode()` 供两处共用。
+- i18n 13 个 key（EN/ZH 成对）：`menu.linkNode`、`menu.unlinkNode`、`toolbar.linkNode`、`toolbar.unlinkNode`、`node.goToLinkedNode`、`node.nodeLinkMissing`、`modal.nodeLink.*`（title/placeholder/empty）、`notice.nodeLinkCreated/Removed/BlockedByResource/Missing`。
+- CSS：`.mtn-link-mark` 复用打开按钮的 20px 中性灰样式；宽度类组合 `has-node-link` / `has-resource.has-node-link` / `has-resource.is-title-sync-off.has-node-link` = 22 / 44 / 66px。
+
+**踩坑（会直接弄红既有测试）**
+
+- **尾部控制的 CSS 类名不要以 `.mtn-node` 开头**：`test/touch-routing.test.ts` 的 DOM 桩把 `selector.startsWith(".mtn-node")` 一律当作节点元素，`mtn-node-link` 会让 `targetFor()` 把普通节点误判为控制项，4 条 touch-routing 用例变红。改名 `.mtn-link-mark` 后全绿（与 `mtn-resource-open`、`mtn-fold-button` 同类命名）。
+- `test/styles.test.ts` 是源码字符串断言：`node-renderer.ts` 里必须**原样保留** `if (!visual.hasResourceControls) return;`、`if (visual.titleSyncDisabled)`、`setIcon(openButton, SHARE_SQUARE_ICON)` 与打开按钮的点击处理器写法，且 `styles.css` 的 `.mtn-node-controls > .mtn-resource-open:active` 规则块不能改。
+- `has-resource` 类保留"真的有资源"的语义（新增 `has-node-link`），否则只有 nodeLink 的节点会让 CSS 组合与实际控制数不一致。
+- 只读预览会禁用 `.mtn-resource-open, .mtn-link-mark`（`ReadOnlyTreePreview` 的 `goToLinkedNode` 传 noop）。
+
+**验证**：`npm run check` 0 错误；`npm test` **756 tests / 756 pass / 0 fail**（新增 `test/node-link.test.ts` 10 条、`test/resource-badges.test.ts` 1 条，并扩展 `ui-modules`/`top-toolbar` 契约断言）；`npm run build` 通过。
+
+**未完成 / 待产品确认**
+
+- 未在真实 Obsidian 内人工验收：图标观感、点击跳转的居中与折叠展开、移动端点按命中区。
+- "状态栏的图标也改变"按"**顶部工具栏按钮图标** link ↔ 取消关联"实现，**底部左下角状态栏未改**；若用户确指底部状态栏，需补 `BottomStatusBarState.nodeLinked` + 面板第 4 个图标按钮 + CSS/i18n（纯增量）。
+- 块 id 复用节点自身 id（不新增持久字段）；若要短块 id，可改为节点新增 `blockId`（首次参与关联时生成、取消关联时移除），其余契约不变。
+- 未新增命令面板命令与快捷键（本轮范围外）。
+
+## 2026-10-13 · 关联节点尾部错位 + 无效打开按钮（`fix`）
+
+**用户报告**：关联后的节点尾部出现两个图标（链接标志 + 打开文件按钮），链接标志压在标题文字上；而且那个“打开文件”标志点了没反应。
+
+**根因（一个，不是两个）**：`NodeRenderer.renderResourceControls()` 里**打开按钮是无条件创建的**——改动前整个方法只在节点有资源时被调用（`hasResourceControls === hasOpenButton`），所以没人注意。2026-10-12 把门禁改成“控制列宽度 > 0”（为了让只有 nodeLink 的节点也渲染尾部）之后，**只有 nodeLink 的节点也会多渲染一个打开按钮**：CSS 只预留一个 22px 槽位却塞进两个 20px 控件，flex `justify-content: flex-end` 让多出来的按钮向左侧溢出，于是链接标志盖住标题；而那个多出来的打开按钮背后没有资源，`openResource` 自然什么都不做。
+
+**修复**
+
+- `src/ui/renderers/node-renderer.ts`：打开按钮改为 `if (!visual.hasResource) return;` 之后才创建（`hasResource` = 真的有资源且未被节点关联顶掉）。`test/styles.test.ts` 断言的四段源码字符串（`if (!visual.hasResourceControls) return;`、`if (visual.titleSyncDisabled)`、`setIcon(openButton, SHARE_SQUARE_ICON)`、打开按钮点击处理器原文）全部保留。
+- `src/render/resource-badges.ts`：**节点关联占用节点唯一的“关联槽位”**——`hasOpenButton = resource && !nodeLink`，`titleSyncDisabled` 也要求 `hasOpenButton`（同步关闭标志不能脱离打开按钮单独占位）。于是渲染出的控件数与预留宽度永远一致：只有 nodeLink = 22px/1 个，有资源 = 22 或 44px，两者并存 = 22px/1 个（链接标志优先）。
+- `styles.css`：删掉因此不可达的 `.mtn-node.has-resource.has-node-link`（44px）与 `.mtn-node.has-resource.is-title-sync-off.has-node-link`（66px）两条规则，只留 `.mtn-node.has-node-link` 22px。
+- `src/ui/ui-contracts.ts`：`nodeResourceMenuItemOrder()` 在 `!hasResource && !nodeLinked` 时才给出“添加笔记 / 从模板添加文件 / 关联已有文件 / 链接网页”——已被节点关联的节点不再提供创建资源的入口（`nodeLinked` 作为可选入参，既有调用无需改动）。
+- `src/ui/association-target.ts`：`isAssociationTargetAvailable()` 增加 `!node.nodeLink`，从 `Ctrl/Cmd+E` 与菜单两条路径上阻止给已关联节点再加文件资源；失败走既有提示 `notice.associationTargetChanged`（“目标节点已变化或已有链接”）。
+- 读取不做互斥清理：历史数据里 `resource` 与 `nodeLink` 并存时两者都保留，只由渲染/菜单体现互斥，不静默丢字段（`docs/03` 已写明）。
+
+**新增回归测试（关键）**：`test/node-renderer.test.ts` —— 用 `esbuild buildSync + node:vm + 手写假 DOM`（照抄 `test/top-toolbar.test.ts` 的隔离手法，`require("obsidian")` 桩要提供 `setIcon` **和** `getLanguage`，否则 `t()` 在加载期抛错）真实跑 `NodeRenderer.render()`：
+- 只有 `nodeLink` 时控制容器**只有 1 个子元素**且是 `.mtn-link-mark`，`.mtn-resource-open` 数量为 0（这条正是本次缺陷）；
+- 点击链接标志触发 `goToLinkedNode`（修复“点了没反应”的证据链）；
+- 有资源时只渲染打开按钮并触发 `openResource`；
+- 资源 + 关联并存时只剩链接标志，且同步关闭标志也不渲染；
+- 只读预览下图标 `disabled` / `tabIndex = -1`，点击不触发（假 DOM 的 `click()` 必须在 `disabled` 时直接返回，才是真实按钮语义）。
+
+**验证**：`npm run check` 0 错误；`npm test` **760 tests / 760 pass / 0 fail**；`npm run build` 通过。
+
+**这次的教训（可复用）**：把某个方法的**调用门禁放宽**时，必须逐个核对方法内部的**无条件副作用**（这里是“总是创建一个按钮”）。判据不是“类型检查过了”，而是“渲染出的元素数量与布局预留的数量必须一致”。带 DOM 的渲染器值得有至少一条真实渲染的断言，纯函数测试（`createNodeVisualState`）看不到这类缺陷。
+
+
 
