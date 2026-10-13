@@ -331,5 +331,59 @@
 
 **这次的教训（可复用）**：把某个方法的**调用门禁放宽**时，必须逐个核对方法内部的**无条件副作用**（这里是“总是创建一个按钮”）。判据不是“类型检查过了”，而是“渲染出的元素数量与布局预留的数量必须一致”。带 DOM 的渲染器值得有至少一条真实渲染的断言，纯函数测试（`createNodeVisualState`）看不到这类缺陷。
 
+## 2026-10-13 · 分支引用（`mind-tree-ref`）与笔记内嵌只读分支视图（`feat`，团队协作）
+
+**需求**：节点右键菜单「复制分支」**正下方**增加「复制分支引用」；引用与「该思维树 + 该节点」绑定，树内移动节点不失效、不能跨文件跟随；引用粘贴到 Markdown 笔记后嵌入一个**只读、可交互**的思维树分支视图（点击节点打开按钮打开对应资源），视图右上角悬浮「打开原始思维树」按钮（鼠标悬浮出现）；节点失效（被删除或被剪切到其他树）时改为提示文字。
+
+**用户逐条确认的 9 个决策（不要再按别的口径实现）**：① 载体是代码块 ```` ```mind-tree-ref ```` + 单行 JSON（**不是**嵌入链接：`.mtn.md` 是普通 `.md`，Obsidian 原生嵌入会直接渲染大纲与压缩数据块，且没有 API 能接管按文件类型的嵌入渲染）；② 视图只显示被引用节点的**分支**（该节点为布局起点，深度字号与分支配色保持它在原树中的样子，与「导出分支 PNG」同口径）；③ 交互 = 平移/缩放 + 临时折叠 + 节点打开按钮 + 悬浮打开原树；④ 失效区分「节点不存在」与「树文件不存在」，原树仍在时保留打开按钮；⑤ 树缺 `documentId` 时**首次复制引用自动写入一次**；⑥ 多选时始终引用**右键点击的那个节点**；⑦ 树文件变化时**自动刷新**（120ms 防抖）；⑧「不能跨文件移动」只是语义说明，**不改动**现有跨导图复制粘贴；⑨ 视图高度**按分支内容自适应**（实现为：按适配宽度缩放后的内容高度 + 32px，写进 `--mtn-embed-height`；CSS 兜底 `min-height:120px; max-height:min(80vh,4000px)`；用户缩放后不再改高度）。
+
+**引用格式（冻结）**：```` ```mind-tree-ref \n {"tree":"<documentId>","node":"<nodeId>","path":"<仓库相对路径>"} \n ``` ````。`path` 可选、仅作快速定位；缺少 `tree`/`node`、类型错、总长 > 4 KiB（`MAX_BRANCH_REFERENCE_BYTES`）一律塌陷为 `undefined`（笔记里显示 `embed.invalidSyntax`）。单行 JSON 让路径里的反引号也无法构造出独立的关闭围栏。
+
+**落点**
+
+- 领域（纯函数）：`src/domain/branch-reference.ts`（`BRANCH_REFERENCE_LANGUAGE`、`createBranchReference`、`serializeBranchReference`、`parseBranchReference`、`parseBranchReferenceBlock`、`renderBranchReferenceBlock`）；`src/input-limits.ts` 新增 `MAX_BRANCH_REFERENCE_BYTES = 4 KiB`。
+- 解析服务：`src/services/mind-tree-reference.ts`（`MindTreeReferenceService`，端口 `fileExists`/`read`/`parseOptions`/`indexedTreePaths`）。候选顺序 = `pathHint` → 索引里该 `documentId` 的全部 `.mtn.md`；**只接受解析出的 `documentId` 与引用一致的候选**（路径被别的树占用 → `missing-tree` 失败关闭）；命中 ≥2 → `ambiguous`；节点不存在 → `missing-node`（**带解析出的 path**，改名后按钮仍可用）；读/解析失败 → `unreadable`。按路径缓存 + in-flight 去重，**失败不缓存**，`notifyChanged/Removed/Renamed` 精准失效并广播给订阅者。
+- 剪贴板：`src/services/clipboard.ts` 新增 `copyBranchReference()`（只写 `text/plain`，不带自定义 MIME，清空同会话内存副本）；`ClipboardPasteContent` 新增 `{ kind:"branch-reference" }`，`readClipboardEventContent`/`readClipboardTextContent` 只把**整段恰好是一个围栏块**的文本判为引用。
+- 只读渲染层复用：`src/ui/components/read-only-tree-preview.ts` 新增可选 `startId`/`className`/`fit`/`allowResourceOpen`/`openResource`/`wheelPassThrough`/`onLayout`（**默认值让版本对比与主题悬浮预览逐字不变**）；`src/ui/renderers/node-renderer.ts` 新增 `NodeRenderState.resourceOpenEnabled`（默认 undefined 时只读行为不变：打开按钮与链接标志都禁用；opt-in 后只放开打开按钮，链接标志仍死）。
+- 内嵌视图：`src/ui/components/mind-tree-reference-embed.ts`（`MindTreeReferenceEmbedPorts`、`MindTreeReferenceEmbed`、`MindTreeReferenceRenderChild`）；`styles.css` 追加 `.mtn-embed*`（悬浮按钮用 `opacity` 而非 `display:none` 以保留键盘可达，`@media (hover: hover)` 才隐藏）。
+- 装配：`src/main.ts` 的 `registerMarkdownCodeBlockProcessor(BRANCH_REFERENCE_LANGUAGE, …)` + `referenceEmbedPorts()` + `openReferenceResource()`（URL 走浏览器、文件走 `resolveVerified` + `openLinkedFile`，沿用 `resourceOpenMode`）+ `buildBranchReference()`（`documentId ?? resources.ensureStableReference()`）+ 在 **onload**（不是 onLayoutReady）注册 vault `create/modify/delete/rename` 与 `metadataCache.changed` → `notify*`，因为笔记里的引用不依赖任何已打开的视图。
+- UI 接线：`ui-contracts.ts` 加 `copy-branch-reference`；`node-context-menu.ts` 在「复制分支」后加项（图标 `file-symlink`，已在本机 Obsidian 1.14.4 的 `obsidian.asar` Lucide 注册表里确认存在）；`mind-tree-view.ts` 新增 `copyBranchReference(nodeId)`（会话令牌 + 节点双重校验）与 `branch-reference` 粘贴分支（只提示「只能粘贴到 Markdown 笔记中」，不插入节点）。
+- 团队分工（Lead 契约 → 两个 teammate 并行 → Lead 装配 → 独立 verifier）：契约 `task-1`、菜单/视图 `task-3`（view-wiring）、渲染/内嵌 `task-2`（embed-surface）、装配+文档 `task-4`、独立验证 `task-5`；写范围互斥，`npm run check` 是彼此契约的仲裁。
+- Lead 集成时补的两处契约修正（写者已停下，由 Lead 改并补断言）：`missing-node` 带上解析出的 `path`（否则树改名后失效态的打开按钮会指向过期 `pathHint`）；`openResource` 端口改为传**节点对象**（只有被渲染的文档知道自己指向哪个资源）。F2 之后这次「取节点」发生在只读预览内部，端口形状不变。
+
+**验证（最终）**
+
+- `npm run check` 0 错误；`npm test`（真命令，本会话是 danger-full-access，esbuild 可 spawn）**787 tests / 787 pass / 0 fail**；`npm run build` 通过（`main.js` ≈ 4.4 MiB < 10 MiB 上限）。
+- 本轮新增 27 条用例：`branch-reference` 5、`mind-tree-reference-service` 9、`reference-embed` 5、`node-renderer` +2、`styles` +3、`exchange` +2、`fold-direction` +1。
+- 受限沙箱里 `npm test` / `npm run build` 仍会因 esbuild `spawn EPERM` 失败（AGENTS §1 不变），替代命令 `& "C:\Users\Dayiy\AppData\Local\Temp\dsh-mtn-hooks\run-tests.ps1"` 仍可用；注意它在**受限模式下**可能把某文件整段吞成「0 条用例执行」，所以「失败像环境问题」必须用 HEAD 对照复现再下结论（见下面 F1）。
+
+**独立验证（teammate verifier，task-5）发现并已修的 3 个缺陷**
+
+1. **F1（P1，真回归，我一开始误判）**：全量出现 8 条失败，我先按历史经验判为「既有 esbuild 环境失败」；verifier 用「HEAD bundle 正常 / 工作区 bundle 崩 / 只加一行桩后真实用例 8/8 通过」三重证据证明是**本轮新引入**——`test/plugin-update-modal.test.ts` 的 obsidian 桩缺 `MarkdownRenderChild`，而新模块 `mind-tree-reference-embed.ts` 的类 `extends MarkdownRenderChild`，bundle 求值即抛 `TypeError: Class extends value undefined`。修法：桩里补 `MarkdownRenderChild: class {},`。**教训**：只要新增「从 Obsidian 取基类」的模块，所有用 `esbuild buildSync + 手写 obsidian 桩` 的测试都要同步补桩；并且**不能用文件级失败形态反推环境问题**。
+2. **F2（P2，正确性）**：同路径刷新只 `preview.update(document)`，而 `previewOptions.openResource` 闭包捕获了旧文档 → 节点的关联文件从 A 改成 B 并保存后，视图显示 B 但打开按钮打开 A（新加资源时按钮点了没反应）。修法：`TreePreviewOptions.openResource` 改为收**节点对象**，由 `ReadOnlyTreePreview.render()` 从**本次渲染的文档**取（`const node = document.nodes[id];`）；宿主不再捕获文档，`test/reference-embed.test.ts` 的断言随之移到 preview 源码上。
+3. **F3（P3，视觉）**：`resolveFoldDirections` 在 `positionedNodes` 不含文档根时提前返回空表，radial/balanced 布局下内嵌视图的折叠按钮恒为 `right`。修法：找不到文档根时回落到**最浅的已布局节点**（即预览自己的根）；`test/fold-direction.test.ts` 新增子树布局用例。
+4. verifier 指出的「红线无自动守护」也已补：`test/reference-embed.test.ts` 新增源码断言——`main.ts` 的 `openTree` 处理器必须调 `activateMindTree`，且不得出现 `openFile(` / `vault.read(`（红线 C.14：任何入口都不得打开导图源文件）。
+
+**残余风险（verifier 报告，供接手者）**
+
+- 内嵌视图**没有 DOM 运行时测试**（只有源码断言 + 无 DOM 推理）：真实 Obsidian 的阅读模式 vs 实时预览差异、`MarkdownRenderChild` 卸载时序、`(hover)` 媒体查询、真机触摸都未验证。
+- 改名解析依赖资源索引（`resources.entries()`）：索引未就绪或刚改名未入库时，合法引用会短暂显示 `missing-tree` 且没有打开按钮，直到下一次 vault/metadataCache 事件。
+- `ambiguous` / `unreadable` 的失效提示只有在引用带 `path` 时才有打开按钮（插件自己产出的引用必带 `path`，手改块可能缺）；`pathHint` 过期时点击只会提示「找不到文件」。
+- 内嵌视图不读本机全局显示偏好（文件类型徽标忽略/别名、节点换行宽度、节点对齐都用默认值）——刻意让「同一引用处处一致」，已在 `docs/02` §6.6 写明。
+- `fitted` 从不重置：用户缩放或改变笔记宽度后不再重新适配（只承诺用户缩放后不改容器高度）。
+- `edit` 本轮的 `ReplaceFileW EIO (Win32 1175)` 依然高频（单个文件批量编辑时**第一条**几乎必失败，原样重试即成功）——并发写同一文件的 teammate 越多越明显。
+- 未在真实 Obsidian 内人工验收（沙箱无法启动）：悬浮按钮观感与 hover 渐隐、`git-fork` 图标像素、移动端触摸行为。已知取舍：内嵌画布沿用只读预览的触摸隔离（`touchmove` 被 `preventDefault`），因此在视图内纵向拖动是**平移分支**而不是滚动笔记；普通滚轮已透传给笔记，`Ctrl/Cmd + 滚轮` 才缩放。若移动端要「拖动即滚动」，需要新的契约。
+- 未做：`manifest.json` 版本号（发布方决定）、命令面板入口、工具栏「复制」下拉的对应项（按需求只改右键菜单）。
+
+**用户实测反馈（同日两处，已修）**
+
+1. **悬浮「打开思维树」按钮与代码块自带的动作按钮重叠**（实时预览下的「编辑区块」）。修法：`styles.css` 的 `.mtn-embed-open` 改为 `top: var(--mtn-embed-open-top, calc(--size-2-2 + --size-2-2 + --icon-m + --size-2-2 + --size-4-1))`（默认 32px）与 `inset-inline-end: var(--mtn-embed-open-right, var(--size-2-2, 4px))`：落到宿主动作行**下方**、共用行末边缘，偏移随主题 token 自动跟随，两个变量仍可覆盖。**关键 ground truth（第一轮我找错了类名）**：宿主动作真正的类名是 `.embed-actions` / `.embed-action`（`.edit-block-button` 只是 JS 侧的 hook），明文 CSS 就在本机 `obsidian.asar` 里——`top: var(--size-2-2)`、`padding: var(--size-2-2) var(--size-2-3)`、`inset-inline-end: var(--size-2-2)`，token `--size-2-2: 4px`、`--icon-m: 16px` → 宿主行占 y∈[4,28]、右内缩 4px。更要紧的是 `.cm-embed-block:hover .embed-actions { opacity: 1 }`：**我们的按钮被 hover 时宿主按钮必然同时可见**（`opacity:0` 仍参与命中测试，还会吃掉点击），所以几何避让是硬需求而不是"有时重叠"。教训：量宿主几何要按行为找类名，别按直觉猜类名。
+2. **分支没有在引用视图里居中**。根因是时序而不是几何：`layoutTree` 末尾 `shiftIntoPositiveCoordinates()` 归一化、`finish()` 用 `max(x+width)/max(y+height)` 给出包围盒，verifier 用 5 种布局 × {文档根, 子分支} 共 10 组实测 `layout rect == 节点包围盒 且原点 (0,0)`，所以 `centerViewportOnRect(…,{0,0,w,h})` 本身没错；真正的问题是**首次 fit 量到 CSS 兜底的 320px**，随后盒子被 `--mtn-embed-height` 改成真实高度而 `fitted` 已为 true 不再重算——数值模拟：小分支只露 22px 且偏下、极小分支**完全看不见**、大分支偏上。修法：`TreePreviewOptions` 新增 `refitOnResize`（默认 false，版本对比/主题悬浮预览不变），fit 抽成 `fitToContainer()` 并记录 `fittedWidth/fittedHeight`；新增 `userAdjusted`（滚轮/指针/键盘三处置位），仅当宿主开启该选项且读者尚未平移/缩放时，容器尺寸变化（含 `min-height`/`max-height` 夹紧、宽度回流、折叠改高）就重新适配并居中；高度差 < 2px 忽略以避开「笔记滚动条改变宽度」的理论反馈环。该选项只适用于 `fit: "width"`（`contain` 的 zoom 依赖高度会自成反馈），已在选项注释里写明。
+
+**验证（这两处修复）**：`npm run check` 0 错误；`npm test` **787 / 787 / 0 fail**（新增断言都嵌在既有测试里：`reference-embed` 钉 `refitOnResize`/`fitToContainer`/三处 `userAdjusted`，`styles` 钉新的按钮定位）；`npm run build` 通过。
+
+3. **悬浮按钮外观来回三轮，最终形态：空闲全透明 / 悬浮 = 原生半透明灰底**。最终规则：`.mtn-embed-open` 去掉自己那套 `width/height: 28px`、`border`、`background: var(--background-primary)`、`box-shadow`，整条镜像 Obsidian 的 `.embed-action`（asar 明文可查）：`display: flex`、`padding: var(--size-2-2) var(--size-2-3)`（4px 6px → 与原生同尺寸 28×24）、`color: var(--embed-action-color, var(--icon-color, var(--text-muted)))`、`border-radius: var(--embed-action-radius, var(--clickable-icon-radius, var(--radius-s, 4px)))`、`cursor: pointer`；**空闲态强制透明**：`border: 0 !important; background: transparent !important; box-shadow: none !important;`；**悬浮态就是原生那一条**：`background-color: var(--mtn-embed-open-hover, var(--background-modifier-hover)) !important`（默认主题 `color-mix(in oklch, var(--mono-100) 6.7%, transparent)`，即半透明灰；深浅由 `--mtn-embed-open-hover` 一个变量控制，用户改深浅不需要碰插件文件、也不需要 `!important`）。两条都带 `!important` 时由特异性决胜（`:hover` 胜出），因此既压得住宿主/主题更具体的按钮规则（也会出现点过之后 `:hover`/`:focus` 残留），又保留原生悬浮底色；`test/styles.test.ts` 断言「padding 派生尺寸 + 空闲三处 `!important` 透明 + 悬浮是那一条 `--background-modifier-hover`」。教训：① 要「像原生」就把宿主自己的类（`.embed-action`）整条规则抄过来复用变量，别自配 `--background-primary`/`--radius-s` 拼近似外观；② 「空闲无底色」必须假设宿主/主题能用更高优先级给你画盒子，`!important` 是正确的工具（`.mtn-visually-hidden` 已有先例），但**只在空闲态**加，否则会连自己的悬浮底色一起屏蔽（`!important` 跨状态生效，这也是第二轮误判「悬浮也要透明」的技术原因）；③ **改 `styles.css` 必须在 Obsidian 里重载插件/重启才生效**，用户反馈样式没变时先排除这一条。
+
+
 
 
