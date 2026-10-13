@@ -22,14 +22,17 @@ export function resolveFoldDirections(
   }
 
   const positionById = new Map(positionedNodes.map((node) => [node.id, node]));
-  const root = positionById.get(document.rootId);
-  if (!root) return result;
-  result.set(document.rootId, "right");
+  // A branch preview lays out a subtree, so the document root can be absent:
+  // fall back to the shallowest positioned node, which is that preview's own
+  // root, so radial/balanced fold controls still point outward.
+  const root = positionById.get(document.rootId)
+    ?? positionedNodes.reduce((shallowest, node) => node.depth < shallowest.depth ? node : shallowest, positionedNodes[0]!);
+  result.set(root.id, "right");
 
   if (layoutMode === "radial") {
     const rootCenter = center(root);
     for (const node of positionedNodes) {
-      if (node.id === document.rootId) continue;
+      if (node.id === root.id) continue;
       const nodeCenter = center(node);
       const deltaX = nodeCenter.x - rootCenter.x;
       const deltaY = nodeCenter.y - rootCenter.y;
@@ -46,7 +49,7 @@ export function resolveFoldDirections(
   // control inward toward the root.
   const rootCenterX = center(root).x;
   const visibleIds = new Set(positionById.keys());
-  for (const childId of document.nodes[document.rootId]?.childIds ?? []) {
+  for (const childId of document.nodes[root.id]?.childIds ?? []) {
     const childPosition = positionById.get(childId);
     if (!childPosition) continue;
     const direction: FoldDirection = center(childPosition).x < rootCenterX ? "left" : "right";

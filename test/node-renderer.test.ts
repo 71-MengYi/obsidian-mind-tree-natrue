@@ -83,7 +83,7 @@ runInNewContext(bundle, { module, exports: module.exports, require(id: string) {
   };
 } });
 
-function renderNode(node: MindTreeNode, readOnly = false) {
+function renderNode(node: MindTreeNode, readOnly = false, resourceOpenEnabled?: boolean) {
   const document: MindTreeDocument = {
     settings: { layoutMode: "right", recursiveScan: false, collectionMode: "off", theme: "vibrant",
       connectionStyle: "theme", nodeShape: "rounded" },
@@ -105,7 +105,8 @@ function renderNode(node: MindTreeNode, readOnly = false) {
     nodeWrapWidth: 240, textMeasurer: fallbackNodeTextMeasurer,
     resourceBadgePresentation: fallbackResourceBadgePresentation,
     imageNodePresentation: fallbackImageNodePresentation,
-    readOnly
+    readOnly,
+    resourceOpenEnabled
   };
   const container = new TestElement();
   new module.exports.NodeRenderer(container).render(state, actions);
@@ -161,5 +162,37 @@ test("a read-only preview disables the link mark instead of navigating", () => {
   assert.equal(mark.disabled, true);
   assert.equal(mark.tabIndex, -1);
   mark.click();
+  assert.deepEqual(calls, []);
+});
+
+test("a read-only preview can opt in to opening a resource while node links stay dead", () => {
+  const resourceNode: MindTreeNode = { ...baseNode(),
+    resource: { type: "file", resourceId: "note", pathHint: "Topic.md", fileKind: "note" } };
+  const enabled = renderNode(resourceNode, true, true);
+  const open = enabled.controls.querySelectorAll(".mtn-resource-open")[0]!;
+  assert.equal(open.disabled, false);
+  assert.equal(open.tabIndex, 0);
+  open.click();
+  assert.deepEqual(enabled.calls, ["openResource"]);
+
+  // Enabling the open control must not revive link navigation: it would move a
+  // view that a read-only preview does not own.
+  const linkNode = { ...baseNode(), nodeLink: "target" };
+  const linked = renderNode(linkNode, true, true);
+  const mark = linked.controls.querySelectorAll(".mtn-link-mark")[0]!;
+  assert.equal(mark.disabled, true);
+  assert.equal(mark.tabIndex, -1);
+  mark.click();
+  assert.deepEqual(linked.calls, []);
+});
+
+test("a read-only preview keeps its open control disabled unless it opts in", () => {
+  const node: MindTreeNode = { ...baseNode(),
+    resource: { type: "file", resourceId: "note", pathHint: "Topic.md", fileKind: "note" } };
+  const { controls, calls } = renderNode(node, true);
+  const open = controls.querySelectorAll(".mtn-resource-open")[0]!;
+  assert.equal(open.disabled, true);
+  assert.equal(open.tabIndex, -1);
+  open.click();
   assert.deepEqual(calls, []);
 });

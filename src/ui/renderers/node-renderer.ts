@@ -26,6 +26,13 @@ import { createNodeVisualState, type NodeVisualState } from "./node-render-model
 
 export interface NodeRenderState {
   readonly readOnly?: boolean;
+  /**
+   * Read-only previews normally disable the open control, because a preview has
+   * no vault ports. A note embed is still a live view of a real tree, so it can
+   * opt in to opening the linked note while following node links, editing and
+   * dragging stay disabled.
+   */
+  readonly resourceOpenEnabled?: boolean;
   readonly document: Readonly<MindTreeDocument>;
   readonly positions: ReadonlyArray<PositionedNode>;
   readonly width: number;
@@ -141,12 +148,20 @@ export class NodeRenderer {
     this.renderFoldControl(element, node, state.foldDirections.get(node.id) ?? "right", actions);
 
     if (state.readOnly) {
-      // Keep the original geometry/appearance, but previews cannot open a
-      // resource, follow a node link or begin an edit/drag. Only temporary fold
-      // controls are live.
-      for (const control of element.querySelectorAll<HTMLButtonElement>(".mtn-resource-open, .mtn-link-mark")) {
+      // Keep the original geometry/appearance, but previews cannot follow a node
+      // link or begin an edit/drag. Only temporary fold controls are live.
+      // Following a link would move the view, so that control is always dead in
+      // a preview; opening a resource only needs a host port and is therefore
+      // opt-in per preview.
+      for (const control of element.querySelectorAll<HTMLButtonElement>(".mtn-link-mark")) {
         control.disabled = true;
         control.tabIndex = -1;
+      }
+      if (state.resourceOpenEnabled !== true) {
+        for (const control of element.querySelectorAll<HTMLButtonElement>(".mtn-resource-open")) {
+          control.disabled = true;
+          control.tabIndex = -1;
+        }
       }
       return;
     }

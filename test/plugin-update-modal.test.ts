@@ -116,7 +116,7 @@ function fixture(language = "en", notes = "## Changes\n\n- **Improved** navigati
     constructor(readonly app: TestApp, readonly manifest: { name: string }) { super(); }
   }
   const obsidian = { Plugin: TestPlugin, Modal: TestModal, Component: TestComponent, Setting: TestSetting,
-    PluginSettingTab: class {}, TextFileView: class {}, FuzzySuggestModal: class {},
+    PluginSettingTab: class {}, TextFileView: class {}, FuzzySuggestModal: class {}, MarkdownRenderChild: class {},
     getLanguage: () => language, Platform: { isMobile: false },
     MarkdownRenderer: { async render(renderApp: TestApp, source: string, element: TestElement, sourcePath: string, component: TestComponent) {
       assert.equal(renderApp, app);

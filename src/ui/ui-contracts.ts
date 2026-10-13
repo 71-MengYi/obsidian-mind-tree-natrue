@@ -20,7 +20,7 @@ export type NodeResourceMenuItemId =
 export type NodeMenuItemId = NodeResourceMenuItemId
   | "markers" | "node-link" | "add-child" | "add-sibling"
   | "toggle-collapse" | "expand-all" | "collapse-all" | "delete-branch" | "delete-node-only"
-  | "move-files" | "copy-branch" | "copy-markdown" | "export-png";
+  | "move-files" | "copy-branch" | "copy-branch-reference" | "copy-markdown" | "export-png";
 
 export interface NodeMenuContractState {
   readonly hasFileResource: boolean;
@@ -65,6 +65,8 @@ export function nodeMenuItemOrder(state: NodeMenuContractState): NodeMenuItemId[
   if (!state.isRoot) items.push("add-sibling");
   if (state.hasChildren) items.push("toggle-collapse", "expand-all", "collapse-all");
   if (!state.isRoot) items.push("delete-branch", "delete-node-only");
-  items.push("move-files", "copy-branch", "copy-markdown", "export-png");
+  // The reference entry copies the same branch as "copy-branch", so the two
+  // copy surfaces stay adjacent instead of being split by the Markdown copy.
+  items.push("move-files", "copy-branch", "copy-branch-reference", "copy-markdown", "export-png");
   return items;
 }

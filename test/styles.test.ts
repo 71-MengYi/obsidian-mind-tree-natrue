@@ -144,3 +144,62 @@ test("fold controls define four outward positions and matching hover bridges", (
     assert.match(css, new RegExp(`\\.mtn-fold-button\\.is-fold-${direction}::before\\s*\\{`));
   }
 });
+
+test("note embeds size themselves from the branch and keep a baseline box", () => {
+  const embedRule = css.match(/\.mtn-embed\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.match(embedRule, /position:\s*relative;/);
+  assert.match(embedRule, /border:\s*1px solid var\(--background-modifier-border\);/);
+  assert.match(embedRule, /background:\s*var\(--background-primary\);/);
+  assert.match(embedRule, /overflow:\s*hidden;/);
+
+  const treeRule = css.match(/\.mtn-embed-tree\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.match(treeRule, /height:\s*var\(--mtn-embed-height,\s*320px\);/);
+  assert.match(treeRule, /min-height:\s*120px;/);
+  assert.match(treeRule, /max-height:\s*min\(80vh,\s*4000px\);/);
+
+  const invalidRule = css.match(/\.mtn-embed-invalid\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.match(invalidRule, /padding:\s*12px;/);
+  assert.match(invalidRule, /color:\s*var\(--text-muted\);/);
+  assert.match(invalidRule, /font-size:\s*var\(--font-ui-small\);/);
+});
+
+test("the embed open control fades for hover pointers instead of leaving the tab order", () => {
+  const openRule = css.match(/\.mtn-embed-open\s*\{([\s\S]*?)\}/)?.[1] ?? "";
+  assert.match(openRule, /position:\s*absolute;/);
+  // The code block's own action row (Obsidian `.embed-actions`: 4px inset and a
+  // 4px + 16px + 4px button) keeps the corner, so this control drops below it and
+  // only shares the inline end. Defaults stay derived from the host's tokens.
+  assert.match(openRule, /top:\s*var\(--mtn-embed-open-top,\s*calc\(/);
+  assert.match(openRule, /var\(--size-2-2,\s*4px\)/);
+  assert.match(openRule, /var\(--icon-m,\s*16px\)/);
+  assert.match(openRule, /inset-inline-end:\s*var\(--mtn-embed-open-right,\s*var\(--size-2-2,\s*4px\)\);/);
+  // Native `.embed-action` box: the size comes from its own padding, not a fixed square.
+  assert.match(openRule, /padding:\s*var\(--size-2-2,\s*4px\)\s+var\(--size-2-3,\s*6px\);/);
+  assert.doesNotMatch(openRule, /width:\s*\d+px;/);
+  // Flat in every state, forced so a host/theme button rule (or a sticky
+  // :hover/:focus after a click) cannot paint a box behind the icon.
+  assert.match(openRule, /border:\s*0 !important;/);
+  assert.match(openRule, /background:\s*transparent !important;/);
+  assert.match(openRule, /box-shadow:\s*none !important;/);
+  assert.match(openRule, /color:\s*var\(--embed-action-color/);
+  assert.match(openRule, /border-radius:\s*var\(--embed-action-radius/);
+  assert.doesNotMatch(openRule, /background:\s*var\(--background-primary\)/);
+  // Hover is exactly the native `.embed-action:hover`: the same translucent gray
+  // and nothing else. The shade is overridable through one variable.
+  assert.match(css, /\.mtn-embed-open:hover\s*\{\s*background-color:\s*var\(--mtn-embed-open-hover,\s*var\(--background-modifier-hover\)\) !important;\s*\}/);
+  assert.match(openRule, /opacity:\s*1;/);
+  // Keeping the element in the layout is what makes it keyboard reachable.
+  assert.doesNotMatch(openRule, /display:\s*none/);
+  assert.match(css, /\.mtn-embed-open:focus-visible\s*\{[\s\S]*?outline:/);
+
+  const hideRule = css.match(/@media \(hover: hover\)\s*\{\s*([\s\S]*?)\n\}/)?.[1] ?? "";
+  assert.match(hideRule, /\.mtn-embed-tree:not\(:hover\):not\(:focus-within\) \.mtn-embed-open\s*\{\s*opacity:\s*0;/);
+});
+
+test("note embed rules add no gradients and no permanent GPU layers", () => {
+  const start = css.indexOf("/* ─── Note embed");
+  assert.ok(start > 0, "embed style section exists");
+  const section = css.slice(start);
+  assert.doesNotMatch(section, /gradient/i);
+  assert.doesNotMatch(section, /will-change/i);
+});

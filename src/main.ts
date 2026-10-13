@@ -1,12 +1,14 @@
 import { addIcon, normalizePath, Notice, Platform, Plugin, removeIcon, requestUrl, requireApiVersion, TFile, WorkspaceLeaf, type ViewState, type ViewStateResult } from "obsidian";
 import { around } from "monkey-around";
 import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile, type ParseMindTreeOptions } from "./format/document";
+import { createBranchReference, BRANCH_REFERENCE_LANGUAGE, parseBranchReference, type BranchReference } from "./domain/branch-reference";
 import { t } from "./i18n";
 import { ResourceIndexService, type ResourceIndexProgress, type ResourceIndexReport } from "./services/resource-index";
 import { LocalResourceCache } from "./services/local-resource-cache";
 import { SettingsPersistence, removeLegacyResourceIndex } from "./services/settings-persistence";
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
+import { MindTreeReferenceService } from "./services/mind-tree-reference";
 import { PendingConflictStore } from "./services/pending-conflict-store";
 import { PendingConflictMaintenance } from "./services/pending-conflict-maintenance";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
@@ -22,9 +24,11 @@ import {
   SHARE_SQUARE_ICON_SVG,
 } from "./ui/icons";
 import { MindTreeView } from "./ui/mind-tree-view";
+import { MindTreeReferenceRenderChild, type MindTreeReferenceEmbedPorts } from "./ui/components/mind-tree-reference-embed";
 import { CreateMindTreeModal, PluginUpdateModal, TextPromptModal } from "./ui/modals/index";
 import { LAYOUT_OPTIONS } from "./render/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
+import type { MindTreeDocument, MindTreeNode, NodeId } from "./types";
 import { ReleaseClient, UpdateError } from "./services/updates/release-client";
 import { UpdateStore } from "./services/updates/update-store";
 import { UpdateCoordinator, updateRuntime } from "./services/updates/update-coordinator";
@@ -56,6 +60,8 @@ export default class MindTreeNaturePlugin extends Plugin {
   private updateUnloadTask: Promise<void> = Promise.resolve();
   private coreInitialized = false;
   private conflictMaintenance!: PendingConflictMaintenance<TFile>;
+  /** Resolves note-embedded branch references without requiring an open view. */
+  private references!: MindTreeReferenceService;
 
 
   async onload(): Promise<void> {
@@ -113,6 +119,36 @@ export default class MindTreeNaturePlugin extends Plugin {
       "discardTemplateFile", "importExternalFile", "importClipboardImage", "renameLinkedFile",
       "moveLinkedFile", "trashLinkedFile"
     ]));
+    // A note can embed a tree that is open nowhere, so reference resolution is
+    // owned by the plugin and refreshed by vault events rather than by a view.
+    this.references = new MindTreeReferenceService({
+      fileExists: (path) => Boolean(this.app.vault.getFileByPath(path)),
+      read: async (path) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (!file) throw new Error(t("notice.fileNotFound", { path }));
+        return this.app.vault.read(file);
+      },
+      parseOptions: () => this.documentParseOptions(),
+      indexedTreePaths: (documentId) => this.resources.entries()
+        .filter((entry) => entry.resourceId === documentId && isMindTreePath(entry.path))
+        .map((entry) => entry.path)
+    });
+    this.register(() => this.references.destroy());
+    const notifyReferenceChange = (file: { path: string }): void => {
+      if (isMindTreePath(file.path)) this.references.notifyChanged(file.path);
+    };
+    this.registerEvent(this.app.vault.on("create", notifyReferenceChange));
+    this.registerEvent(this.app.vault.on("modify", notifyReferenceChange));
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      if (file instanceof TFile) this.references.notifyRemoved(file.path);
+      else this.references.notifyChanged();
+    }));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      // A folder rename reports the folder alone; every child path changed.
+      if (file instanceof TFile) this.references.notifyRenamed(oldPath, file.path);
+      else this.references.notifyChanged();
+    }));
+    this.registerEvent(this.app.metadataCache.on("changed", notifyReferenceChange));
     // Journal maintenance owns its debounce timers and decisions; vault reads,
     // view refreshes and notices stay here as thin ports.
     this.conflictMaintenance = new PendingConflictMaintenance<TFile>({
@@ -142,6 +178,11 @@ export default class MindTreeNaturePlugin extends Plugin {
     this.register(() => removeIcon(SHARE_SQUARE_ICON));
     addIcon(CHAIN_BROKEN_ICON, CHAIN_BROKEN_ICON_SVG);
     this.register(() => removeIcon(CHAIN_BROKEN_ICON));
+    // A reference block is user-editable note text: parse defensively and let the
+    // render child show a placeholder for anything malformed.
+    this.registerMarkdownCodeBlockProcessor(BRANCH_REFERENCE_LANGUAGE, (source, el, ctx) => {
+      ctx.addChild(new MindTreeReferenceRenderChild(el, parseBranchReference(source), this.referenceEmbedPorts()));
+    });
     this.registerView(MIND_TREE_VIEW_TYPE, (leaf) => new MindTreeView(leaf, this));
     this.registerDirectOpenRouting();
     this.registerEvent(this.app.workspace.on("active-leaf-change", (leaf) => {
@@ -541,6 +582,76 @@ export default class MindTreeNaturePlugin extends Plugin {
       };
     } finally {
       if (identityWriteSource !== undefined) sharedSession?.endWrite(identityWriteSource);
+    }
+  }
+
+  /**
+   * Build the pointer a Markdown note can embed. The tree identity is
+   * allocated here, at the moment the user asks for a reference, so a later
+   * rename or move of the `.mtn.md` file cannot invalidate it. `ensureStableReference`
+   * reuses the existing lazy-identity pipeline and keeps every open view aligned.
+   */
+  async buildBranchReference(
+    file: TFile,
+    nodeId: NodeId,
+    document: MindTreeDocument
+  ): Promise<BranchReference> {
+    const current = this.app.vault.getFileByPath(file.path);
+    if (!current || !document.nodes[nodeId]) throw new Error(t("notice.resourceTargetChanged"));
+    const identity = document.documentId ?? (await this.resources.ensureStableReference(current)).resourceId;
+    return createBranchReference(identity, nodeId, current.path);
+  }
+
+  /** Narrow ports for the note-embedded read-only branch view. */
+  private referenceEmbedPorts(): MindTreeReferenceEmbedPorts {
+    return {
+      resolve: (reference) => this.references.resolve(reference),
+      subscribe: (listener) => this.references.subscribe(listener),
+      openTree: (path) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (file) void this.activateMindTree(file);
+        else new Notice(t("notice.fileNotFound", { path }));
+      },
+      openResource: (node) => void this.openReferenceResource(node),
+      // Images go through the same verified index as the canvas; the embed never
+      // touches the vault on its own.
+      resolveImageFile: (node) => node.resource?.type === "file"
+        ? this.resources.resolve(node.resource)
+        : undefined,
+      resourcePath: (file) => this.app.vault.getResourcePath(file)
+    };
+  }
+
+  /**
+   * Open one node's linked resource from a note embed. The rules match the
+   * canvas: safe http/https URLs go to the browser, files open at the configured
+   * location, and nothing is written back to any document.
+   */
+  private async openReferenceResource(node: Readonly<MindTreeNode>): Promise<void> {
+    const resource = node.resource;
+    if (!resource) return;
+    if (resource.type === "url") {
+      let parsed: URL;
+      try { parsed = new URL(resource.url); } catch { new Notice(t("notice.invalidLink")); return; }
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        new Notice(t("notice.unsafeLink"));
+        return;
+      }
+      window.open(parsed.toString(), "_blank", "noopener,noreferrer");
+      return;
+    }
+    try {
+      const file = await this.resources.resolveVerified(resource);
+      if (!file) {
+        new Notice(t("notice.fileNotFound", { path: resource.pathHint }));
+        return;
+      }
+      await this.openLinkedFile(file, () => this.settings.resourceOpenMode === "split-right"
+        ? this.app.workspace.getLeaf("split", "vertical")
+        : this.app.workspace.getLeaf("tab"));
+    } catch (error) {
+      console.warn("Mind Tree Nature: embedded reference could not open its linked file", error);
+      new Notice(t("resourceIndex.unverified"));
     }
   }
 

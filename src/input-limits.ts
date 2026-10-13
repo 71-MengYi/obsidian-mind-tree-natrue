@@ -12,6 +12,12 @@ export const MAX_MIND_TREE_DEPTH = 256;
 export const MAX_JSON_CONTAINER_DEPTH = 256;
 export const MAX_STRUCTURED_CLIPBOARD_BYTES = 10 * 1024 * 1024;
 export const MAX_TEXT_IMPORT_BYTES = 10 * 1024 * 1024;
+/**
+ * A branch reference is one short JSON object pasted into a Markdown note. The
+ * cap only exists so a hostile note cannot make the reader parse megabytes
+ * before rejecting the block.
+ */
+export const MAX_BRANCH_REFERENCE_BYTES = 4 * 1024;
 export const EXTERNAL_FILE_CONFIRM_BYTES = 100 * 1024 * 1024;
 export const EXTERNAL_FILE_REJECT_BYTES = 1024 * 1024 * 1024;
 

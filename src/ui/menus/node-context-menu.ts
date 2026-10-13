@@ -39,6 +39,8 @@ export interface NodeContextMenuActions {
   readonly deleteNodeOnly: () => void;
   readonly moveFiles: () => void;
   readonly copyBranch: () => void;
+  /** Copy a pointer to this branch instead of a copy of its content. */
+  readonly copyBranchReference: () => void;
   readonly copyMarkdown: () => void;
   readonly exportBranchPng: () => void;
 }
@@ -88,6 +90,7 @@ export class NodeContextMenu {
       .setDisabled(!state.branchHasFiles).onClick(guarded(actions.moveFiles)));
     menu.addSeparator();
     menu.addItem((item) => item.setTitle(t("menu.copyBranch")).setIcon("copy").onClick(guarded(actions.copyBranch)));
+    menu.addItem((item) => item.setTitle(t("menu.copyBranchReference")).setIcon("file-symlink").onClick(guarded(actions.copyBranchReference)));
     menu.addItem((item) => item.setTitle(t("menu.copyMarkdown")).setIcon("list-tree").onClick(guarded(actions.copyMarkdown)));
     menu.addItem((item) => item.setTitle(t("menu.exportBranchPng")).setIcon("image-down").onClick(guarded(actions.exportBranchPng)));
     menu.showAtPosition({ x: event.clientX, y: event.clientY }, ownerDocument);

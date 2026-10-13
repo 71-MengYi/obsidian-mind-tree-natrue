@@ -62,6 +62,30 @@ test("radial controls follow the dominant outward axis and prefer horizontal tie
   assert.equal(resolved.get(tie.id), "right");
 });
 
+test("a subtree layout without the document root still points its fold controls outward", () => {
+  const document = createEmptyDocument("Root");
+  const branch = addNode(document, document.rootId, "Branch");
+  const child = addNode(document, branch.id, "Child");
+  const west = addNode(document, branch.id, "West");
+  // The branch preview lays out only the referenced subtree, so the document root
+  // is absent from these positions; the shallowest node is that preview's root.
+  const positions = [
+    { ...position(branch.id, 100, 100), depth: 1 },
+    { ...position(west.id, 0, 100), depth: 2 },
+    { ...position(child.id, 220, 100), depth: 2 }
+  ];
+  const radial = resolveFoldDirections(document, positions, "radial");
+  assert.equal(radial.get(branch.id), "right");
+  assert.equal(radial.get(west.id), "left");
+  assert.equal(radial.get(child.id), "right");
+
+  const balanced = resolveFoldDirections(document, positions, "balanced");
+  assert.equal(balanced.size, positions.length);
+  assert.equal(balanced.get(branch.id), "right");
+  assert.equal(balanced.get(west.id), "left");
+  assert.equal(balanced.get(child.id), "right");
+});
+
 function position(id: string, x: number, y: number): PositionedNode {
   return { id, depth: 0, x, y, contentWidth: 20, width: 20, height: 20 };
 }

@@ -51,6 +51,10 @@ test("node menu description changes only for applicable resource and tree state"
   assert.equal(linkedRoot.indexOf("node-link"), linkedRoot.indexOf("markers") + 1);
   assert.ok(!linkedRoot.includes("add-sibling"));
   assert.ok(!linkedRoot.includes("delete-branch"));
+  // The reference entry is a second copy surface for the same branch, so it
+  // stays directly under the plain branch copy in every node state.
+  assert.equal(plain.indexOf("copy-branch-reference"), plain.indexOf("copy-branch") + 1);
+  assert.equal(linkedRoot.indexOf("copy-branch-reference"), linkedRoot.indexOf("copy-branch") + 1);
   // A node link is already this node's association, so the creation entries and
   // the resource open/remove entries are not offered without a real resource.
   const nodeLinkedOnly = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: false, nodeLinked: true });

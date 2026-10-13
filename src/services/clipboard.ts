@@ -1,4 +1,5 @@
 import { addNode, extractBranches } from "../domain/tree";
+import { parseBranchReferenceBlock, renderBranchReferenceBlock, type BranchReference } from "../domain/branch-reference";
 import { normalizeBranchClipboardPayload, payloadRootIds } from "../domain/clipboard-payload";
 import { renderBranchMarkdown } from "../format/outline";
 import { linkedFileTitle } from "../format/resource-id";
@@ -21,6 +22,7 @@ interface InternalBranchClipboard {
 export type ClipboardPasteContent =
   | { kind: "structured"; payload: BranchClipboardPayload }
   | { kind: "images"; images: ClipboardImageInput[] }
+  | { kind: "branch-reference"; reference: BranchReference }
   | { kind: "text"; text: string }
   | { kind: "empty" };
 
@@ -71,6 +73,16 @@ export async function copyBranches(
 }
 
 /**
+ * Copy a pointer instead of the branch itself. Plain text is the only
+ * representation: the target is a Markdown note, where the plugin's code-block
+ * processor turns the fenced JSON into a read-only branch view.
+ */
+export async function copyBranchReference(reference: BranchReference): Promise<void> {
+  await navigator.clipboard.writeText(renderBranchReferenceBlock(reference));
+  internalBranchClipboard = undefined;
+}
+
+/**
  * Read only Mind Tree-owned clipboard data. External text is deliberately not
  * parsed here: direct paste and the explicit import dialog have separate rules.
  */
@@ -110,6 +122,8 @@ export function readClipboardEventContent(event: ClipboardEvent): ClipboardPaste
   const images = clipboardEventImages(event);
   if (images.length > 0) return { kind: "images", images };
   const text = event.clipboardData?.getData("text/plain") ?? "";
+  const reference = parseBranchReferenceBlock(text);
+  if (reference) return { kind: "branch-reference", reference };
   return text === "" ? { kind: "empty" } : { kind: "text", text };
 }
 
@@ -117,6 +131,8 @@ export function readClipboardEventContent(event: ClipboardEvent): ClipboardPaste
 export function readClipboardTextContent(text: string): ClipboardPasteContent {
   const structured = readStructuredBranchFromPlainText(text);
   if (structured) return { kind: "structured", payload: structured };
+  const reference = parseBranchReferenceBlock(text);
+  if (reference) return { kind: "branch-reference", reference };
   return text === "" ? { kind: "empty" } : { kind: "text", text };
 }
 

@@ -55,6 +55,7 @@ import { UpdateActivity } from "../services/updates/update-activity";
 import { UpdateError } from "../services/updates/release-client";
 import type { UpdateViewPresentation } from "../services/updates/workspace-update-host";
 import {
+  copyBranchReference as copyBranchReferenceToClipboard,
   copyBranches,
   resolveMarkdownBranchLinks,
   type ClipboardImageInput,
@@ -2297,6 +2298,12 @@ export class MindTreeView extends TextFileView {
       void this.insertClipboardImages(content.images, context);
       return;
     }
+    if (content.kind === "branch-reference") {
+      // A reference block points at a branch that lives in another tree; the
+      // canvas never inlines it, so report the pointer instead of pasting a copy.
+      new Notice(t("notice.branchReferencePasteInTree"));
+      return;
+    }
     if (content.kind === "empty") return;
     try {
       const directPaste = classifyDirectTextPaste(content.text);
@@ -2538,6 +2545,7 @@ export class MindTreeView extends TextFileView {
       deleteNodeOnly: () => this.requestDeleteNodeOnly(nodeId),
       moveFiles: () => this.showMoveFilesModal(nodeId),
       copyBranch: () => void this.copySelected("branch"),
+      copyBranchReference: () => void this.copyBranchReference(nodeId),
       copyMarkdown: () => void this.copySelected("markdown"),
       exportBranchPng: () => void this.exportSelectedPng()
     }).show(event, this.rootEl.ownerDocument);
@@ -2662,6 +2670,23 @@ export class MindTreeView extends TextFileView {
       const selected = this.selectedIds.size > 0 ? this.selectedIds : [this.primarySelectedId];
       await copyBranches(this.document, selected, mode);
       new Notice(mode === "branch" ? t("notice.branchCopied") : t("notice.markdownCopied"));
+    } catch (error) {
+      new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
+    }
+  }
+
+  private async copyBranchReference(nodeId: NodeId): Promise<void> {
+    const document = this.document;
+    const file = this.file;
+    const token = this.documentSessionToken;
+    if (!document || !file || !document.nodes[nodeId]) return;
+    try {
+      const reference = await this.plugin.buildBranchReference(file, nodeId, document);
+      // The reference was resolved against the captured session: a switch or a
+      // node deletion while identity allocation was pending must not report success.
+      if (this.documentSessionToken !== token || !this.document?.nodes[nodeId]) return;
+      await copyBranchReferenceToClipboard(reference);
+      new Notice(t("notice.branchReferenceCopied"));
     } catch (error) {
       new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
     }

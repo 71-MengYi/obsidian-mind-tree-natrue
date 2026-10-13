@@ -1,12 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { addNode, createEmptyDocument, insertBranches } from "../src/domain/tree";
+import { createBranchReference, renderBranchReferenceBlock } from "../src/domain/branch-reference";
 import { renderBranchMarkdown, renderOutline } from "../src/format/outline";
 import {
   copyBranch,
   parseMarkdownBranch,
   readClipboardEventContent,
   readClipboardFallbackContent,
+  readClipboardTextContent,
   readStructuredBranchFromClipboardEvent,
   readStructuredBranchFromPlainText,
   resolveMarkdownBranchLinks
@@ -300,6 +302,35 @@ test("clipboard event content prefers structured data and exposes empty first re
   assert.deepEqual(readClipboardEventContent({
     clipboardData: { getData: () => "" }
   } as unknown as ClipboardEvent), { kind: "empty" });
+});
+
+test("clipboard text recognizes exactly one whole branch reference block", () => {
+  const reference = createBranchReference("tree-identity", "node-1", "notes/Tree.mtn.md");
+  const block = renderBranchReferenceBlock(reference);
+  assert.deepEqual(readClipboardTextContent(block), { kind: "branch-reference", reference });
+  // A trailing newline is what the system clipboard commonly appends.
+  assert.deepEqual(readClipboardTextContent(`${block}\n`), { kind: "branch-reference", reference });
+  const event = (text: string): ClipboardEvent => ({
+    clipboardData: { getData: (type: string) => type === "text/plain" ? text : "" }
+  } as ClipboardEvent);
+  assert.deepEqual(readClipboardEventContent(event(block)), { kind: "branch-reference", reference });
+});
+
+test("partial or malformed reference fences stay plain text", () => {
+  const body = '{"tree":"tree-identity","node":"node-1"}';
+  const block = renderBranchReferenceBlock(createBranchReference("tree-identity", "node-1"));
+  const cases = [
+    `Intro\n${block}`,
+    `${block}\nOutro`,
+    `${block}\n${block}`,
+    "```mind-tree-ref\n{ not json }\n```",
+    `\`\`\`mind-tree-ref\n{"tree":"tree-identity"}\n\`\`\``,
+    `\`\`\`mind-tree\n${body}\n\`\`\``,
+    `~~~mind-tree-ref\n${body}\n~~~`
+  ];
+  for (const text of cases) {
+    assert.deepEqual(readClipboardTextContent(text), { kind: "text", text });
+  }
 });
 
 test("delayed clipboard reads preserve text, empty state, and failures", async () => {
