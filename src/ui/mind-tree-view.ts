@@ -47,6 +47,7 @@ import {
 } from "../format/document";
 import { buildLinkedResourcePath, classifyFile, linkedFileTitle } from "../format/resource-id";
 import { renderBranchMarkdown } from "../format/outline";
+import { renderBranchMermaid } from "../format/mermaid";
 import { t } from "../i18n";
 import { clamp } from "../numeric";
 import { createParseOptions } from "../settings-model";
@@ -57,6 +58,7 @@ import type { UpdateViewPresentation } from "../services/updates/workspace-updat
 import {
   copyBranchReference as copyBranchReferenceToClipboard,
   copyBranches,
+  copyPlainText,
   resolveMarkdownBranchLinks,
   type ClipboardImageInput,
   type ClipboardPasteContent
@@ -2624,8 +2626,10 @@ export class MindTreeView extends TextFileView {
       moveFiles: () => this.showMoveFilesModal(nodeId),
       copyBranch: () => void this.copySelected("branch"),
       copyBranchReference: () => void this.copyBranchReference(nodeId),
-      copyMarkdown: () => void this.copySelected("markdown"),
-      exportBranchPng: () => void this.exportSelectedPng()
+      copyOutline: () => void this.copySelected("markdown"),
+      copyMermaid: () => void this.copyMermaid(nodeId),
+      exportPng: () => void this.exportSelectedPng(),
+      exportMarkdown: () => this.exportSelectedMarkdown()
     }).show(event, this.rootEl.ownerDocument);
   }
 
@@ -2729,17 +2733,21 @@ export class MindTreeView extends TextFileView {
   }
 
   private showCopyMenu(event: MouseEvent): void {
-    new CopyMenu(
-      () => void this.copySelected("branch"),
-      () => void this.copySelected("markdown")
-    ).show(event);
+    const nodeId = this.primarySelectedId;
+    if (!nodeId) return;
+    new CopyMenu({
+      copyBranch: () => void this.copySelected("branch"),
+      copyBranchReference: () => void this.copyBranchReference(nodeId),
+      copyOutline: () => void this.copySelected("markdown"),
+      copyMermaid: () => void this.copyMermaid(nodeId)
+    }).show(event);
   }
 
   private showExportMenu(event: MouseEvent): void {
-    new ExportMenu(
-      () => void this.exportSelectedPng(),
-      () => this.exportSelectedMarkdown()
-    ).show(event);
+    new ExportMenu({
+      exportPng: () => void this.exportSelectedPng(),
+      exportMarkdown: () => this.exportSelectedMarkdown()
+    }).show(event);
   }
 
   private async copySelected(mode: "branch" | "markdown"): Promise<void> {
@@ -2765,6 +2773,26 @@ export class MindTreeView extends TextFileView {
       if (this.documentSessionToken !== token || !this.document?.nodes[nodeId]) return;
       await copyBranchReferenceToClipboard(reference);
       new Notice(t("notice.branchReferenceCopied"));
+    } catch (error) {
+      new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
+    }
+  }
+
+  /**
+   * Copy this branch as Mermaid mindmap code. Only plain text is written: the
+   * fenced block has no structured counterpart and must not inherit the branch
+   * clipboard's custom MIME payload.
+   */
+  private async copyMermaid(nodeId: NodeId): Promise<void> {
+    const document = this.document;
+    const token = this.documentSessionToken;
+    if (!document?.nodes[nodeId]) return;
+    try {
+      const code = renderBranchMermaid(document, nodeId);
+      // The branch may have changed while the menu gesture was pending.
+      if (this.documentSessionToken !== token || !this.document?.nodes[nodeId] || !code) return;
+      await copyPlainText(code);
+      new Notice(t("notice.mermaidCopied"));
     } catch (error) {
       new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
     }

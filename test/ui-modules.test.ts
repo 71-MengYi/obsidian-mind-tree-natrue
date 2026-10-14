@@ -5,7 +5,7 @@ import { createCanvasLabelId } from "../src/ui/components/canvas-shell";
 import { createBottomStatusBarState } from "../src/ui/components/models";
 import { DisposerBag } from "../src/ui/components/ui-object";
 import { createNodeVisualState } from "../src/ui/renderers/node-render-model";
-import { guardNodeMenuAction, KEYBOARD_HELP_ACTIONS, nodeMenuItemOrder, nodeResourceMenuItemOrder, TOP_TOOLBAR_ORDER } from "../src/ui/ui-contracts";
+import { guardNodeMenuAction, COPY_AS_MENU_ORDER, EXPORT_MENU_ORDER, KEYBOARD_HELP_ACTIONS, nodeMenuItemOrder, nodeResourceMenuItemOrder, TOP_TOOLBAR_ORDER } from "../src/ui/ui-contracts";
 
 test("each canvas receives a unique labelled-by target", () => {
   const first = createCanvasLabelId();
@@ -51,10 +51,12 @@ test("node menu description changes only for applicable resource and tree state"
   assert.equal(linkedRoot.indexOf("node-link"), linkedRoot.indexOf("markers") + 1);
   assert.ok(!linkedRoot.includes("add-sibling"));
   assert.ok(!linkedRoot.includes("delete-branch"));
-  // The reference entry is a second copy surface for the same branch, so it
-  // stays directly under the plain branch copy in every node state.
-  assert.equal(plain.indexOf("copy-branch-reference"), plain.indexOf("copy-branch") + 1);
-  assert.equal(linkedRoot.indexOf("copy-branch-reference"), linkedRoot.indexOf("copy-branch") + 1);
+  // "复制分支" stays a direct row, with the shared "复制为…" and export groups
+  // directly under it: the node menu and the toolbar render the same rows.
+  for (const menu of [plain, linkedRoot]) {
+    assert.equal(menu.indexOf("copy-as"), menu.indexOf("copy-branch") + 1);
+    assert.equal(menu.indexOf("export"), menu.indexOf("copy-as") + 1);
+  }
   // A node link is already this node's association, so the creation entries and
   // the resource open/remove entries are not offered without a real resource.
   const nodeLinkedOnly = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: false, nodeLinked: true });
@@ -62,6 +64,15 @@ test("node menu description changes only for applicable resource and tree state"
   for (const item of ["add-note", "add-file-template", "link-file", "link-web"] as const) {
     assert.equal(nodeLinkedOnly.includes(item), false);
   }
+});
+
+test("both menu surfaces share one copy-as order and one export order", () => {
+  assert.deepEqual(COPY_AS_MENU_ORDER, ["copy-as-reference", "copy-as-outline", "copy-as-mermaid"]);
+  assert.deepEqual(EXPORT_MENU_ORDER, ["export-png", "export-markdown"]);
+  // Ordering is the contract: the reference pointer first, then the two
+  // text renderings, and PNG before Markdown on every surface.
+  assert.equal(new Set(COPY_AS_MENU_ORDER).size, COPY_AS_MENU_ORDER.length);
+  assert.equal(new Set(EXPORT_MENU_ORDER).size, EXPORT_MENU_ORDER.length);
 });
 
 test("resource menu never offers replacement, and default-app opening is desktop-only for files and URLs", () => {

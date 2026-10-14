@@ -453,6 +453,42 @@
 - `edit` 的 `ReplaceFileW EIO (Win32 1175)` 在 `src/format/document.ts`、`src/format/regions.ts`、`src/ui/mind-tree-view.ts` 上都出现过，**原样重试即成功**（与 2026-10-13 条目一致）。
 - 本会话与另一个 session（MCP 任务）**并发改同一工作区**：开工时 `npm run check` 的基线是红的（`src/settings.ts` 引用不存在的 `mcpSettings`），几分钟后对方改完自愈。`git status` 里的 README/docs/catalog/settings-* 与 `src/services/mcp/` 都不是本轮的改动，**未触碰、未提交**。
 
+## 2026-10-15 · 统一「复制 / 导出」为嵌套菜单 + 复制为 Mermaid 代码（`feat`）
+
+**需求（用户原话）**：把节点右键菜单里的导出和工具栏里的导出统一，都是展开菜单，然后导出 PNG 或导出 markdown 选项；复制选项除了复制分支外，新增一个「复制为…」的展开按钮，里面选项是：复制分支引用、复制为大纲、复制为 mermaid 代码。
+
+**关键决策（不要按别的口径重修）**
+
+1. **嵌套菜单用宿主自带的 `MenuItem.setSubmenu()`**（不是自造 DOM，也不是「点父行再在锚点旁开第二个 Menu」）。本机 Obsidian 1.14.4 的 `obsidian.asar` 里可读到实现：`setSubmenu()` 给行加 `has-submenu` + chevron；`handleEvent` 命中带 submenu 的行时**不调用 onClick、不关闭父菜单**，桌面 `selectElement(row, true)`（悬浮展开）、手机把子菜单从左滑入；原生桌面菜单也会转成真正的 Electron submenu。该 API **未出现在 `node_modules/obsidian/obsidian.d.ts`**（属未公开 API，论坛 2023-05 起就有使用），因此：`ui/menus/menu-groups.ts` 用 `as unknown as { setSubmenu?: () => Menu }` 窄结构视图调用 + **`supportsSubmenus(() => new Menu())` 能力探测**；探测不到时同一批命令**平铺进父菜单**（父行不再出现，避免出现一条点了没反应的死行）。探测必须在**一次性 Menu** 上做（`Menu.addItem` 会把探针项加进那个实例）。
+2. **两个入口共用一份菜单描述**：`ui/menus/copy-export-menu.ts` 的 `copyBranchRow` / `copyAsGroup` / `exportGroup` / `exportRows`，节点右键菜单与工具栏都从它取行序、图标与命令；行序常量 `COPY_AS_MENU_ORDER` / `EXPORT_MENU_ORDER` 在 `ui/ui-contracts.ts`（`test/ui-modules.test.ts` 钉死）。工具栏「导出」下拉=直接列出两条导出；节点菜单「导出」=同名子菜单。
+3. **导出两端统一为同一批命令**：`exportPng` → `exportSelectedPng()`、`exportMarkdown` → `exportSelectedMarkdown()`，即节点右键菜单第一次拥有「导出 Markdown」，`menu.exportBranchPng` 与 `menu.copyMarkdown` 两个旧 key 随之删除。
+4. **Mermaid 形态 = `mindmap` 围栏代码块**（不是 flowchart）：```` ```mermaid ```` + `mindmap` + **2 空格缩进**，节点一律 `n<i>["标签"]`；标签取**标题纯文本**（`parseNodeTitle().plainText`，同步文件名节点走 `nodeTitleMode` 的 literal 分支），只导出**层级与标题**——资源链接、节点标记、节点 id 在 Mermaid 里没有对应表达，刻意不导出。被复制的节点自己当 mindmap 根（子分支不会被重排到文档根）。
+5. **Mermaid 转义按 shape 分隔符选形**：mindmap 的标签由 shape 承载，`["…"]` 能容纳除 `"` 以外的一切；因此含 `"` 时改用圆括号形状 `(…)`，**同时**含 `"` 与 `()`/`[]`/`{}` 时才把 `"` 换成 `'`。**不要用实体码**：mindmap 的 `sanitizeText` 不解码 `#quot;`，写了会原样显示（flowchart 才解码，所以这里不能照抄 flowchart 的转义惯例）。
+6. **多选语义沿用分支引用那一套**：节点右键菜单里「复制为 mermaid 代码」与「复制分支引用」都针对**右键点击的那个节点**；工具栏入口没有右键目标，用主选节点（`primarySelectedId`）。「复制分支 / 复制为大纲 / 导出 PNG / 导出 Markdown」仍按现有选择语义（`copySelected` / `exportSelected*`）。
+
+**落点**
+
+- 新增纯函数 `src/format/mermaid.ts`：`renderBranchMermaid(document, startId)`（起点节点不存在返回 `""`；`visiting` 集合防环、悬空 childId 跳过）、`mindmapLabel(node, isRoot)`。
+- 新增 `src/ui/menus/menu-groups.ts`：`attachSubmenu` / `supportsSubmenus` / `addMenuRow` / `addMenuGroup`（`import type` 引 obsidian，运行期零 obsidian 依赖，可被 tsx 直测）。
+- 新增 `src/ui/menus/copy-export-menu.ts`：`CopyAsActions` / `CopyMenuActions` / `ExportMenuActions` 与四个行/组构造器。
+- 改写 `src/ui/menus/node-context-menu.ts`（actions 改名 `copyOutline`/`exportPng`/`exportMarkdown`，新增 `copyMermaid`；尾部改为「复制分支」+「复制为…」+「导出」）与 `src/ui/menus/toolbar-menus.ts`（`CopyMenu`/`ExportMenu` 改收 actions 对象，`CopyMenu` 增加「复制为…」）。
+- `src/services/clipboard.ts` 抽出 `copyPlainText()`；`copyBranchReference()` 改为它的调用方（行为逐字不变）。
+- `src/ui/mind-tree-view.ts`：`showCopyMenu` 捕获 `primarySelectedId` 后同时接线「复制分支引用/复制为大纲/复制为 mermaid 代码」；新增 `copyMermaid(nodeId)`（会话令牌 + 节点双校验后 `copyPlainText`）+ `notice.mermaidCopied`。
+- i18n：新增 `menu.copyAs`/`menu.copyAsOutline`/`menu.copyAsMermaid`/`menu.export`、`notice.mermaidCopied`；改写 `menu.exportPng`/`menu.exportMarkdown` 为「导出 PNG / 导出 Markdown」；删除 `menu.copyMarkdown`/`menu.exportBranchPng`。
+- 图标（已在本机 `obsidian.asar` 的 Lucide 注册表里确认存在）：`copy-plus`（复制为…）、`file-symlink`、`list-tree`、`workflow`（mermaid）、`download`（导出）、`image-down`、`file-down`。
+- 测试：新增 `test/mermaid.test.ts`（7 条）、`test/menu-groups.test.ts`（3 条），`test/ui-modules.test.ts` 增加共享行序断言并改写旧的「复制分支引用紧跟复制分支」断言（需求变更，已在 `docs/` 写明）。
+- 文档：`docs/02` §5.3 / §6.6 / §6.10、`docs/requirements.md` 第 20 条、`docs/06` P0 第 21 条、`docs/01` 功能清单、`docs/05` §9.1 菜单段落、`AGENTS.md` §2/§3.2/§5/§10、中英文 README §4。
+
+**验证**：`npm run check` **0 错误**；全量 **922 条 / 915 pass / 7 fail**，7 条全部是既有 esbuild `spawn EPERM` 环境失败（`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），**没有新增失败**；`npm run build` 在受限沙箱仍是 `spawn EPERM`，改用同参数的内置 esbuild 二进制产出到临时目录：**exit 0，4,746,455 字节 ≈ 4.53 MiB**（上限 10 MiB），临时目录已删除、仓库 `main.js` 未触碰。
+
+**未做 / 待真机确认**
+
+- **未在真实 Obsidian 内人工验收**（沙箱无法启动）：子菜单的悬浮展开与键盘上下键、原生桌面菜单（macOS 默认 `nativeMenus`）下 `setSubmenu` 的观感、移动端从左滑入、以及深色主题下 chevron 的可见性。
+- `setSubmenu` 是未公开 API：探测失败只会平铺（功能不丢），但若未来版本改名，需要更新 `ui/menus/menu-groups.ts` 一处。
+- Mermaid 复制不含资源链接与节点标记（按「minimal / 可解析」取舍）。若用户要求带资源，需要先确定 mermaid 侧的承载形式（`click` 行只对 flowchart/graph 有效，mindmap 不支持）。
+- `edit` 的 `ReplaceFileW EIO (Win32 1175)` 本轮在 `src/ui/mind-tree-view.ts`、`README.en.md`、`AGENTS.md` 上各出现一次，原样重试即成功；AGENTS.md 每次编辑后会被重新注入指令（正常现象）。
+
+
 
 
 

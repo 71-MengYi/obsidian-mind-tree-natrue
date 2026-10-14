@@ -78,7 +78,16 @@ export async function copyBranches(
  * processor turns the fenced JSON into a read-only branch view.
  */
 export async function copyBranchReference(reference: BranchReference): Promise<void> {
-  await navigator.clipboard.writeText(renderBranchReferenceBlock(reference));
+  await copyPlainText(renderBranchReferenceBlock(reference));
+}
+
+/**
+ * Copy generated plain text that has no structured counterpart (Mermaid code).
+ * The same-session branch copy is dropped: the system clipboard no longer holds
+ * the Markdown that the structured payload is matched against.
+ */
+export async function copyPlainText(text: string): Promise<void> {
+  await navigator.clipboard.writeText(text);
   internalBranchClipboard = undefined;
 }
 

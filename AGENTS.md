@@ -59,7 +59,7 @@
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
 ├── src/                        源码（166 个 .ts，唯一的开发区域）
-├── test/                       单元测试（90 个 *.test.ts + test/helpers/）
+├── test/                       单元测试（92 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -97,7 +97,7 @@ src/
 ├── numeric.ts                 clamp（唯一实现）
 ├── lru-cache.ts               evictOldest（唯一淘汰实现）
 ├── domain/      (9)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts、custom-markers.ts、url.ts、node-link.ts（单向节点关联）、branch-reference.ts（跨文件分支引用）
-├── format/      (8)  .mtn.md 格式：document.ts、outline.ts、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts、regions.ts（数据区/大纲区定位，内容索引、与行号无关）、yaml-patch.ts（只补丁插件拥有的 YAML 键，注释与键序逐字节保留）
+├── format/      (9)  .mtn.md 格式：document.ts、outline.ts、mermaid.ts（分支 → Mermaid mindmap 代码块）、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts、regions.ts（数据区/大纲区定位，内容索引、与行号无关）、yaml-patch.ts（只补丁插件拥有的 YAML 键，注释与键序逐字节保留）
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
 ├── render/      (9)  ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、color、inline-math
 ├── services/   (25)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线
@@ -105,7 +105,7 @@ src/
     ├── components/     (14) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、笔记内嵌分支视图、ui-object 基类
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
     ├── renderers/       (4) node-renderer、connection-renderer、node-render-model
-    ├── menus/           (6) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览
+    ├── menus/           (8) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览、复制/导出菜单描述、嵌套菜单能力探测
     ├── modals/         (11) 新建/删除/移动/导入/文件建议/节点关联选择/更新提示等对话框
     ├── settings-pages/  (7) 基础设置、思维导图、主题笔记、插件更新分区、管理标记
     └── search/          (3) 搜索核心（search-core）、右侧搜索面板、搜索载荷
@@ -207,6 +207,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `parseMindTreeFile` / `serializeMindTreeFile` | `format/document.ts` | `.mtn.md` 解析与序列化（含 gzip+Base64 数据区） |
 | `MindTreeMigrationFactory` / `mindTreeMigrationFactory` | `format/migrations.ts` | **唯一**版本迁移入口（v1→v2，逐级、失败不覆盖） |
 | `renderOutline` | `format/outline.ts` | 由机器数据单向下发 Markdown 大纲 |
+| `renderBranchMermaid` / `mindmapLabel` | `format/mermaid.ts` | 分支 → Mermaid `mindmap` 围栏代码块（只导出层级 + 标题纯文本，按 shape 分隔符转义；不写文件、不进剪贴板自定义 MIME） |
 | `restoreDocumentIdentity` | `format/document-identity.ts` | 只改身份标量的比较写入 |
 | `createShortResourceId` / `extractNonMarkdownResourceId` | `format/resource-id.ts` | 5 位资源 ID、`@`/`%` 分隔符、历史 `~mtn-` 兼容 |
 | `isMindTreePath` / `isMarkdownPath` / `sanitizeFileTitle` | `format/resource-id.ts` | `.mtn.md` 判定与文件名清洗的唯一来源（`view-routing` 只转发） |
@@ -268,7 +269,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，90 个文件，911 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
+- 位置：`test/*.test.ts`（**平铺**，92 个文件，922 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -285,6 +286,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `test/node-link.test.ts` | 关联节点只写一条指针、不复制也不改动子节点；拒绝自引用/已有资源/第二条出边；删除清理入边；粘贴不携带关联；大纲块 id 与单向 `id->id` 链接域 |
 | `test/node-renderer.test.ts` | 节点尾部控制列的真实渲染：只有 nodeLink 时必须**仅**渲染链接标志（不能再出现无资源的打开按钮，否则会溢出错位）；点击链接标志调用 `goToLinkedNode`；有关联资源的节点只渲染打开按钮；资源与关联并存时链接标志独占槽位；只读预览默认禁用打开按钮与链接标志，只有笔记内嵌视图 opt-in 后打开按钮才可点击 |
 | `test/branch-reference.test.ts` / `test/mind-tree-reference-service.test.ts` / `test/reference-embed.test.ts` | 分支引用的围栏代码块往返与非法输入塌陷；引用解析五态、按身份重命名命中、路径被占用则失败关闭、缓存共享与失效；内嵌视图复用只读预览且不反向导入视图/主类 |
+| `test/menu-groups.test.ts` | 嵌套菜单能力探测：支持时 = 1 个不绑定动作的父行 + 子菜单内的行；不支持时 = 同一批行平铺进父菜单；探针必须用一次性菜单 |
+| `test/mermaid.test.ts` | 分支 → Mermaid mindmap 的围栏、2 空格缩进、标签纯文本化与转义（含 `"` 的圆括号回退、括号与引号并存时的替换）、悬空/环状 childIds 不挂死、缺失起点返回空串 |
 
 约定：**新增行为必须带测试**；不允许为了让测试变绿而删除或放宽既有断言（除非需求本身变化，并在 `docs/` 里写明）。
 
@@ -394,7 +397,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改冲突/未决版本/保存 | `src/services/version-conflict-coordinator.ts`、`pending-conflict-store.ts`、`document-conflict.ts`、`document-session.ts`、`mind-tree-session-registry.ts` | `docs/05-technical-design.md` §11 | `test/version-conflict.test.ts`、`test/pending-conflict-store.test.ts`、`test/safety.test.ts`、`test/document-session.test.ts` |
 | 改模板文件流程 | `src/services/template-files.ts` | `docs/05-technical-design.md` §9.1 | `test/template-files.test.ts` |
 | 改导入/粘贴 | `src/services/text-import.ts`、`text-links.ts`、`text-url.ts`、`clipboard.ts`、`src/ui/paste-routing.ts` | `docs/02-interface-interactions.md` §6.10 | `test/text-import.test.ts`、`test/text-links.test.ts`、`test/exchange.test.ts`、`test/paste-routing.test.ts` |
-| 改导出（PNG/SVG/Markdown） | `src/services/export.ts` | `docs/02-interface-interactions.md` §6.10 | `test/exchange.test.ts` |
+| 改导出（PNG/SVG/Markdown）与 Mermaid 复制 | `src/services/export.ts`、`src/format/mermaid.ts`、`src/services/clipboard.ts`、`src/ui/menus/copy-export-menu.ts` | `docs/02-interface-interactions.md` §5.3、§6.6、§6.10 | `test/exchange.test.ts`、`test/mermaid.test.ts`、`test/menu-groups.test.ts` |
 | 改主题/配色/连线 | `src/render/theme-presets.ts`、`src/render/presentation.ts`、`styles.css` | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/styles.test.ts` |
 | 改插件自更新 | `src/services/updates/*` | `.github/workflows/release.yml` 注释、`docs/05-technical-design.md` | `test/plugin-updates.test.ts`、`test/update-workspace-host.test.ts` |
 | 改设置持久化 / `data.json` | `src/plugin-data.ts`、`src/services/settings-persistence.ts` | `docs/05-technical-design.md` §11.1 末段 | `test/plugin-data.test.ts`、`test/settings-persistence.test.ts` |

@@ -2,6 +2,8 @@ import { Menu } from "obsidian";
 import { t } from "../../i18n";
 import { CHAIN_BROKEN_ICON } from "../icons";
 import { guardNodeMenuAction, nodeResourceMenuItemOrder } from "../ui-contracts";
+import { copyAsGroup, copyBranchRow, exportGroup } from "./copy-export-menu";
+import { addMenuGroup, addMenuRow, supportsSubmenus } from "./menu-groups";
 
 export interface NodeContextMenuState {
   readonly hasFileResource: boolean;
@@ -41,8 +43,12 @@ export interface NodeContextMenuActions {
   readonly copyBranch: () => void;
   /** Copy a pointer to this branch instead of a copy of its content. */
   readonly copyBranchReference: () => void;
-  readonly copyMarkdown: () => void;
-  readonly exportBranchPng: () => void;
+  /** Copy this branch as a Markdown unordered list. */
+  readonly copyOutline: () => void;
+  /** Copy this branch as Mermaid mindmap code. */
+  readonly copyMermaid: () => void;
+  readonly exportPng: () => void;
+  readonly exportMarkdown: () => void;
 }
 
 /** Declarative node-menu composition; all domain work is delegated by name. */
@@ -89,10 +95,19 @@ export class NodeContextMenu {
     menu.addItem((item) => item.setTitle(t("menu.moveFiles")).setIcon("folder-input")
       .setDisabled(!state.branchHasFiles).onClick(guarded(actions.moveFiles)));
     menu.addSeparator();
-    menu.addItem((item) => item.setTitle(t("menu.copyBranch")).setIcon("copy").onClick(guarded(actions.copyBranch)));
-    menu.addItem((item) => item.setTitle(t("menu.copyBranchReference")).setIcon("file-symlink").onClick(guarded(actions.copyBranchReference)));
-    menu.addItem((item) => item.setTitle(t("menu.copyMarkdown")).setIcon("list-tree").onClick(guarded(actions.copyMarkdown)));
-    menu.addItem((item) => item.setTitle(t("menu.exportBranchPng")).setIcon("image-down").onClick(guarded(actions.exportBranchPng)));
+    addMenuRow(menu, copyBranchRow({ copyBranch: guarded(actions.copyBranch) }));
+    // Both groups are the same descriptions the toolbar menus render, so the two
+    // surfaces cannot drift apart; stale menus are revalidated on every row.
+    const nested = supportsSubmenus(() => new Menu());
+    addMenuGroup(menu, copyAsGroup({
+      copyBranchReference: guarded(actions.copyBranchReference),
+      copyOutline: guarded(actions.copyOutline),
+      copyMermaid: guarded(actions.copyMermaid)
+    }), nested);
+    addMenuGroup(menu, exportGroup({
+      exportPng: guarded(actions.exportPng),
+      exportMarkdown: guarded(actions.exportMarkdown)
+    }), nested);
     menu.showAtPosition({ x: event.clientX, y: event.clientY }, ownerDocument);
   }
 }
