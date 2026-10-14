@@ -45,7 +45,23 @@ export interface MindTreeSettings {
   theme: MindTreeTheme;
   connectionStyle: MindTreeConnectionStyle;
   nodeShape: MindTreeNodeShape;
+  /**
+   * Local MCP endpoint for AI clients. Off by default because it accepts
+   * inbound connections; desktop-only, and the access token never lives here.
+   */
+  mcpEnabled: boolean;
+  /** Gates every tool that changes a document. Read-only tools stay available. */
+  mcpAllowWrites: boolean;
+  /** Preferred port; a busy port falls back to nearby ones. */
+  mcpPort: number;
 }
+
+/** Above 1024 the port needs no privileges; the upper bound is the TCP limit. */
+export const MIN_MCP_PORT = 1024;
+export const MAX_MCP_PORT = 65535;
+export const DEFAULT_MCP_PORT = 27321;
+/** Busy ports are retried upward from the preferred one, with one bound. */
+export const MCP_PORT_FALLBACK_ATTEMPTS = 10;
 
 export const DEFAULT_SETTINGS: MindTreeSettings = {
   autoCheckUpdates: false,
@@ -68,8 +84,19 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   defaultCollectionMode: "ask",
   theme: "vibrant",
   connectionStyle: "theme",
-  nodeShape: "rounded"
+  nodeShape: "rounded",
+  mcpEnabled: false,
+  mcpAllowWrites: false,
+  mcpPort: DEFAULT_MCP_PORT
 };
+
+/** Clamp a user-supplied port into the usable range; `undefined` means "not a port". */
+export function normalizeMcpPort(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined;
+  const rounded = Math.round(value);
+  if (rounded < MIN_MCP_PORT || rounded > MAX_MCP_PORT) return undefined;
+  return rounded;
+}
 
 /**
  * Global preferences only fill YAML properties absent from a file. Kept here as

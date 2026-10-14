@@ -1,6 +1,7 @@
 import { addIcon, normalizePath, Notice, Platform, Plugin, removeIcon, requestUrl, requireApiVersion, TFile, WorkspaceLeaf, type ViewState, type ViewStateResult } from "obsidian";
 import { around } from "monkey-around";
-import { createMindTreeFile, parseMindTreeFile, serializeMindTreeFile, type ParseMindTreeOptions } from "./format/document";
+import { parseMindTreeFile, serializeMindTreeFile, type ParseMindTreeOptions } from "./format/document";
+import { addNode } from "./domain/tree";
 import { createBranchReference, BRANCH_REFERENCE_LANGUAGE, parseBranchReference, type BranchReference } from "./domain/branch-reference";
 import { t } from "./i18n";
 import { ResourceIndexService, type ResourceIndexProgress, type ResourceIndexReport } from "./services/resource-index";
@@ -9,14 +10,26 @@ import { SettingsPersistence, removeLegacyResourceIndex } from "./services/setti
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
 import { MindTreeReferenceService } from "./services/mind-tree-reference";
+import { MindTreeCreationService } from "./services/tree-creation";
 import { PendingConflictStore } from "./services/pending-conflict-store";
 import { PendingConflictMaintenance } from "./services/pending-conflict-maintenance";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
+import { readStableSource } from "./services/stable-source-read";
 import { MindTreeOpenCoordinator } from "./services/mind-tree-open-coordinator";
 import { canonicalTreePath } from "./services/pending-conflict-store";
+import { isMcpSupported } from "./services/mcp/availability";
+import { handleMcpMessage } from "./services/mcp/mcp-core";
+import { McpServerController } from "./services/mcp/mcp-server";
+import { ObsidianToolHost } from "./services/mcp/obsidian-tool-host";
+import { MindTreeSessionWriter } from "./services/mcp/session-writer";
+import { parseMcpPortInput, type McpSettingsStatus } from "./services/mcp/settings-page-model";
+import { McpToolError } from "./services/mcp/tool-error";
+import { MindTreePathLocator } from "./services/mcp/tree-locator";
+import { MindTreeReader } from "./services/mcp/tree-reader";
 import { normalizePluginData, type PluginData } from "./plugin-data";
 import { DEFAULT_SETTINGS, MindTreeSettingTab, type MindTreeSettings } from "./settings";
-import { createParseOptions } from "./settings-model";
+import { createParseOptions, normalizeMcpPort } from "./settings-model";
+import { unsupportedMcpSettingsPort, type McpSettingsPagePort } from "./ui/settings-pages/ports";
 import {
   CHAIN_BROKEN_ICON,
   CHAIN_BROKEN_ICON_SVG,
@@ -28,7 +41,7 @@ import { MindTreeReferenceRenderChild, type MindTreeReferenceEmbedPorts } from "
 import { CreateMindTreeModal, PluginUpdateModal, TextPromptModal } from "./ui/modals/index";
 import { LAYOUT_OPTIONS } from "./render/presentation";
 import { isMindTreePath, MIND_TREE_VIEW_TYPE, routeMindTreeViewState } from "./view-routing";
-import type { MindTreeDocument, MindTreeNode, NodeId } from "./types";
+import type { MindTreeDocument, MindTreeNode, NodeId, FileResourceRef } from "./types";
 import { ReleaseClient, UpdateError } from "./services/updates/release-client";
 import { UpdateStore } from "./services/updates/update-store";
 import { UpdateCoordinator, updateRuntime } from "./services/updates/update-coordinator";
@@ -62,6 +75,14 @@ export default class MindTreeNaturePlugin extends Plugin {
   private conflictMaintenance!: PendingConflictMaintenance<TFile>;
   /** Resolves note-embedded branch references without requiring an open view. */
   private references!: MindTreeReferenceService;
+  /** The one path that creates a `.mtn.md`, shared by the UI and the MCP tools. */
+  private treeCreation!: MindTreeCreationService<TFile>;
+  /**
+   * The MCP subsystem. Absent on a platform that cannot serve it, which is what
+   * makes "unsupported" a fact about the object graph rather than a flag.
+   */
+  private mcpServer?: McpServerController;
+  private mcpReader?: MindTreeReader;
 
 
   async onload(): Promise<void> {
@@ -83,6 +104,9 @@ export default class MindTreeNaturePlugin extends Plugin {
         if (changed) {
           this.settingTab?.refreshFromExternal();
           this.refreshOpenMindTreeLayouts();
+          // Global defaults fill absent YAML properties, so every cached parse
+          // could now describe settings the user just changed.
+          this.mcpReader?.invalidateAll();
         }
       },
       failed: (error, operation) => {
@@ -137,16 +161,36 @@ export default class MindTreeNaturePlugin extends Plugin {
     const notifyReferenceChange = (file: { path: string }): void => {
       if (isMindTreePath(file.path)) this.references.notifyChanged(file.path);
     };
+    // A parsed tree the MCP reader cached is only valid until the vault changes.
+    // Folder events report the folder alone, so every child path is dropped.
+    const forgetParsedTree = (file: { path: string }, previousPath?: string): void => {
+      if (!this.mcpReader) return;
+      if (previousPath !== undefined) this.mcpReader.invalidate(previousPath);
+      if (isMindTreePath(file.path)) this.mcpReader.invalidate(file.path);
+    };
     this.registerEvent(this.app.vault.on("create", notifyReferenceChange));
-    this.registerEvent(this.app.vault.on("modify", notifyReferenceChange));
+    this.registerEvent(this.app.vault.on("modify", (file) => {
+      notifyReferenceChange(file);
+      forgetParsedTree(file);
+    }));
     this.registerEvent(this.app.vault.on("delete", (file) => {
-      if (file instanceof TFile) this.references.notifyRemoved(file.path);
-      else this.references.notifyChanged();
+      if (file instanceof TFile) {
+        this.references.notifyRemoved(file.path);
+        forgetParsedTree(file);
+      } else {
+        this.references.notifyChanged();
+        this.mcpReader?.invalidateAll();
+      }
     }));
     this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
       // A folder rename reports the folder alone; every child path changed.
-      if (file instanceof TFile) this.references.notifyRenamed(oldPath, file.path);
-      else this.references.notifyChanged();
+      if (file instanceof TFile) {
+        this.references.notifyRenamed(oldPath, file.path);
+        forgetParsedTree(file, oldPath);
+      } else {
+        this.references.notifyChanged();
+        this.mcpReader?.invalidateAll();
+      }
     }));
     this.registerEvent(this.app.metadataCache.on("changed", notifyReferenceChange));
     // Journal maintenance owns its debounce timers and decisions; vault reads,
@@ -174,6 +218,34 @@ export default class MindTreeNaturePlugin extends Plugin {
       noticeDiscarded: (paths) => new Notice(t("conflict.discarded", { paths: [...paths].sort().join("\n") }), 0),
       isUnloading: () => this.unloading
     });
+    // The Ribbon, the command and the MCP `create_tree` tool share this one
+    // creation path, so a tree made by a tool is the same tree a user would get.
+    this.treeCreation = new MindTreeCreationService<TFile>({
+      fileExists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
+      createFile: async (path, source) => {
+        const file = await this.app.vault.create(path, source);
+        // The parsed document is the identity the caller reports back, so a new
+        // tree needs no second disk read to learn its root id.
+        return { file, document: parseMindTreeFile(source, this.documentParseOptions()).document };
+      },
+      appendChildren: async (file, titles) => {
+        const created: NodeId[] = [];
+        // Compare-and-set on the file this plugin just created: at this point the
+        // only writer is this call, so the initial children land in one write.
+        await this.app.vault.process(file, (source) => {
+          const document = parseMindTreeFile(source, this.documentParseOptions()).document;
+          for (const title of titles) created.push(addNode(document, document.rootId, title).id);
+          return serializeMindTreeFile(document, source);
+        });
+        return created;
+      },
+      // Focus is the caller's decision: an MCP tool must never steal it.
+      activate: async (file, focus) => {
+        if (!focus) return;
+        await this.activateMindTree(file, this.app.workspace.getLeaf("tab"));
+      }
+    });
+    if (isMcpSupported({ isDesktop: !Platform.isMobile })) this.initializeMcpServer();
     addIcon(SHARE_SQUARE_ICON, SHARE_SQUARE_ICON_SVG);
     this.register(() => removeIcon(SHARE_SQUARE_ICON));
     addIcon(CHAIN_BROKEN_ICON, CHAIN_BROKEN_ICON_SVG);
@@ -298,6 +370,8 @@ export default class MindTreeNaturePlugin extends Plugin {
     if (this.pendingActivationTimer !== undefined) window.clearTimeout(this.pendingActivationTimer);
     if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
     if (this.conflictMaintenance !== undefined) this.conflictMaintenance.cancel();
+    // Stop accepting new tool calls before the services they depend on go away.
+    void this.mcpServer?.stop();
     // Only a disposable local cache is flushed at unload, never old user settings.
     this.resourceCache?.save(this.resources?.entries() ?? []);
     this.settingsPersistence?.destroy();
@@ -492,7 +566,22 @@ export default class MindTreeNaturePlugin extends Plugin {
     };
     session.conflict = new VersionConflictCoordinator({
       store: this.pendingConflicts, options: () => this.documentParseOptions(), path: () => session.path,
-      read: () => this.app.vault.read(requireFile()),
+      // Every decision compares settled bytes: a read that overlapped another
+      // writer must never be presented as a version, let alone as damage.
+      read: async () => {
+        const outcome = await readStableSource({
+          stamp: async () => {
+            const current = this.app.vault.getFileByPath(session.path);
+            return current ? `${current.stat.ctime}:${current.stat.mtime}:${current.stat.size}` : undefined;
+          },
+          read: () => this.app.vault.read(requireFile()),
+          delay: (milliseconds) => new Promise<void>((resolve) => { window.setTimeout(resolve, milliseconds); })
+        });
+        if (outcome.ok) return outcome.source;
+        throw new Error(outcome.reason === "unstable"
+          ? t("conflict.unstableRead")
+          : t("conflict.fileMissing", { path: session.path }));
+      },
       process: (transform) => this.app.vault.process(requireFile(), transform),
       beginWrite: (source) => session.beginWrite(source), endWrite: (source) => session.endWrite(source),
       changed: () => session.notifyConflict(), resolved: (result) => session.acceptVersion(result),
@@ -837,20 +926,10 @@ export default class MindTreeNaturePlugin extends Plugin {
       // Commands retain their existing active-file default; the Ribbon passes
       // the folder chosen explicitly in CreateMindTreeModal.
       const activeDirectory = active?.parent?.isRoot() ? "" : active?.parent?.path ?? "";
-      const directory = targetFolderPath === undefined ? activeDirectory : normalizePath(targetFolderPath);
-      const safeTitle = title.replace(/[\\/:*?"<>|]/g, " ").replace(/\s+/g, " ").trim();
-      if (!safeTitle) throw new Error(t("tree.invalidName"));
-      let path = normalizePath(`${directory ? `${directory}/` : ""}${safeTitle}.mtn.md`);
-      let counter = 2;
-      while (this.app.vault.getAbstractFileByPath(path)) {
-        path = normalizePath(`${directory ? `${directory}/` : ""}${safeTitle} ${counter}.mtn.md`);
-        counter += 1;
-      }
-      // A new tree records no setting properties. Its appearance and collection
-      // behavior follow the current global defaults until the user chooses a
-      // per-tree value in that tree's settings menu.
-      const file = await this.app.vault.create(path, createMindTreeFile(safeTitle));
-      await this.activateMindTree(file, this.app.workspace.getLeaf("tab"));
+      const folderPath = targetFolderPath === undefined ? activeDirectory : normalizePath(targetFolderPath);
+      // The same service MCP uses; only the focus request differs, and an
+      // interactive creation is the one that is allowed to take focus.
+      await this.treeCreation.create({ title, folderPath, focus: true });
     } catch (error) {
       new Notice(t("notice.createTreeFailed", { message: error instanceof Error ? error.message : String(error) }));
     }
@@ -877,6 +956,177 @@ export default class MindTreeNaturePlugin extends Plugin {
     if (this.updateRuntime.paused) return undefined;
     const leaf = this.app.workspace.getMostRecentLeaf();
     return leaf?.view instanceof MindTreeView ? leaf.view : undefined;
+  }
+
+  /**
+   * Builds the local MCP endpoint, or nothing at all on a platform that cannot
+   * serve it. The transport needs a TCP listener and node's HTTP module, so a
+   * half-registered service would be worse than a clearly absent one.
+   */
+  private initializeMcpServer(): void {
+    this.mcpReader = new MindTreeReader({
+      filePaths: () => this.app.vault.getFiles().map((file) => file.path),
+      read: (path) => this.readVaultText(path),
+      parseOptions: () => this.documentParseOptions()
+    });
+    const locator = new MindTreePathLocator({
+      // The index knows which tree a document id belongs to; the vault sweep in
+      // the locator is the fallback for a tree the index never saw.
+      indexedTreePaths: (documentId) => this.resources.entries()
+        .filter((entry) => entry.resourceId === documentId && isMindTreePath(entry.path))
+        .map((entry) => entry.path),
+      filePaths: () => this.app.vault.getFiles().map((file) => file.path),
+      fileExists: (path) => Boolean(this.app.vault.getFileByPath(path)),
+      read: (path) => this.readVaultText(path),
+      // "The active mind tree" has one definition in this plugin: the view the
+      // user most recently focused.
+      activeTreePath: () => this.activeMindTreeView()?.file?.path
+    });
+    const writer = new MindTreeSessionWriter({
+      sessions: this.mindTreeSessions,
+      fileExists: (path) => Boolean(this.app.vault.getFileByPath(path)),
+      read: (path) => this.readVaultText(path),
+      process: (path, transform) => this.processVaultText(path, transform),
+      parseOptions: () => this.documentParseOptions(),
+      allowsWrites: () => this.settings.mcpAllowWrites,
+      fileReference: (filePath) => this.resolveFileReference(filePath),
+      creation: this.treeCreation,
+      notifyExternalChange: (path) => this.refreshOpenMindTreeViews(path)
+    });
+    const host = new ObsidianToolHost({
+      reader: this.mcpReader,
+      writer,
+      locator,
+      environment: {
+        isSupported: () => isMcpSupported({ isDesktop: !Platform.isMobile }),
+        allowsWrites: () => this.settings.mcpAllowWrites,
+        connection: () => ({
+          port: this.mcpServer?.port ?? this.settings.mcpPort,
+          token: this.mcpServer?.token() ?? ""
+        }),
+        version: () => this.manifest.version,
+        logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
+      }
+    });
+    this.mcpServer = new McpServerController({
+      pluginId: this.manifest.id,
+      isDesktop: () => !Platform.isMobile,
+      // The port and the access token are per device and never synced: one
+      // device's token must not unlock another device's endpoint.
+      storage: {
+        load: (key) => this.app.loadLocalStorage(key),
+        save: (key, value) => this.app.saveLocalStorage(key, value)
+      },
+      handleMessage: (raw) => handleMcpMessage(raw, host),
+      logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
+    });
+    if (this.settings.mcpEnabled) {
+      void this.startMcpServer().catch((error: unknown) => {
+        // A busy port range is a normal outcome; the operator has the AI tab.
+        console.error("Mind Tree Nature: MCP server could not start", error);
+      });
+    }
+  }
+
+  private async startMcpServer(): Promise<McpSettingsStatus> {
+    if (!this.mcpServer) return { kind: "unsupported" };
+    return this.mcpServer.start(this.settings.mcpPort);
+  }
+
+  private async stopMcpServer(): Promise<void> {
+    await this.mcpServer?.stop();
+  }
+
+  /**
+   * The AI settings page's port.
+   *
+   * Never returns `undefined`: on a platform that cannot serve MCP the page gets
+   * the shared unsupported port and renders its desktop-only notice, which is
+   * also what keeps the settings pane from having to know about platforms.
+   */
+  mcpSettings(): McpSettingsPagePort {
+    const controller = this.mcpServer;
+    if (!controller) return unsupportedMcpSettingsPort();
+    const setPort = async (port: number): Promise<void> => {
+      const normalized = normalizeMcpPort(port);
+      if (normalized === undefined || normalized === this.settings.mcpPort) return;
+      this.settings.mcpPort = normalized;
+      await this.saveSettings();
+      // A bound port cannot be changed in place; restart to apply the choice.
+      if (controller.status().kind === "running") {
+        await this.stopMcpServer();
+        await this.startMcpServer();
+      }
+    };
+    return {
+      state: () => ({
+        supported: true,
+        enabled: this.settings.mcpEnabled,
+        allowWrites: this.settings.mcpAllowWrites,
+        port: this.settings.mcpPort,
+        status: controller.status(),
+        configuredPort: controller.port,
+        token: controller.token()
+      }),
+      setEnabled: async (enabled) => {
+        if (this.settings.mcpEnabled === enabled) return;
+        this.settings.mcpEnabled = enabled;
+        await this.saveSettings();
+        if (enabled) await this.startMcpServer();
+        else await this.stopMcpServer();
+      },
+      setAllowWrites: async (allowWrites) => {
+        if (this.settings.mcpAllowWrites === allowWrites) return;
+        this.settings.mcpAllowWrites = allowWrites;
+        // Read at call time by the writer and the protocol gate, so the next
+        // tool call already honours it without restarting the server.
+        await this.saveSettings();
+      },
+      setPort,
+      applyPortInput: async (raw) => {
+        const port = parseMcpPortInput(raw);
+        if (port === undefined) return false;
+        await setPort(port);
+        return true;
+      },
+      start: () => this.startMcpServer(),
+      stop: () => this.stopMcpServer(),
+      copyText: async (text) => {
+        try {
+          await navigator.clipboard.writeText(text);
+          return true;
+        } catch {
+          // The page then reveals the read-only textarea instead of failing.
+          return false;
+        }
+      }
+    };
+  }
+
+  private async readVaultText(path: string): Promise<string> {
+    const file = this.app.vault.getFileByPath(path);
+    if (!file) throw new McpToolError("file-not-found", t("mcp.error.fileNotFound", { path }));
+    return this.app.vault.read(file);
+  }
+
+  /** Vault.process owns the per-file lock, exactly as a view save does. */
+  private async processVaultText(path: string, transform: (source: string) => string): Promise<unknown> {
+    const file = this.app.vault.getFileByPath(path);
+    if (!file) throw new McpToolError("file-not-found", t("mcp.error.fileNotFound", { path }));
+    return this.app.vault.process(file, transform);
+  }
+
+  private async resolveFileReference(filePath: string): Promise<FileResourceRef> {
+    const file = this.app.vault.getFileByPath(filePath);
+    if (!file) throw new McpToolError("file-not-found", t("mcp.error.fileNotFound", { path: filePath }));
+    return this.resources.ensureStableReference(file);
+  }
+
+  /** A refused MCP write may mean the disk changed; let open views re-read it. */
+  private refreshOpenMindTreeViews(path: string): void {
+    for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
+      if (leaf.view instanceof MindTreeView && leaf.view.file?.path === path) leaf.view.checkExternalVersion();
+    }
   }
 
   private scheduleResourceCacheSave(): void {

@@ -1836,6 +1836,50 @@
 
 .mtn-setting-inline-error.is-visible { display: block; }
 
+/* ── AI settings: MCP server section ─────────────────────────────────────── */
+
+/* A bindable port is at most five digits, so the field stays short. */
+.mtn-settings-ai-port-input {
+  width: 10ch;
+}
+
+.mtn-settings-ai-status,
+.mtn-settings-ai-port-error,
+.mtn-settings-ai-copy-feedback {
+  margin-top: 4px;
+  font-size: var(--font-ui-smaller);
+}
+
+/*
+ * `[hidden]` is a UA default that a host `display` rule can override, so the
+ * hidden state of every optional block in this section is asserted here. The
+ * attribute is what the page toggles; these rules only make it authoritative.
+ */
+.mtn-settings-ai-port-error[hidden],
+.mtn-settings-ai-config[hidden],
+.mtn-settings-ai-config-text[hidden],
+.mtn-settings-ai-notice[hidden] {
+  display: none;
+}
+
+.mtn-settings-ai-config {
+  margin-top: 18px;
+}
+
+/* The client config is JSON, so it is read with a monospace face at full width. */
+.mtn-settings-ai-config-text {
+  width: 100%;
+  min-height: 9em;
+  font-family: var(--font-monospace);
+  font-size: var(--font-ui-smaller);
+  resize: vertical;
+}
+
+.mtn-settings-ai-notice {
+  margin-top: 12px;
+  font-size: var(--font-ui-smaller);
+}
+
 /* ── Manage markers: emoji grid and text tag grid ─────────────────────────── */
 
 /* An empty grid collapses completely, so the section keeps no reserved space. */

@@ -67,3 +67,48 @@ test("normalized custom markers are an independent array that cannot mutate plug
   assert.deepEqual(second.settings.customMarkers, []);
   assert.deepEqual(DEFAULT_SETTINGS.customMarkers, []);
 });
+
+test("an absent MCP configuration stays off, read-only and on the default port", () => {
+  const normalized = normalizePluginData({ settings: {} });
+  assert.equal(normalized.settings.mcpEnabled, false);
+  assert.equal(normalized.settings.mcpAllowWrites, false);
+  assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
+  assert.equal(DEFAULT_SETTINGS.mcpEnabled, false);
+});
+
+test("a damaged MCP configuration is repaired field by field", () => {
+  const normalized = normalizePluginData({
+    settings: {
+      mcpEnabled: "yes",
+      mcpAllowWrites: 1,
+      mcpPort: "27321"
+    }
+  });
+  assert.equal(normalized.settings.mcpEnabled, false);
+  assert.equal(normalized.settings.mcpAllowWrites, false);
+  assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
+});
+
+test("an out-of-range MCP port falls back instead of clamping into the privileged range", () => {
+  // Silently binding to 1024 because someone typed 80 would be surprising, so a
+  // non-port value is discarded rather than clamped.
+  for (const port of [80, 0, -1, 65_536, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.equal(normalizePluginData({ settings: { mcpPort: port } }).settings.mcpPort,
+      DEFAULT_SETTINGS.mcpPort, `port ${String(port)}`);
+  }
+  assert.equal(normalizePluginData({ settings: { mcpPort: 30_000 } }).settings.mcpPort, 30_000);
+  assert.equal(normalizePluginData({ settings: { mcpPort: 65_535 } }).settings.mcpPort, 65_535);
+  assert.equal(normalizePluginData({ settings: { mcpPort: 1_024 } }).settings.mcpPort, 1_024);
+});
+
+test("the MCP switches survive a valid configuration and never leak elsewhere", () => {
+  const normalized = normalizePluginData({
+    settings: { mcpEnabled: true, mcpAllowWrites: true, mcpPort: 29_000 }
+  });
+  assert.equal(normalized.settings.mcpEnabled, true);
+  assert.equal(normalized.settings.mcpAllowWrites, true);
+  assert.equal(normalized.settings.mcpPort, 29_000);
+  // The access token is device-local and must never be part of plugin data.
+  assert.equal(Object.hasOwn(normalized.settings, "mcpToken"), false);
+  assert.equal(JSON.stringify(normalized).includes("Bearer"), false);
+});

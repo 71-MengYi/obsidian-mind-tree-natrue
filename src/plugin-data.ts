@@ -4,6 +4,7 @@ import { asRecord, assertSafeRecordKey, createSafeRecord } from "./input-limits"
 import { normalizeNewNoteDefaultContent } from "./services/note-content";
 import {
   DEFAULT_SETTINGS,
+  normalizeMcpPort,
   type MindTreeSettings
 } from "./settings-model";
 import { normalizeNodeWrapWidth } from "./render/layout";
@@ -74,7 +75,12 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
         DEFAULT_SETTINGS.theme
       ),
       connectionStyle: normalizeConnectionStyle(settings?.["connectionStyle"], DEFAULT_SETTINGS.connectionStyle),
-      nodeShape: normalizeNodeShape(settings?.["nodeShape"], DEFAULT_SETTINGS.nodeShape)
+      nodeShape: normalizeNodeShape(settings?.["nodeShape"], DEFAULT_SETTINGS.nodeShape),
+      mcpEnabled: safeBoolean(settings?.["mcpEnabled"], DEFAULT_SETTINGS.mcpEnabled),
+      mcpAllowWrites: safeBoolean(settings?.["mcpAllowWrites"], DEFAULT_SETTINGS.mcpAllowWrites),
+      // An out-of-range port falls back to the default rather than clamping:
+      // silently binding to 1024 because someone typed 80 would be surprising.
+      mcpPort: normalizeMcpPort(settings?.["mcpPort"]) ?? DEFAULT_SETTINGS.mcpPort
     }
   };
 }

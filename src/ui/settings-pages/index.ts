@@ -1,3 +1,4 @@
+export * from "./ai-settings-page";
 export * from "./basic-settings-page";
 export * from "./custom-markers-settings-page";
 export * from "./mind-map-settings-page";

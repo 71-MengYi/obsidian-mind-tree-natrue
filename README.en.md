@@ -128,10 +128,35 @@ A reference is bound to a *tree identity plus node id*, not to a path: moving no
 - These settings only affect display: open mind trees refresh at once, no `.mtn.md` file is modified, and no undo entry is created.
 - Like the built-in markers, the custom markers a node actually uses are mirrored into the Markdown outline as a readable suffix, for example `- Node title 〔emoji:🔥〕 〔tag:Drawing〕`, so the outline always states which markers a node carries.
 
+### 6. Let AI read and write mind trees over MCP
+
+On desktop the plugin exposes a local MCP server, so MCP clients such as Claude Desktop and Cursor can read and write your mind trees by node id.
+
+1. Open **Settings → Mind Tree Nature → AI** (this page only exists on desktop).
+2. Turn on **Enable MCP server**. It listens on this computer only (`127.0.0.1`), default port `27321`; if that port is busy it tries nearby ports and the status line shows the address actually in use. Switching it off stops the server immediately.
+3. Click **Copy configuration JSON** and paste it into your client's MCP configuration file (Claude Desktop's `claude_desktop_config.json`, or Cursor's `mcp.json`). The snippet already contains the address and this computer's access token — no fields to fill in by hand.
+4. Turn on **Allow write tools** when you want AI to change your mind trees. It is off by default and is a separate second switch.
+
+Read-only tools (no write permission needed): list mind trees; read a whole tree (nested or flat shape, paged by node count); find nodes by title; read one node; read its parent; read its children (optionally the whole subtree); read the title path from the root to it; read its linked files and node reference; read a tree's node, file and depth counts.
+
+Write tools (require write permission): **create a mind tree** (optionally in a specific folder, with initial child titles); move a node to become a child of another node; add a child node; rename a node; delete a single node (its children move up); link an existing vault file; unlink a file; create or remove a same-document node reference.
+
+A few deliberate rules:
+
+- Every write is an ordinary **single-step undoable** edit, exactly as if you had made it in the UI, and it is saved to the file right away.
+- **Unlinking only removes the reference on the node — it never deletes your file.** Linking only accepts files that already exist in the vault, and MCP never creates, imports or moves a file (a non-Markdown file that has no resource identity yet gains its identity suffix in the same folder, exactly as when you link it in the UI).
+- MCP cannot delete a whole branch and cannot delete a file.
+- If a tree has unresolved external changes, or the file is changed by another program while an operation runs, the write is refused with a reason and **nothing is overwritten**.
+- Creating a mind tree through MCP never steals the view you are currently looking at.
+- Mobile shows no such page and never starts the server; even if you sync a desktop configuration with MCP enabled to your phone, the phone still will not start it.
+
+The access token lives in **device-local storage**, not in plugin data, so it is never synced to another device. Treat it like a password: anyone who can read it can change your mind trees, so handle the copied text accordingly.
+
 ## File format and privacy
 
 - Mind trees use top-level YAML `documentId`, `schemaVersion`, `layoutMode`, `recursiveScan`, `collectionMode`, `theme`, and `nodeShape` properties followed by a Markdown outline. Lossless gzip-compressed JSON is stored after the outline and an explicit instruction telling AI tools to ignore it; settings are not duplicated in that payload. A new mind tree writes no setting property: absent settings use the global defaults from Settings → Mind map at runtime, and a property is written into that file only after you choose it in the tree's own settings menu.
 - The plugin does not send telemetry or upload vault content.
+- The plugin's only network-related feature is the local MCP server: off by default, desktop-only, bound to `127.0.0.1`, token-protected, and it sends nothing to any server. Beyond that, the plugin contacts GitHub only when you explicitly ask it to check for updates.
 - Web links are stored but never fetched in the background.
 - All UI text ships as Simplified Chinese and English i18n resources and follows your Obsidian language.
 

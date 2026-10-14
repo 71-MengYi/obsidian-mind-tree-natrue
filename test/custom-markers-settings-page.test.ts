@@ -12,8 +12,7 @@ import {
 import { translate } from "../src/i18n/catalog";
 import { DEFAULT_SETTINGS, type MindTreeSettings } from "../src/settings-model";
 import { EMOJI_CATALOG } from "../src/ui/emoji-data";
-import type { SettingsPagePort } from "../src/ui/settings-pages/ports";
-
+import { unsupportedMcpSettingsPort, type SettingsPagePort } from "../src/ui/settings-pages/ports";
 // Exercise the real settings page with only the Obsidian element helpers and
 // the browser events it uses simulated, the same way the other DOM-level tests
 // in this folder isolate the Obsidian boundary.
@@ -258,6 +257,7 @@ function fixture(options: { readonly markers?: readonly CustomMarkerDefinition[]
       if (refreshFailure) throw refreshFailure;
     },
     rebuildResourceIndex: async () => assert.fail("the marker page never rebuilds the file index"),
+    mcp: unsupportedMcpSettingsPort(),
     updates: {
       check: async () => assert.fail("the marker page never checks for updates"),
       showAvailable: () => assert.fail("the marker page never opens the update dialog"),

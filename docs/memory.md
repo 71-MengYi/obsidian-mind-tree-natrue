@@ -384,6 +384,76 @@
 
 3. **悬浮按钮外观来回三轮，最终形态：空闲全透明 / 悬浮 = 原生半透明灰底**。最终规则：`.mtn-embed-open` 去掉自己那套 `width/height: 28px`、`border`、`background: var(--background-primary)`、`box-shadow`，整条镜像 Obsidian 的 `.embed-action`（asar 明文可查）：`display: flex`、`padding: var(--size-2-2) var(--size-2-3)`（4px 6px → 与原生同尺寸 28×24）、`color: var(--embed-action-color, var(--icon-color, var(--text-muted)))`、`border-radius: var(--embed-action-radius, var(--clickable-icon-radius, var(--radius-s, 4px)))`、`cursor: pointer`；**空闲态强制透明**：`border: 0 !important; background: transparent !important; box-shadow: none !important;`；**悬浮态就是原生那一条**：`background-color: var(--mtn-embed-open-hover, var(--background-modifier-hover)) !important`（默认主题 `color-mix(in oklch, var(--mono-100) 6.7%, transparent)`，即半透明灰；深浅由 `--mtn-embed-open-hover` 一个变量控制，用户改深浅不需要碰插件文件、也不需要 `!important`）。两条都带 `!important` 时由特异性决胜（`:hover` 胜出），因此既压得住宿主/主题更具体的按钮规则（也会出现点过之后 `:hover`/`:focus` 残留），又保留原生悬浮底色；`test/styles.test.ts` 断言「padding 派生尺寸 + 空闲三处 `!important` 透明 + 悬浮是那一条 `--background-modifier-hover`」。教训：① 要「像原生」就把宿主自己的类（`.embed-action`）整条规则抄过来复用变量，别自配 `--background-primary`/`--radius-s` 拼近似外观；② 「空闲无底色」必须假设宿主/主题能用更高优先级给你画盒子，`!important` 是正确的工具（`.mtn-visually-hidden` 已有先例），但**只在空闲态**加，否则会连自己的悬浮底色一起屏蔽（`!important` 跨状态生效，这也是第二轮误判「悬浮也要透明」的技术原因）；③ **改 `styles.css` 必须在 Obsidian 里重载插件/重启才生效**，用户反馈样式没变时先排除这一条。
 
+## 2026-10-15 · 本机 MCP 服务（`设置 → AI`，桌面端专属，团队协作）
+
+**需求**：让插件把思维树开放给 MCP 客户端，一键复制客户端配置 JSON；工具含读取节点/父/子，以及创建思维树、移动/新增/重命名/删除节点、关联/取消关联文件；**移动端自动禁用**。用户逐条确认的三个选型：复制的是**客户端配置 JSON**（不是节点快照）、传输用**插件内本地 HTTP 服务**、写操作**默认关闭需显式开启**。另按用户要求把配置放在新增的 **「AI」tab**（不是 MCP 专属 tab）。
+
+**落点**（新目录 `src/services/mcp/`，按「纯协议 / 宿主接线」两半分）
+
+- 纯模块（**零 Obsidian 依赖**，`node:test` 直接可测）：`contracts.ts`（冻结边界）、`tool-error.ts`、`connection.ts`、`availability.ts`、`settings-page-model.ts`、`json-rpc-core.ts`、`tool-schemas.ts`（18 工具目录）、`mcp-core.ts`、`client-config.ts`。
+- 宿主接线（唯一可以碰仓库/会话/设置）：`tree-reader.ts`、`tree-locator.ts`、`session-writer.ts`、`obsidian-tool-host.ts`、`http-transport.ts`、`mcp-server.ts`；`src/services/tree-creation.ts` 抽出**唯一的建树路径**，Ribbon/命令/MCP 共用（MCP 传 `focus: false`，**绝不抢焦点**）。
+- 接线：`src/main.ts`（`initializeMcpServer()` 只在 `!Platform.isMobile` 时构造；`mcpSettings()` 返回 `McpSettingsPagePort`，**永不返回 undefined**，不支持时给 `unsupportedMcpSettingsPort()`）、`src/settings.ts`（`SETTINGS_PAGES` 表项 + `availability`/回落，`isSettingsPageAvailable` 复用 `isMcpSupported` 作为唯一平台判定）、`src/ui/settings-pages/ai-settings-page.ts`、`src/settings-model.ts`（`mcpEnabled`/`mcpAllowWrites`/`mcpPort`）、`src/plugin-data.ts`、`src/i18n/catalog.ts`（`settings.ai.mcp.*`、`mcp.error.*`）、`styles.css`（`mtn-settings-ai-*`，无任何颜色声明）。
+
+**关键设计决定（后续勿推翻）**
+
+1. **不引入 `@modelcontextprotocol/sdk`**（整棵依赖树 + 体积上限），手写传输子集：单一 `POST /mcp`、`application/json` 响应、`Accept` 必须同时含 `application/json` 与 `text/event-stream`（否则 406）、通知/响应 202、未提供 SSE 时 `GET` 405、`Mcp-Session-Id`（`initialize` 签发，缺失/未知 404）、未知方法 `-32601`。依据 [MCP 2025-06-18 Transports](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。
+2. **`tools/list` 在写权限关闭时仍列出全部 18 个工具**，闸门在 `tools/call`（这样 `writes-disabled` 对客户端可见）；被拒绝的调用**在任何端口被触碰之前**返回（用 recording fake 钉死）。
+3. **错误文案归属：谁抛谁本地化。** 宿主抛的 `McpToolError{code,message}` 由协议层**原样透传**（测试钉死 pass-through）；协议层只为自己产生的 `writes-disabled` / `invalid-arguments` 调 `t()`。
+4. **工具描述是静态英文、不走 i18n**——工具目录是给模型读的协议面，不是用户界面文案。
+5. **安全五条**：只绑 `127.0.0.1`；`Host`/`Origin` 必须在回环集合内（防 DNS rebinding）；每请求 `Authorization: Bearer <token>`；请求体 64 KiB 上限；写权限是**独立第二开关**。**端口与 token 存设备本地存储**（`${manifest.id}:mcp-server`），**不进 `data.json`**，避免被 Sync 复制到别的设备。进插件设置的只有 `mcpEnabled`/`mcpAllowWrites`/`mcpPort`。
+6. **移动端策略是「缺席而非不可用」**：`isMcpSupported` 是唯一判定点，移动端不渲染「AI」tab、不构造启动器，因此**永不执行 `require("node:http")`**；`activePage === "ai"` 在移动端回落到首个可用页；平台门禁优先于设置值（桌面开启后把 `data.json` 同步到手机也不启动）。
+7. **`link_file` 与界面关联保持同一条路径**（`resources.ensureStableReference`），因此一个**尚无资源身份的非 Markdown 文件会在原目录补 `@`/`%` 身份后缀**——这是获得可引用身份的必要步骤，不是复制/移动。据此已修正 README 与 docs 里「不重命名任何文件」的过度承诺（原措辞不准确）。`link_file` 刻意**不**镜像 `associateFileWithTarget` 的标题改写，并设 `titleSync: "off"`，使一次工具调用无法开启双向改名。
+8. **`require("node:http")` 必须写成函数内的非字面量加载**：`loadNodeHttp()` 里 `loader(NODE_HTTP_SPECIFIER)`。字面量 `require("node:http")` 会让真实构建报 `Could not resolve "node:http"`（`esbuild.config.mjs` 的 `external` 没有 node 内建，且该文件不在本任务写范围）。这个写法比 `default-app-opener.ts` 的字面量 `require("electron")` **更保守**：字面量会生成模块作用域的 `const electron = require("electron")`（移动端加载期就会解析），而非字面量只在函数被调用时解析。行为等价、移动端永不触发，已在产物中复核。
+9. **`MCP_SERVER_VERSION` 硬编码已删除**：版本由 `McpHostEnvironment.version?.()` 提供，缺省回落 `"0.0.0-dev"`（刻意看起来不像发布版），两分支都有测试钉死。
+
+**验证（本轮实测，Lead 独立复跑）**
+
+- `npm run check` **0 错误**。
+- `test/mcp-*.test.ts` **142/142**；`test/tree-creation.test.ts` **8/8**；`test/plugin-data.test.ts` **8/8**。
+- `npm run build` 在受限沙箱不可用（esbuild JS API spawn `EPERM`）；改用**同参数的内置 esbuild 二进制**产出到临时目录（未触碰仓库 `main.js`）：**exit 0，4,728,847 字节 ≈ 4.51 MiB**（上限 10 MiB）。产物中 `node:http` 只作为字符串常量 `NODE_HTTP_SPECIFIER` 出现，**无字面量 `require("node:http")`**。
+- **安全关键性质已证明**：`session-writer` 测试断言 `mutationLocked` 拒绝后文件**逐字节相同**、`Vault.process` **从未被调用**（CAS 回调都没进），并覆盖外部改写→保留外部字节、读回被篡改→`file-changed`。
+
+**测试基线（按这个读，别把环境失败当回归）**：全量 `888 tests`，其中 **7 个必然失败**，全部是 `Error: spawn EPERM`（直接调 `esbuild buildSync` 的 DOM 测试无法 spawn 子进程）：`adaptive-tooltip`、`ai-settings-page`（本轮新增）、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`。**其余必须全 pass**，因此正常基线是 **881/888**。任一 DOM 测试文件失败都会**整文件 0 用例执行**，别用文件级失败形态反推环境问题。
+
+**已知待办 / 遗留坑（重要）**
+
+1. **`registerHooks` 在 Node 20 上会抛**（它需要 Node ≥ 22.15，而 `AGENTS.md` §1 与 release workflow 钉的是 ≥ 20）。本轮 `protocol-core` 已把它换成 `module.register(<data: URL>)`（Node ≥ 20.6）并**按 `context.parentURL.endsWith("/i18n/index.ts")` 窄化作用域**，留下 WHY 注释。仍有 **6 个文件**在用 `registerHooks`：`resource-index-service`、`search-panel`（历史）与 `mcp-session-writer`、`mcp-tree-locator`、`tree-creation`（本轮）。**尚未修**，属仓级统一清理项。
+2. **`--test-isolation=none` 下 mock URL 会互相污染**：ESM 模块缓存按 **URL** 键且是进程级的，多个测试文件若把 `obsidian` 解析到**同一个** `file:///mind-tree-test-host/obsidian.mjs` 但导出集合不同（谁窄谁污染），就会让后加载的文件报 `does not provide an export named 'App'`，而且**是否复现取决于文件调度顺序**。本轮 `host-wiring` 的三个新文件撞上这个坑（表现为 `test/resource-index-service.test.ts` 间歇性失败，非确定性）。修法：**每个测试文件用自己独立的 mock URL**；仅按 `parentURL` 窄化 hook **不能**解决（缓存键是 URL）。这是新增「obsidian 桩」时必踩的坑。
+3. **测试运行器非确定性**：`run-tests.ps1` 历史上偶发额外失败；本轮也观察到「**被测文件正在被写**」时整批炸开（一次 125 fail，原因是并发编辑 `document.ts` 写到一半）。**判定回归前先单独重跑该文件**，并用 mtime 排除「有人正在写」。
+
+**⚠ 并发写者警告（本轮实际发生，后续 agent 务必先看 git status）**：本会话进行中，`src/format/document.ts`、`src/types.ts` 与**新建** `src/format/regions.ts` 被**本任务三个 teammate 之外**的写者改动（mtime 01:45:46–01:45:53，晚于全部 teammate 收工）。那是一轮把 header/data-region 解析抽到 `regions.ts`、新增 `MindTreeHeaderStatus` + `ParsedMindTreeFile.headerStatus`（`unreadable` 时冻结身份、保留 header 字节）的重构。它与 MCP 代码**完全解耦**（`regions.ts` 只被 `document.ts` import，无 MCP 文件引用），但**回归了 7 条既有测试**（`document-settings-state` 3 条、`document-conflict`/identity/`node-title` 等），使全量从 881/888 掉到 874/888。**本任务未触碰、未修复、也未被授权处理这三个文件**；收尾时已把该状态如实上报用户，由用户决定保留/回退/交由原作者收尾。**不要把这三个文件当成 MCP 任务的一部分，也不要在未确认前回退它们**（可能属于另一个正在进行的会话）。
+
+**↳ 该写者的更正与收尾（2026-10-15 02:0x，本人补记，仅更正上面这条的时效）**：上面观察到的 874/888 是**中间态**（当时正在改 `serializeMindTreeFile` 的 header/body 接缝，`---` 与正文之间少一个空行导致 YAML 序列化后重新解析失败）。**该轮工作现已完成并全绿**：`npm run check` 0 错误；全量 **911 条、失败 9 条 = 7 条既有 esbuild `spawn EPERM` + 2 条 `test/mcp-http-transport.test.ts` 端口占用抖动**（单独跑该文件会挂住并占端口，可能是它自己的非确定源），`874` 已不复现。落点见下方 2026-10-15 条目；**不需要回退这三个文件**。
+
+## 2026-10-15 · `.mtn.md` 读写契约收敛到数据区（`refactor` + `fix`，用户提问驱动）
+
+**问题（用户实测）**：偶尔提示"文件无法解码 / 思维树损坏"，最近一次是外部拖动文件夹并触发 Obsidian「更新双链」，**关闭后重开就正常**。用户提问：校验是否只该看 json 数据块、忽略前面的大纲文段；并认为"思维树只能同时打开一个，所以数据区不会被多方同时改"。
+
+**核实结论（对照代码，避免重复劳动）**
+- 冲突判定**早就不看大纲**（`mindTreeMachineDataFingerprint` 只比机器数据，`test/document-conflict.test.ts` 已冻结）；收益不在"减少冲突"，而在**消除假损坏**。
+- "只能同时打开一个"**不成立**：代码明确支持同一文件多标签共享会话（`docs/05` §11.1、`MindTreeSessionRegistry`）。结论仍近似成立——插件内每路径只有一个写队列，且 Obsidian 的链接改写只动 `[[...]]`（base64 字母表无方括号），数据区内容只有插件写。
+- 真正的三个缺口：① 文件头或围栏标记坏了就判整文件损坏（假损坏）；② `serializeMindTreeFile` 重建整段文件头（丢注释），且 `stripMachineDataSection` 在标记残缺时不剥离旧数据区 → 追加出**两个数据区**，之后每次读回都是旧的；③ 物理撕裂读被当成损坏。
+
+**落点**
+- 新增 `src/format/regions.ts`：`locateDataRegion()`（容错定位；0 个 = missing、≥2 个 = ambiguous 失败关闭）、`payloadSectionStart()`（按行回退吃掉生成的分割线/提示/注释标记，标记残缺也整段替换）；未闭合围栏由 `damagedSectionStart()` 连同装饰一起切掉，避免残留两个数据区。
+- 新增 `src/format/yaml-patch.ts`：`patchYamlHeader()` 按 YAML 节点 range 只补丁插件拥有的键（`documentId`/`schemaVersion`/六项设置），**注释、空行、键序、无关 Frontmatter 逐字节保留**；无法安全补丁（range 重叠、多行值、非映射头）返回 `undefined`，调用方保留原字节。
+- `src/format/document.ts`：`parseMindTreeFile()` 改为**数据区优先**（数据区是唯一硬契约），文件头三态 `ok | missing | unreadable`（`unreadable` → 按 v1 解析、设置取运行时默认、`documentId` **不自动分配**、保存原样保留文件头）；`serializeMindTreeFile()` 只替换自己拥有的区域。**本轮唯一的坑**：header 与 body 的接缝必须归一到 `\n\n`，少一个空行会让 `---` 与正文粘成 `---# 标题`，重新解析立刻变 `unreadable`（当时表现为 7 条既有测试失败）。
+- 新增 `src/services/stable-source-read.ts`：`readStableSource()` / `confirmUsableSource()` 要求读取前后 `path:ctime:mtime:size` 不变，未稳定按 120/400/1000 ms 退避重读；未稳定的字节**不作为版本、也不判损坏**。
+- 接线：`mind-tree-view.ts` 的 `checkExternalVersion()`（稳定读取 + 路径短暂消失的宽限 `confirmBackingFileGone()`，顺带修掉"文件缺失时 `enterVersionPreview()` 会为一次删除建未决记录"）、`setViewData()` 解析失败后台 `scheduleParseRecheck()` + `SharedMindTreeSession.initializeOrRepair()`（只修复"从未持有文档"的会话）、`main.ts` 协调器 `read` 端口。
+- i18n 新增 `status.rereading`、`conflict.unstableRead`（EN+ZH 成对）。docs：`03` §7.1/§7.2/§7.4、`05` §11.1/§11.2、`06` 验收第 10 条。
+
+**验证**：`npm run check` 0 错误；全量 **911 条 / 失败 9 = 7 条既有 esbuild `spawn EPERM` + 2 条 `test/mcp-http-transport.test.ts` 端口抖动（与本轮无关）**；新增 `test/format-regions.test.ts` 15 条、`test/stable-source-read.test.ts` 8 条全通过；`format` / `document-conflict` / `version-conflict` / `document-settings-state` / `identity-repair` 等既有断言**未放宽任何一条**。
+
+**未做（与用户讨论过的后续项，建议按此顺序）**
+1. 干净会话自动刷新为外部版本（`adopt-external`）："干净会话也要选择"是 `test/version-conflict.test.ts:45` 冻结的行为，属需求变更，要改测试并同步 `docs/02`。
+2. `pending-conflicts/<本机标识>/*.json` 改为内存 + 有界 localStorage（用户要求"不往仓库写冲突文件"；`.obsidian` 在 vault 目录内，是否算"仓库"仍需用户拍板）。
+3. 真损坏时的"恢复上一次成功数据"命令（内存 last-good，不落任何文件）。
+
+**环境坑（本轮新增）**
+- `edit` 的 `ReplaceFileW EIO (Win32 1175)` 在 `src/format/document.ts`、`src/format/regions.ts`、`src/ui/mind-tree-view.ts` 上都出现过，**原样重试即成功**（与 2026-10-13 条目一致）。
+- 本会话与另一个 session（MCP 任务）**并发改同一工作区**：开工时 `npm run check` 的基线是红的（`src/settings.ts` 引用不存在的 `mcpSettings`），几分钟后对方改完自愈。`git status` 里的 README/docs/catalog/settings-* 与 `src/services/mcp/` 都不是本轮的改动，**未触碰、未提交**。
+
+
 
 
 
