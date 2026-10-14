@@ -109,6 +109,23 @@ export class SharedMindTreeSession {
     return true;
   }
 
+  /**
+   * Adopt a document for a session that is new, or that is initialized but never
+   * held one because its only state was a parse error. A live document is never
+   * replaced here: that path belongs to the version conflict flow.
+   */
+  initializeOrRepair(document: MindTreeDocument, source: string): boolean {
+    if (this._initialized && this._document !== undefined) return false;
+    const repairing = this._initialized;
+    this._initialized = true;
+    this._document = document;
+    this._source = source;
+    this._parseError = undefined;
+    // A repaired session keeps the baseline the view just loaded; a new one loads it.
+    if (!repairing) this.history.load(source);
+    return true;
+  }
+
   replaceDocument(
     document: MindTreeDocument | undefined,
     originId: string,

@@ -75,6 +75,7 @@ import {
 } from "../services/document-conflict";
 import { VersionComparison } from "./components/version-comparison";
 import { ThemePreviewPanel } from "./components/theme-preview";
+import { confirmUsableSource, readStableSource, STABLE_READ_DELAYS_MS, type StableSourcePorts } from "../services/stable-source-read";
 import type { PendingTitleDraft } from "../services/pending-conflict-store";
 import {
   DocumentSession,
@@ -242,6 +243,8 @@ export class MindTreeView extends TextFileView {
   private viewClosed = false;
   private acceptingAssociations = true;
   private parseError?: string;
+  /** A failed read is being re-confirmed against the settled file. */
+  private parseRecheckPending = false;
   private readonly selectedIds = new Set<NodeId>();
   private primarySelectedId?: NodeId;
   private editingNodeId?: NodeId;
@@ -825,14 +828,49 @@ export class MindTreeView extends TextFileView {
         await session.history.runExclusiveWrite(async () => {
           if (this.viewClosed || this.sharedSession !== session || this.documentSessionToken !== token || session.restoring) return;
           const file = this.app.vault.getFileByPath(session.path);
-          if (!file) { await this.enterVersionPreview(); return; }
-          const source = await this.app.vault.read(file);
+          if (!file) {
+            // The parent folder exists but the path is momentarily absent: a sync
+            // client replaces a file by removing and recreating it. Only a path
+            // that stays gone ends the document.
+            if (await this.confirmBackingFileGone(session)) session.markDeleted();
+            return;
+          }
+          if (session.conflict?.active) { await session.conflict.refresh(); return; }
+          const outcome = await readStableSource(this.stableSourcePort(file));
           if (this.sharedSession !== session || this.documentSessionToken !== token) return;
-          if (session.conflict?.active) await session.conflict.refresh();
-          else if (!session.isPendingWrite(source)) await this.acceptExternalSource(source);
+          // Unsettled bytes are not a version: the next vault event decides.
+          if (!outcome.ok) return;
+          if (!session.isPendingWrite(outcome.source)) await this.acceptExternalSource(outcome.source);
         });
       }
     })().catch((error: unknown) => this.reportSaveFailure(error)).finally(() => { this.externalCheckTask = undefined; });
+  }
+
+  /**
+   * Read bytes only from a file that did not change while it was read. A plain
+   * read can catch a sync client or the host's own link rewrite mid-write, and
+   * treating those bytes as an external version is what turned a momentary race
+   * into a "damaged file" report.
+   */
+  private stableSourcePort(file: TFile): StableSourcePorts {
+    return {
+      stamp: async () => {
+        const current = this.app.vault.getFileByPath(file.path);
+        return current ? `${current.stat.ctime}:${current.stat.mtime}:${current.stat.size}` : undefined;
+      },
+      read: () => this.app.vault.read(this.app.vault.getFileByPath(file.path) ?? file),
+      delay: (milliseconds) => new Promise<void>((resolve) => { this.ownerWindow().setTimeout(resolve, milliseconds); })
+    };
+  }
+
+  /** A path that stays gone is a deletion; a momentary gap is a replacement. */
+  private async confirmBackingFileGone(session: SharedMindTreeSession): Promise<boolean> {
+    for (const wait of STABLE_READ_DELAYS_MS) {
+      if (this.viewClosed || this.sharedSession !== session) return false;
+      await new Promise<void>((resolve) => { this.ownerWindow().setTimeout(resolve, wait); });
+      if (this.app.vault.getFileByPath(session.path)) return false;
+    }
+    return true;
   }
 
   private async acceptExternalSource(source: string): Promise<void> {
@@ -991,7 +1029,8 @@ export class MindTreeView extends TextFileView {
       const parsed = parseMindTreeFile(data, this.parseOptions());
       this.document = parsed.document;
       this.parseError = undefined;
-      this.sharedSession?.initialize(parsed.document, data);
+      this.parseRecheckPending = false;
+      this.sharedSession?.initializeOrRepair(parsed.document, data);
       // File identity is authoritative; pathHint is only a cached fallback.
       // Repairing it here closes the rename/link-rewrite race before rendering.
       const repairedResourceState = !this.mutationLocked() && this.reconcileLinkedResources(parsed.document);
@@ -1013,10 +1052,44 @@ export class MindTreeView extends TextFileView {
       this.parseError = t("status.invalidFile", { message });
       this.sharedSession?.initialize(undefined, data, this.parseError);
       this.saveState = "error";
+      // One unconfirmed read is not proof of damage, so the settled file is
+      // checked again before the error is left standing.
+      this.scheduleParseRecheck(data);
     }
     this.render(layoutAnchor);
     if (this.plugin.updateRuntime.paused) this.rootEl.inert = true;
     if (updateExternalChange) this.checkExternalVersion();
+  }
+
+  /**
+   * Confirm a failed open before leaving the error standing.
+   *
+   * The bytes handed to `setViewData` can come from a read that overlapped the
+   * host's link rewrite, a sync client, or this plugin's own write. Re-reading
+   * until the revision settles separates that from real damage, and a confirmed
+   * read is adopted through the ordinary reload path.
+   */
+  private scheduleParseRecheck(failedSource: string): void {
+    const file = this.file;
+    if (!file || this.viewClosed) return;
+    const token = this.documentSessionToken;
+    this.parseRecheckPending = true;
+    void confirmUsableSource(this.stableSourcePort(file), (source) => {
+      try {
+        parseMindTreeFile(source, this.parseOptions());
+        return true;
+      } catch {
+        return false;
+      }
+    }).then((result) => {
+      if (this.viewClosed || this.documentSessionToken !== token) return;
+      this.parseRecheckPending = false;
+      if (result.ok && result.source !== failedSource) {
+        this.setViewData(result.source, false);
+        return;
+      }
+      this.render();
+    }).catch(() => { this.parseRecheckPending = false; });
   }
 
   /** Overlay the textarea in the frozen candidate without file side effects. */
@@ -1056,6 +1129,7 @@ export class MindTreeView extends TextFileView {
     this.document = undefined;
     this.documentSessionToken = createId();
     this.parseError = undefined;
+    this.parseRecheckPending = false;
     this.selectedIds.clear();
     this.primarySelectedId = undefined;
     this.editingNodeId = undefined;
@@ -1788,7 +1862,11 @@ export class MindTreeView extends TextFileView {
     if (this.parseError) {
       this.nodeLayerEl.empty();
       this.connectionsEl.empty();
-      this.shell?.status.update({ message: this.parseError, kind: "error" });
+      // While the settled file is being re-read, say so instead of reporting
+      // corruption: a single read can lose a race with another writer.
+      this.shell?.status.update(this.parseRecheckPending
+        ? { message: t("status.rereading"), kind: "normal" }
+        : { message: this.parseError, kind: "error" });
       this.rootEl.toggleClass("is-readonly", true);
       this.saveState = "error";
       this.refreshBottomStatusBar();

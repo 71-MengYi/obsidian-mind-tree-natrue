@@ -138,6 +138,13 @@ export interface ValidationResult {
   unreachableNodeIds: NodeId[];
 }
 
+/**
+ * How the YAML header of a `.mtn.md` file read. Only `ok` means the six tree
+ * settings and the optional `documentId` can be trusted; the compressed payload
+ * is what decides whether the file is a mind tree at all.
+ */
+export type MindTreeHeaderStatus = "ok" | "missing" | "unreadable";
+
 export interface ParsedMindTreeFile {
   document: MindTreeDocument;
   source: string;
@@ -145,6 +152,11 @@ export interface ParsedMindTreeFile {
   migratedFromSchemaVersion?: number;
   /** Set when absent/invalid current YAML settings were filled from defaults. */
   defaultedDocumentSettings?: boolean;
+  /**
+   * How the header read. `unreadable` freezes identity: a save keeps the header
+   * bytes and never assigns a new `documentId` to a tree it cannot identify.
+   */
+  headerStatus: MindTreeHeaderStatus;
 }
 
 export type DropPosition = "before" | "inside" | "after";

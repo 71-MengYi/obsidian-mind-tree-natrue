@@ -23,6 +23,7 @@ import type {
   MindTreeCollectionMode,
   MindTreeConnectionStyle,
   MindTreeDocument,
+  MindTreeHeaderStatus,
   MindTreeLayoutMode,
   MindTreeNode,
   MindTreeNodeShape,
@@ -35,15 +36,31 @@ import {
   mindTreeMigrationFactory
 } from "./migrations";
 import { OUTLINE_END, OUTLINE_START, renderOutline } from "./outline";
-import { desiredTreeSettings, extractTreeSettings, initializeSettingsState, settingsForSerialization } from "../document-settings-state";
+import { DATA_END, DATA_FENCE_LANGUAGE, DATA_NOTICE, DATA_START, locateDataRegion, payloadSectionStart } from "./regions";
+import { patchYamlHeader, type YamlPropertyPatch } from "./yaml-patch";
+import { desiredTreeSettings, extractTreeSettings, initializeSettingsState, settingsForSerialization, TREE_SETTING_KEYS } from "../document-settings-state";
 
-const FRONTMATTER_PATTERN = /^\uFEFF?---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/;
-const CURRENT_DATA_PATTERN = /<!-- mtn:data:start -->\s*\r?\n```mtn-data-gzip\s*\r?\n([A-Za-z0-9+/=\r\n]+?)\r?\n```\s*\r?\n<!-- mtn:data:end -->/i;
+/**
+ * The header may be preceded by blank lines (a sync client or an editor can add
+ * one) but never by prose: a `---` block after text is a horizontal rule, not
+ * Frontmatter. The preamble is captured so a save can put it back unchanged.
+ */
+const FRONTMATTER_PATTERN = /^((?:[ \t]*\r?\n)*)(\uFEFF?)(---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$))/;
 const RESERVED_VERSION_KEYS = new Set(["format", "version", "schemaVersion", "revision", "codec", "checksum", "payload"]);
 const DOCUMENT_SETTING_YAML_KEY_SET = new Set<string>(Object.values(DOCUMENT_SETTING_YAML_KEYS));
-export const DATA_NOTICE = "这段话之后的内容是压缩json，无需读取和分析。";
-export const DATA_START = "<!-- mtn:data:start -->";
-export const DATA_END = "<!-- mtn:data:end -->";
+export { DATA_END, DATA_NOTICE, DATA_START };
+
+/** The YAML header with its exact bytes, so an unreadable one is never rebuilt. */
+interface HeaderRegion {
+  readonly status: MindTreeHeaderStatus;
+  /** Blank lines and BOM before the opening delimiter; always re-emitted. */
+  readonly leading: string;
+  /** Header bytes including both `---` delimiters and the trailing line break. */
+  readonly text: string;
+  readonly start: number;
+  readonly end: number;
+  readonly parsed: Record<string, unknown>;
+}
 /**
  * Runtime fallback for a document whose `title` is missing. Deliberately not
  * `ROOT_TITLE` from domain/tree: "a parsed tree without a title" and "a brand
@@ -69,65 +86,60 @@ export interface ParseMindTreeOptions {
 }
 
 export function parseMindTreeFile(source: string, options: Readonly<ParseMindTreeOptions> = {}): ParsedMindTreeFile {
-  const frontmatterMatch = FRONTMATTER_PATTERN.exec(source);
-  let rawDocument: unknown;
-  let migratedFromSchemaVersion: number | undefined;
-  let defaultedDocumentSettings = false;
-
-  if (frontmatterMatch) {
-    const root = asRecord(parseYaml(frontmatterMatch[1] ?? ""));
-    const headerDocumentId = stringValue(root?.["documentId"]);
-    const currentData = CURRENT_DATA_PATTERN.exec(source);
-    if (currentData?.[1]) {
-      if (!root) throw new MindTreeFormatError("Mind Tree Frontmatter must be a YAML mapping.");
-      // These nested dictionaries belong to formats older than the declared
-      // migration baseline. Missing current top-level keys are recoverable,
-      // but removed container formats remain intentionally unsupported.
-      if (Object.hasOwn(root, "mindTree") || Object.hasOwn(root, "mind-tree-nature")) {
-        throw new MindTreeFormatError("Nested Mind Tree settings are no longer supported.");
-      }
-      const decoded = asRecord(decodeCompressedPayload(currentData[1]));
-      if (!decoded) throw new MindTreeFormatError("The compressed Mind Tree data must contain a JSON object.");
-      const defaultSettings = createDefaultDocumentSettings(
-        options.defaultTheme,
-        options.defaultLayoutMode,
-        options.defaultNodeShape,
-        options.defaultCollectionMode,
-        options.defaultConnectionStyle
-      );
-      let migrated;
-      try {
-        migrated = mindTreeMigrationFactory.migrate(root, decoded);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        throw new MindTreeFormatError(`Mind Tree schema migration failed: ${message}`);
-      }
-      const migratedRoot = migrated.frontmatter;
-      const normalizedSettings = normalizeDocumentSettings(migratedRoot, defaultSettings);
-      // Defaults are runtime fallbacks, not permission to recreate deleted YAML.
-      defaultedDocumentSettings = documentSettingsUsedDefaults(migratedRoot, normalizedSettings);
-      if (headerDocumentId
-        && typeof migrated.machineData["documentId"] === "string"
-        && migrated.machineData["documentId"] !== headerDocumentId) {
-        throw new MindTreeFormatError("Frontmatter documentId does not match the compressed data.");
-      }
-      // Settings intentionally come only from YAML. Never trust or regenerate a
-      // settings copy in the compressed JSON payload.
-      rawDocument = {
-        ...migrated.machineData,
-        ...(headerDocumentId ? { documentId: headerDocumentId } : {}),
-        settings: normalizedSettings
-      };
-      if (migrated.migrated) migratedFromSchemaVersion = migrated.sourceVersion;
-    }
+  const header = readHeaderRegion(source);
+  const located = locateDataRegion(source);
+  // The compressed payload is the only part of the container that carries tree
+  // data, so it is the only part whose absence is a hard failure. The header and
+  // the readable outline are recoverable decorations: Obsidian rewrites links
+  // above the payload, sync clients replace the whole file, and users edit prose.
+  if (!located.ok) {
+    throw new MindTreeFormatError(located.reason === "ambiguous"
+      ? "This file contains more than one Mind Tree compressed data section."
+      : "This file does not contain a valid Mind Tree compressed data section.");
   }
-
-  if (rawDocument === undefined) {
-    throw new MindTreeFormatError("This file does not contain a valid Mind Tree compressed data section.");
+  if (header.status === "ok" && (Object.hasOwn(header.parsed, "mindTree") || Object.hasOwn(header.parsed, "mind-tree-nature"))) {
+    throw new MindTreeFormatError("Nested Mind Tree settings are no longer supported.");
   }
+  const root = header.parsed;
+  const headerDocumentId = stringValue(root["documentId"]);
+  const decoded = asRecord(decodeCompressedPayload(located.region.payload));
+  if (!decoded) throw new MindTreeFormatError("The compressed Mind Tree data must contain a JSON object.");
+  const defaultSettings = createDefaultDocumentSettings(
+    options.defaultTheme,
+    options.defaultLayoutMode,
+    options.defaultNodeShape,
+    options.defaultCollectionMode,
+    options.defaultConnectionStyle
+  );
+  let migrated;
+  try {
+    // An unreadable or missing header reads as the baseline version, exactly
+    // like a file whose schema marker was never written.
+    migrated = mindTreeMigrationFactory.migrate(root, decoded);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new MindTreeFormatError(`Mind Tree schema migration failed: ${message}`);
+  }
+  const migratedRoot = migrated.frontmatter;
+  const normalizedSettings = normalizeDocumentSettings(migratedRoot, defaultSettings);
+  // Defaults are runtime fallbacks, not permission to recreate deleted YAML.
+  const defaultedDocumentSettings = documentSettingsUsedDefaults(migratedRoot, normalizedSettings);
+  if (headerDocumentId
+    && typeof migrated.machineData["documentId"] === "string"
+    && migrated.machineData["documentId"] !== headerDocumentId) {
+    throw new MindTreeFormatError("Frontmatter documentId does not match the compressed data.");
+  }
+  // Settings intentionally come only from YAML. Never trust or regenerate a
+  // settings copy in the compressed JSON payload.
+  const rawDocument: unknown = {
+    ...migrated.machineData,
+    ...(headerDocumentId ? { documentId: headerDocumentId } : {}),
+    settings: normalizedSettings
+  };
+  const migratedFromSchemaVersion = migrated.migrated ? migrated.sourceVersion : undefined;
 
   const document = normalizeDocument(rawDocument);
-  initializeSettingsState(document, extractTreeSettings(readFrontmatter(source)));
+  initializeSettingsState(document, extractTreeSettings(root));
   const validation = validateDocument(document);
   if (!validation.valid) {
     throw new MindTreeFormatError("Mind Tree data failed structural validation.", validation.issues.map((issue) => issue.message));
@@ -145,6 +157,7 @@ export function parseMindTreeFile(source: string, options: Readonly<ParseMindTre
   return {
     document,
     source,
+    headerStatus: header.status,
     ...(migratedFromSchemaVersion !== undefined ? { migratedFromSchemaVersion } : {}),
     ...(defaultedDocumentSettings ? { defaultedDocumentSettings: true } : {})
   };
@@ -156,8 +169,18 @@ export function serializeMindTreeFile(document: MindTreeDocument, previousSource
     throw new MindTreeFormatError("Refusing to serialize an invalid Mind Tree.", validation.issues.map((issue) => issue.message));
   }
 
-  const previousFrontmatter = readFrontmatter(previousSource);
-  const preservedFrontmatter = Object.fromEntries(Object.entries(previousFrontmatter).filter(([key]) =>
+  const source = previousSource ?? "";
+  const header = readHeaderRegion(source);
+  const located = locateDataRegion(source);
+  // Two payload sections mean something else already damaged the container.
+  // Picking one would drop the other, so the file is left exactly as it is.
+  if (!located.ok && located.reason === "ambiguous") {
+    throw new MindTreeFormatError("Refusing to rewrite a file with more than one Mind Tree compressed data section.");
+  }
+  const bodyEnd = located.ok ? damagedSectionStart(source, header.end, located.region.replaceStart) : source.length;
+  const trailing = located.ok ? source.slice(located.region.replaceEnd) : "";
+
+  const preservedFrontmatter = Object.fromEntries(Object.entries(header.parsed).filter(([key]) =>
     key !== "documentId"
       && !DOCUMENT_SETTING_YAML_KEY_SET.has(key)
       && key !== "mindTree"
@@ -167,7 +190,7 @@ export function serializeMindTreeFile(document: MindTreeDocument, previousSource
   const yaml = stringifyYaml({
     ...(document.documentId ? { documentId: document.documentId } : {}),
     [MIND_TREE_SCHEMA_VERSION_YAML_KEY]: CURRENT_MIND_TREE_SCHEMA_VERSION,
-    ...(previousSource ? settingsForSerialization(document, extractTreeSettings(previousFrontmatter)) : desiredTreeSettings(document)),
+    ...(source ? settingsForSerialization(document, extractTreeSettings(header.parsed)) : desiredTreeSettings(document)),
     ...preservedFrontmatter
   }, {
     indent: 2,
@@ -175,23 +198,84 @@ export function serializeMindTreeFile(document: MindTreeDocument, previousSource
     defaultStringType: "PLAIN",
     defaultKeyType: "PLAIN"
   }).trimEnd();
+  // Owned properties are patched in place so comments, key order and Frontmatter
+  // the plugin does not own stay byte-identical. A header that cannot be patched
+  // safely falls back to regeneration; an unreadable one is never rebuilt.
+  const headerText = header.status === "unreadable"
+    ? header.text
+    : header.status === "ok"
+      ? patchYamlHeader(header.text, headerPropertyPatch(document, header.parsed)) ?? `---\n${yaml}\n---`
+      : `---\n${yaml}\n---`;
+  // Only this plugin's own regions are replaced. Prose, the preamble and the
+  // YAML header come back exactly as they were read from the disk text that
+  // Vault.process handed to this call. Both joins are normalized so that a body
+  // whose own spacing was rewritten cannot push the header delimiters apart.
+  const body = spliceOutline(source.slice(header.end, bodyEnd), renderOutline(document), document.title)
+    .replace(/^\s+/, "")
+    .replace(/\s+$/, "");
+  const dataSection = `\n\n---\n\n${DATA_NOTICE}\n\n${DATA_START}\n\`\`\`${DATA_FENCE_LANGUAGE}\n${encodeCompressedPayload(document)}\n\`\`\`\n${DATA_END}`;
+  return `${header.leading}${headerText}\n\n${body}${dataSection}${trailing.length > 0 ? trailing : "\n"}`;
+}
 
-  const previousBody = stripMachineDataSection(stripFrontmatter(previousSource)).trim();
-  const outline = renderOutline(document);
-  let body: string;
-  const startIndex = previousBody.indexOf(OUTLINE_START);
-  const endIndex = previousBody.indexOf(OUTLINE_END);
-  if (startIndex >= 0 && endIndex >= startIndex) {
-    const prefix = synchronizeGeneratedHeading(previousBody.slice(0, startIndex), document.title);
-    body = `${prefix.trimEnd()}\n\n${outline}${previousBody.slice(endIndex + OUTLINE_END.length)}`.trim();
-  } else if (previousBody.length > 0) {
-    body = `${previousBody}\n\n${outline}`;
-  } else {
-    body = `# ${escapeHeading(document.title)}\n\n${outline}`;
+/**
+ * The only YAML properties this plugin may write: its version marker, the
+ * optional link identity, and the six per-tree settings the document explicitly
+ * owns. An absent setting stays absent (it follows global defaults at runtime).
+ */
+function headerPropertyPatch(document: MindTreeDocument, parsed: Record<string, unknown>): YamlPropertyPatch {
+  const patch: YamlPropertyPatch = {
+    documentId: document.documentId ?? undefined,
+    [MIND_TREE_SCHEMA_VERSION_YAML_KEY]: CURRENT_MIND_TREE_SCHEMA_VERSION
+  };
+  const settings = settingsForSerialization(document, extractTreeSettings(parsed));
+  for (const key of TREE_SETTING_KEYS) {
+    const value = settings[key];
+    if (value === undefined) {
+      // A property that is present on disk but dropped from the serializable
+      // set was explicitly returned to "absent" (undo, or an external delete).
+      if (Object.hasOwn(parsed, key)) patch[key] = undefined;
+      continue;
+    }
+    // Only scalars can be patched positionally; a hand-edited collection value
+    // stays untouched rather than being replaced by a truncated rendering.
+    if (typeof value === "string" || typeof value === "number" || typeof value === "boolean" || value === null) {
+      patch[key] = value;
+    }
   }
-  const compressedData = encodeCompressedPayload(document);
-  const dataSection = `---\n\n${DATA_NOTICE}\n\n${DATA_START}\n\`\`\`mtn-data-gzip\n${compressedData}\n\`\`\`\n${DATA_END}`;
-  return `---\n${yaml}\n---\n\n${body.trim()}\n\n${dataSection}\n`;
+  return patch;
+}
+
+/**
+ * A payload fence that never closes above the readable section is left-over
+ * damage, not user prose. Its whole section is cut so that a save can never
+ * leave the file with two `mtn-data-gzip` blocks or a duplicate notice.
+ */
+function damagedSectionStart(source: string, from: number, regionStart: number): number {
+  const unclosed = new RegExp(`^[ \\t]{0,3}\`{3,}[ \\t]*${DATA_FENCE_LANGUAGE}[ \\t]*$`, "m");
+  const match = unclosed.exec(source.slice(from, regionStart));
+  return match ? payloadSectionStart(source, from + match.index) : regionStart;
+}
+
+/**
+ * Replace the generated outline, or recreate it once when its markers were lost.
+ * The outline is always derived from the same document as the payload, so a
+ * missing marker pair must never accumulate one more copy per save.
+ */
+function spliceOutline(bodySource: string, outline: string, title: string): string {
+  const start = bodySource.indexOf(OUTLINE_START);
+  const end = start < 0 ? -1 : bodySource.indexOf(OUTLINE_END, start + OUTLINE_START.length);
+  if (start >= 0 && end >= 0) {
+    const prefix = synchronizeGeneratedHeading(bodySource.slice(0, start), title);
+    return `${prefix.replace(/\s+$/, "")}\n\n${outline}${bodySource.slice(end + OUTLINE_END.length)}`;
+  }
+  const withoutMarkers = bodySource.split(OUTLINE_START).join("").split(OUTLINE_END).join("");
+  const heading = /^# [^\r\n]+$/m.exec(withoutMarkers);
+  if (!heading) {
+    const kept = withoutMarkers.replace(/^\s+/, "").replace(/\s+$/, "");
+    return `# ${escapeHeading(title)}\n\n${outline}${kept.length > 0 ? `\n\n${kept}` : ""}`;
+  }
+  const insertAt = heading.index + heading[0].length;
+  return `${withoutMarkers.slice(0, insertAt)}\n\n${outline}${withoutMarkers.slice(insertAt)}`;
 }
 
 /**
@@ -400,31 +484,29 @@ function encodeBase64(value: Uint8Array): string {
   return Buffer.from(value).toString("base64");
 }
 
-function readFrontmatter(source: string): Record<string, unknown> {
+/**
+ * Read the YAML header without deciding the fate of the file.
+ *
+ * `ok` means settings and identity can be trusted; `unreadable` keeps the bytes
+ * for a later save and falls back to runtime defaults; `missing` is a file that
+ * never had Frontmatter (or lost it), which a save may recreate.
+ */
+function readHeaderRegion(source: string): HeaderRegion {
   const match = FRONTMATTER_PATTERN.exec(source);
-  if (!match) return {};
-  return asRecord(parseYaml(match[1] ?? "")) ?? {};
-}
-
-function stripFrontmatter(source: string): string {
-  return source.replace(FRONTMATTER_PATTERN, "");
-}
-
-function stripMachineDataSection(source: string): string {
-  const startIndex = source.indexOf(DATA_START);
-  if (startIndex < 0) return source;
-  const endIndex = source.indexOf(DATA_END, startIndex);
-  if (endIndex < 0) return source;
-
-  let sectionStart = startIndex;
-  const noticeIndex = source.lastIndexOf(DATA_NOTICE, startIndex);
-  if (noticeIndex >= 0 && source.slice(noticeIndex + DATA_NOTICE.length, startIndex).trim() === "") {
-    sectionStart = noticeIndex;
-    const beforeNotice = source.slice(0, noticeIndex);
-    const separatorMatch = /(?:^|\r?\n)---\s*\r?\n\s*$/.exec(beforeNotice);
-    if (separatorMatch?.index !== undefined) sectionStart = separatorMatch.index;
+  if (!match) return { status: "missing", leading: "", text: "", start: 0, end: 0, parsed: {} };
+  const leading = `${match[1] ?? ""}${match[2] ?? ""}`;
+  const start = leading.length;
+  const text = match[3] ?? "";
+  let parsed: Record<string, unknown> = {};
+  let status: MindTreeHeaderStatus = "ok";
+  try {
+    const value = asRecord(parseYaml(match[4] ?? ""));
+    if (value) parsed = value;
+    else status = "unreadable";
+  } catch {
+    status = "unreadable";
   }
-  return `${source.slice(0, sectionStart)}${source.slice(endIndex + DATA_END.length)}`;
+  return { status, leading, text, start, end: start + text.length, parsed };
 }
 
 function requiredString(record: Record<string, unknown>, key: string): string {

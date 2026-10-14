@@ -58,8 +58,8 @@
 ```
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
-├── src/                        源码（146 个 .ts，唯一的开发区域）
-├── test/                       单元测试（77 个 *.test.ts + test/helpers/）
+├── src/                        源码（166 个 .ts，唯一的开发区域）
+├── test/                       单元测试（90 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -97,10 +97,10 @@ src/
 ├── numeric.ts                 clamp（唯一实现）
 ├── lru-cache.ts               evictOldest（唯一淘汰实现）
 ├── domain/      (9)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts、custom-markers.ts、url.ts、node-link.ts（单向节点关联）、branch-reference.ts（跨文件分支引用）
-├── format/      (6)  .mtn.md 格式：document.ts、outline.ts、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts
+├── format/      (8)  .mtn.md 格式：document.ts、outline.ts、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts、regions.ts（数据区/大纲区定位，内容索引、与行号无关）、yaml-patch.ts（只补丁插件拥有的 YAML 键，注释与键序逐字节保留）
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
 ├── render/      (9)  ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、color、inline-math
-├── services/   (23)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析等；updates/ 另有 7 个自更新文件
+├── services/   (25)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线
 └── ui/         (21)  视图与全部 DOM/SVG：
     ├── components/     (14) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、笔记内嵌分支视图、ui-object 基类
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
@@ -268,7 +268,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，77 个文件，787 个用例）+ `test/helpers/`（1 个共享桩）。
+- 位置：`test/*.test.ts`（**平铺**，90 个文件，911 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -430,6 +430,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 9. **设计文档名与代码名不同**（见 §3.3）：按概念名 grep 是找不到的，先换算再检索。
 10. **`docs/memory.md` 是记忆位，不是产品文档**：追加简短结论、落点、未完成事项与环境坑，不要塞大段代码或临时调试输出；它已经记录了本沙箱下跑测试的替代命令，遇到 `spawn EPERM` 先看它。
 11. **笔记内嵌只读视图只能复用、不能反向依赖**：`src/ui/components/mind-tree-reference-embed.ts` 与 `read-only-tree-preview.ts` 不得 import `MindTreeView` 或插件主类，仓库能力一律走注入端口；解析结果、折叠与视口都不写回 `.mtn.md`。给只读预览新增选项时，默认值必须让版本对比与主题悬浮预览行为不变——`test/version-preview.test.ts` 直接断言了 `readOnly: true` 与适配块 `if (!this.fitted && width > 0 && height > 0)` 的字面量。
+12. **`.mtn.md` 的读写契约只以机器数据区为准**（2026-10-15 重构，落点见 `docs/memory.md`）：`format/regions.ts` 按内容定位数据区（与行号无关，0 个 = 报错、≥2 个 = 拒绝改写），`format/yaml-patch.ts` 只补丁插件拥有的 YAML 键，`services/stable-source-read.ts` 要求读取前后 `ctime:mtime:size` 不变才采信字节。**改 `serializeMindTreeFile()` 时最危险的坑是 header 与 body 的接缝**：必须归一到 `\n\n`，少一个空行会让关闭的 `---` 与正文粘成 `---# 标题`，文件头随即变成 `unreadable`（表现为多条既有测试同时变红，很容易误判成"环境问题"）。另外**不要**在保存路径上重新引入"重建整段文件头"或"标记缺失就返回原文"的写法——后者会让文件里出现两个数据区，之后每次读回的都是旧数据。
+13. **并发会话共享工作区**：本仓库会被多个 session/agent 同时改（2026-10-15 就与 MCP 任务并行）。开工先 `git status`；`npm run check` / 全量测试的基线可能因对方正在写而暂时为红，**判定自己的回归前先看哪些文件正在被改、并单独重跑相关测试**。`edit` 的 `ReplaceFileW EIO (Win32 1175)` 原样重试即成功。
 
 ---
 
