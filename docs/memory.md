@@ -594,6 +594,18 @@
 
 **留给下一任**：创建关联现在只有一条路径（复制分支引用 → 粘到它所属的树），不要再加回选择窗口或工具栏按钮——`AGENTS.md` §12 第 14 条与上述测试会拦住。用户曾明确讨论“跨文件关联”但选择了“只支持同一棵树”；将来若要做，需要把 `nodeLink` 从“只存节点 id”扩展为“树身份 + 节点 id”，并同步大纲链接域、尾部渲染与旧数据兼容。
 
+## 2026-10-17 · 紧凑布局向左时一级节点被钉到叶子列（`fix`）
+
+**问题（用户截图）**：节点对齐 = 紧凑时，向右布局正常；向左（`left`，以及 `balanced` 的左半边）时，除最下方（最长）分支外，上方的一级节点被摆到画布最左侧，和最深叶子挤在同一列，并且拖出一条横跨整张画布的连线。
+
+**根因**：`src/render/layout.ts` 的紧凑左布局是**自叶子向上求解**的——`applyCompactLeft()` 与 `balanced` 分支里的 `placeLeftChildren()` 都把「没有子节点的节点」定为 `x = 0`，再让父节点贴在自己子树的右缘。锚点是叶子而不是根，所以**无子节点的一级节点直接落到最左列**，其余一级节点按各自最深路径错开。紧凑右布局（`applyRightColumns`）恰好相反：它自根向下锚定，同级节点天然成列——两侧原本不对称。
+
+**修复**：左布局改成右布局的镜像——自根/分支一级节点向下放置，`child.x = parent.x - gap - child.width`（gap：一级 45、更深 32），放置完再整体平移到 `min(x) = 0`（新增 `shiftIntoPositiveX()`，`shiftIntoPositiveCoordinates()` 复用它）。`balanced` 左半边先用「虚拟根 x = 0」放置，再用 `leftMinimumX` 反推 `rootPosition.x`；右侧逻辑与根坐标不变。
+
+**回归测试**：`test/layout.test.ts` 新增「compact left placement anchors first-level nodes to the root column, not the leaves」：`left` 与 `balanced` 下所有一级节点共享一列（左：右缘 = 根左缘 − 45；右：左缘 = 根右缘 + 45），无子节点的一级节点不再落在 `x = 0`，父子间距 32，且所有节点不越界。
+
+**验证**：`npm run check` 0 错误；`npm test` **1018 / 1018 / 0 fail**（新加 1 条）；临时可视化 `.layout-before-after.png`（可删）。
+
 
 
 

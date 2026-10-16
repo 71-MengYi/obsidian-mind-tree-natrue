@@ -432,6 +432,47 @@ test("source-derived layout rules use compact gaps and right-first weighted bala
   assert.ok(radialFirst.y + radialFirst.height / 2 > radialRoot.y + radialRoot.height / 2);
 });
 
+test("compact left placement anchors first-level nodes to the root column, not the leaves", () => {
+  const document = createEmptyDocument("Root");
+  const deep = addNode(document, document.rootId, "Deep branch");
+  let leaf = deep;
+  for (let depth = 0; depth < 4; depth += 1) leaf = addNode(document, leaf.id, `Deep ${depth}`);
+  const shallow = addNode(document, document.rootId, "Shallow branch");
+  const shallowChild = addNode(document, shallow.id, "Shallow child");
+  const bare = addNode(document, document.rootId, "Childless branch");
+
+  // Every left-growing branch shares one first-level column one root gap from the
+  // root, including a first-level node with no children of its own. Anchoring the
+  // compact left layout at the leaves instead pinned that node to the far-left
+  // column and stretched a canvas-wide connector back to the root.
+  const leftOnly = layoutTree(document, document.rootId, true, 200, "left", "compact");
+  const leftRoot = leftOnly.nodes.find((node) => node.id === document.rootId)!;
+  const leftAnchors = new Set(leftOnly.nodes.filter((node) => node.depth === 1).map((node) => node.x + node.width));
+  assert.deepEqual([...leftAnchors], [leftRoot.x - 45]);
+  const bareAnchor = leftOnly.nodes.find((node) => node.id === bare.id)!;
+  assert.equal(bareAnchor.x + bareAnchor.width, leftRoot.x - 45);
+  assert.equal(leftOnly.nodes.find((node) => node.id === leaf.id)!.x, 0);
+  assert.ok(bareAnchor.x > 0);
+  const shallowPosition = leftOnly.nodes.find((node) => node.id === shallow.id)!;
+  const shallowChildPosition = leftOnly.nodes.find((node) => node.id === shallowChild.id)!;
+  assert.equal(shallowChildPosition.x + shallowChildPosition.width, shallowPosition.x - 32);
+  assert.ok(leftOnly.nodes.every((node) => node.x >= 0));
+  assert.ok(leftOnly.nodes.every((node) => node.x + node.width <= leftOnly.width));
+
+  // Balanced trees mirror the same rule on both sides.
+  const balanced = layoutTree(document, document.rootId, true, 200, "balanced", "compact");
+  const balancedRoot = balanced.nodes.find((node) => node.id === document.rootId)!;
+  const firstLevel = balanced.nodes.filter((node) => node.depth === 1);
+  const leftAnchorsBalanced = new Set(
+    firstLevel.filter((node) => node.x + node.width < balancedRoot.x).map((node) => node.x + node.width));
+  const rightAnchors = new Set(
+    firstLevel.filter((node) => node.x > balancedRoot.x).map((node) => node.x));
+  assert.deepEqual([...leftAnchorsBalanced], [balancedRoot.x - 45]);
+  assert.deepEqual([...rightAnchors], [balancedRoot.x + balancedRoot.width + 45]);
+  assert.ok(balanced.nodes.every((node) => node.x >= 0));
+  assert.ok(balanced.nodes.every((node) => node.x + node.width <= balanced.width));
+});
+
 test("all layouts return whole-pixel node anchors", () => {
   const document = createEmptyDocument("Root");
   const first = addNode(document, document.rootId, "A title with varying width");

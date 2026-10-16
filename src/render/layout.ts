@@ -405,28 +405,28 @@ export function layoutTree(
   };
 
   /**
-   * Compact left layout is solved from leaves toward the root. A node's own
-   * trailing width never participates in its x coordinate; it only pushes its
-   * ancestors right far enough to keep the requested parent/child gap.
+   * Compact left layout mirrors compact right layout: the start node is the
+   * anchor and every child keeps one gap between its own right edge and its
+   * parent's left edge. Solving it from the leaves instead pinned childless
+   * first-level nodes onto the far-left leaf column, so those branches grew a
+   * long connector back to the root while their siblings stayed adjacent.
    */
   const applyCompactLeft = (nodes: PositionedNode[], connections: LayoutConnection[], rootId: NodeId): number => {
     const nodeById = new Map(nodes.map((node) => [node.id, node]));
     const childrenById = collectConnectionChildren(connections);
-    const placeBranch = (id: NodeId): void => {
+    const placeBranch = (id: NodeId, x: number): void => {
       const node = nodeById.get(id);
       if (!node) return;
-      const childIds = childrenById.get(id) ?? [];
-      let rightmostChildEdge = 0;
-      for (const childId of childIds) {
-        placeBranch(childId);
+      node.x = x;
+      for (const childId of childrenById.get(id) ?? []) {
         const child = nodeById.get(childId);
-        if (child) rightmostChildEdge = Math.max(rightmostChildEdge, child.x + child.width);
+        if (!child) continue;
+        const gap = id === rootId ? ROOT_HORIZONTAL_GAP : HORIZONTAL_GAP;
+        placeBranch(childId, x - gap - child.width);
       }
-      node.x = childIds.length === 0
-        ? 0
-        : rightmostChildEdge + (id === rootId ? ROOT_HORIZONTAL_GAP : HORIZONTAL_GAP);
     };
-    placeBranch(rootId);
+    placeBranch(rootId, 0);
+    shiftIntoPositiveX(nodes);
     return nodes.reduce((maximum, node) => Math.max(maximum, node.x + node.width), 1);
   };
 
@@ -694,24 +694,37 @@ export function layoutTree(
           placeRightChildren(childId);
         }
       };
-      const placeLeftChildren = (id: NodeId): void => {
+      // Mirror placeRightChildren: a left child keeps one gap between its own
+      // right edge and its parent's left edge. Placing left branches from the
+      // leaves instead pinned childless first-level nodes to the far-left leaf
+      // column and left their siblings staggered across the canvas.
+      const placeLeftChildren = (id: NodeId, x: number): void => {
         const node = nodeById.get(id);
         if (!node) return;
-        const childIds = (childrenById.get(id) ?? []).filter((childId) => sideById.get(childId) === "left");
-        let rightmostChildEdge = 0;
-        for (const childId of childIds) {
-          placeLeftChildren(childId);
+        node.x = x;
+        for (const childId of childrenById.get(id) ?? []) {
+          if (sideById.get(childId) !== "left") continue;
           const child = nodeById.get(childId);
-          if (child) rightmostChildEdge = Math.max(rightmostChildEdge, child.x + child.width);
+          if (!child) continue;
+          const gap = id === startId ? ROOT_HORIZONTAL_GAP : HORIZONTAL_GAP;
+          placeLeftChildren(childId, x - gap - child.width);
         }
-        if (id !== startId) node.x = childIds.length === 0 ? 0 : rightmostChildEdge + HORIZONTAL_GAP;
       };
-      for (const branch of left) placeLeftChildren(branch.root.id);
-      const leftExtent = left.reduce(
-        (maximum, branch) => Math.max(maximum, branch.root.x + branch.root.width),
-        0
-      );
-      rootPosition.x = left.length > 0 ? leftExtent + ROOT_HORIZONTAL_GAP : 0;
+      // The left side grows toward negative x, so it is placed against a
+      // virtual root at 0 and shifted onto the origin once its extent is known.
+      for (const branch of left) {
+        placeLeftChildren(branch.root.id, -ROOT_HORIZONTAL_GAP - branch.root.width);
+      }
+      let leftMinimumX = 0;
+      for (const node of nodes) {
+        if (sideById.get(node.id) === "left") leftMinimumX = Math.min(leftMinimumX, node.x);
+      }
+      rootPosition.x = left.length > 0 ? -leftMinimumX : 0;
+      if (rootPosition.x !== 0) {
+        for (const node of nodes) {
+          if (sideById.get(node.id) === "left") node.x += rootPosition.x;
+        }
+      }
       for (const branch of right) {
         branch.root.x = rootPosition.x + rootPosition.width + ROOT_HORIZONTAL_GAP;
         placeRightChildren(branch.root.id);
@@ -768,17 +781,19 @@ function maximumMapKey(values: Map<number, number>): number {
   return result;
 }
 
-function shiftIntoPositiveCoordinates(nodes: PositionedNode[]): void {
+/** Move a left-growing placement, which extends toward negative x, to the origin. */
+function shiftIntoPositiveX(nodes: PositionedNode[]): void {
   let minimumX = 0;
+  for (const node of nodes) minimumX = Math.min(minimumX, node.x);
+  if (minimumX === 0) return;
+  for (const node of nodes) node.x -= minimumX;
+}
+
+function shiftIntoPositiveCoordinates(nodes: PositionedNode[]): void {
+  shiftIntoPositiveX(nodes);
   let minimumY = 0;
-  for (const node of nodes) {
-    minimumX = Math.min(minimumX, node.x);
-    minimumY = Math.min(minimumY, node.y);
-  }
-  for (const node of nodes) {
-    node.x -= minimumX;
-    node.y -= minimumY;
-  }
+  for (const node of nodes) minimumY = Math.min(minimumY, node.y);
+  for (const node of nodes) node.y -= minimumY;
 }
 
 interface ConnectionPoint {
