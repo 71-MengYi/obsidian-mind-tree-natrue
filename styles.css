@@ -1875,7 +1875,6 @@
  */
 .mtn-settings-ai-port-error[hidden],
 .mtn-settings-ai-config[hidden],
-.mtn-settings-ai-config-text[hidden],
 .mtn-settings-ai-notice[hidden] {
   display: none;
 }
@@ -1884,16 +1883,7 @@
   margin-top: 18px;
 }
 
-/* The client config is JSON, so it is read with a monospace face at full width. */
-.mtn-settings-ai-config-text {
-  width: 100%;
-  min-height: 9em;
-  font-family: var(--font-monospace);
-  font-size: var(--font-ui-smaller);
-  resize: vertical;
-}
-
-/* The warning is about the token in the field above it, so it sits after it. */
+/* The warning is about the tokens the copy button carries, so it sits after it. */
 .mtn-settings-ai-secret-warning {
   margin-top: 8px;
 }

@@ -59,7 +59,6 @@ export class AiSettingsPage implements SettingsPageObject {
   private enableToggle?: ToggleLike;
   private writeToggle?: ToggleLike;
   private readonly servers: Record<McpServerGroup, ServerControls>;
-  private configText?: HTMLTextAreaElement;
   private readonly configSection: HTMLElement;
   private readonly copyFeedback: HTMLElement;
   private readonly notice: HTMLElement;
@@ -103,22 +102,20 @@ export class AiSettingsPage implements SettingsPageObject {
 
     this.configSection = parent.createDiv({ cls: "mtn-settings-ai-config" });
     this.configSection.createEl("h4", { text: t("settings.ai.mcp.config.heading") });
-    // The manual-copy hint points at the text below it, so it sits above the field.
+    // Copy feedback sits directly under the heading, above the button it reports on.
     this.copyFeedback = this.configSection.createDiv({
       cls: "mtn-settings-ai-copy-feedback",
       attr: { role: "status", "aria-live": "polite" }
     });
+    /*
+     * No readonly textarea. The JSON used to be rendered so a failed automatic
+     * copy had a manual path, but in Obsidian's settings control column the field
+     * was squeezed to a sliver and the button beside it is what people actually
+     * use. The clipboard write itself now falls back (`copyText`), so dropping the
+     * field removes a broken affordance without removing a way to copy.
+     */
     new Setting(this.configSection)
       .setDesc(t("settings.ai.mcp.config.desc", { clients: t("settings.ai.mcp.config.clients") }))
-      .addTextArea((area) => {
-        this.configText = area.inputEl;
-        // The JSON carries the access tokens: a stray keystroke must not be able
-        // to corrupt the credentials the client is about to paste.
-        area.inputEl.readOnly = true;
-        area.inputEl.addClass("mtn-settings-ai-config-text");
-        area.inputEl.setAttribute("aria-label", t("settings.ai.mcp.config.heading"));
-        area.inputEl.setAttribute("spellcheck", "false");
-      })
       .addButton((button) => {
         button.setButtonText(t("settings.ai.mcp.config.copy"));
         button.buttonEl.addClass("mtn-settings-ai-copy");
@@ -236,9 +233,8 @@ export class AiSettingsPage implements SettingsPageObject {
     this.setStatus("read", model.read.status.text, model.read.status.kind);
     this.setStatus("write", model.write.status.text, model.write.status.kind);
     // A state the host cannot serve has no token to hand out, so the whole
-    // client-config block is withdrawn rather than shown with an empty field.
+    // client-config block is withdrawn rather than shown with a dead button.
     this.configSection.hidden = !model.config.visible;
-    if (this.configText) this.configText.value = model.config.text;
     this.notice.hidden = model.supported;
   }
 
@@ -325,9 +321,8 @@ export class AiSettingsPage implements SettingsPageObject {
       copied = false;
     }
     if (!copied) {
-      // A failed automatic copy is exactly the moment the manual path has to be
-      // available, so the readonly field is revealed and named by the hint.
-      if (this.configText) this.configText.hidden = false;
+      // With no field to fall back on, the message has to stand alone: it names
+      // the likely cause instead of pointing at text that is no longer there.
       this.setCopyFeedback(t("settings.ai.mcp.config.copyFailed"));
       return;
     }

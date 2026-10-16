@@ -563,6 +563,19 @@
 - 若用户把两个端口填成同一个值，后启动的那个会回退到邻近端口（状态行显示实际地址）。这是可接受的降级，但没有在 UI 上专门提示「两个端口撞了」。
 - `mcp-tree-locator` / `mcp-tree-reader` / `tree-creation` / `resource-index-service` / `search-panel` 这 5 个文件仍用 `module.registerHooks`（需 Node ≥ 22.15，而项目钉 ≥ 20）。本轮 `mcp-session-writer` 已改成 `module.register`（Node ≥ 20.6），其余 5 个仍待清理。
 
+**同日追加：去掉配置 JSON 的只读文本框（用户反馈，`feat`）**
+
+用户反馈「复制 JSON 的文本框宽度太小了，快被挤没了；没必要留文本框，只保留复制按钮即可」。原因是 Obsidian 设置页的**控件列**本身很窄（`Setting.controlEl`），一个 `width: 100%` 的 textarea 挤在里面只剩一条。
+
+**改动**：删除 `ai-settings-page.ts` 里的 `addTextArea` 与 `configText` 字段、`applyModel` 里的回填、以及失败时「露出文本框」的分支；删除 `styles.css` 的 `.mtn-settings-ai-config-text` 与它那条 `[hidden]` 规则；`settings.ai.mcp.config.copyFailed` 的措辞改成不指向「下方文本」（原文案是「请选中下方文本手动复制」，文本框没了就成了误导）。
+
+**关键取舍：移除文本框就移除了唯一的手动兜底，所以把复制本身做成两条路径**。`main.ts` 新增模块级 `copyToClipboard(text)`：先 `navigator.clipboard.writeText`（需要焦点与安全上下文，桌面端可能 reject），失败时回退 `copyViaTemporarySelection()`——**临时离屏 textarea + `execCommand("copy")`，用完立即 `remove()`，用户看不到该元素**（注意必须离屏而不是 `display:none`：隐藏节点无法被 `select()`）。这样「把凭据渲染到界面上」这件事彻底没有了，而复制途径反而比原来更稳。
+
+**测试**：`test/ai-settings-page.test.ts` 从 20 条改为 21 条。删掉文本框相关断言，改为两条更强的：① 配置区块里 `querySelectorAll("textarea")` 必须为 0，且渲染文本中**不得出现**服务器键名、`Bearer` 或任一令牌——即「凭据只作为剪贴板内容存在」这条性质被钉住；② 按钮交给剪贴板的内容仍等于模型产出的两服务器 JSON（用 `h.copied` 断言，覆盖「只开只读」「总开关关闭时为空对象」两种情形）。失败路径测试改为断言说明文案自洽（不含「下方/below」）且仍无 textarea。**注意 `TestTextArea`/`addTextArea` 这个桩要保留**：它是上面那条「没有 textarea」断言能成立的前提（页面若重新用上 `addTextArea`，桩就会真的生成一个 `textarea` 元素）。
+
+**验证**：`npm run check` 0 错误；`npm test` **1011 / 1011 / 0 fail**；`npm run build` exit 0，`main.js` 4.54 MiB。
+
+
 
 
 

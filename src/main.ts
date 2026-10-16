@@ -1153,15 +1153,7 @@ export default class MindTreeNaturePlugin extends Plugin {
         await this.stopMcpServer("write");
         await this.stopMcpServer("read");
       },
-      copyText: async (text) => {
-        try {
-          await navigator.clipboard.writeText(text);
-          return true;
-        } catch {
-          // The page then reveals the read-only textarea instead of failing.
-          return false;
-        }
-      }
+      copyText: (text) => copyToClipboard(text)
     };
   }
 
@@ -1198,5 +1190,46 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.cacheSaveTimer = undefined;
       this.resourceCache.save(this.resources.entries());
     }, 500);
+  }
+}
+
+/**
+ * Put text on the system clipboard, reporting whether it worked.
+ *
+ * Two strategies on purpose. `navigator.clipboard` needs a focused document in a
+ * secure context and can reject in a desktop app; the deprecated
+ * `execCommand("copy")` path is the only fallback available then, and it needs a
+ * real selected node. The temporary field is therefore positioned off-screen and
+ * removed again — the user never sees it, which is exactly why the settings page
+ * no longer needs to render a permanent copy of the credentials.
+ */
+async function copyToClipboard(text: string): Promise<boolean> {
+  try {
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return copyViaTemporarySelection(text);
+  }
+}
+
+function copyViaTemporarySelection(text: string): boolean {
+  const container = document.body;
+  if (!container) return false;
+  const field = document.createElement("textarea");
+  field.value = text;
+  field.setAttribute("readonly", "");
+  // Off-screen rather than `display: none`: a hidden node cannot be selected.
+  field.setAttribute("aria-hidden", "true");
+  field.style.position = "fixed";
+  field.style.top = "0";
+  field.style.left = "-9999px";
+  container.appendChild(field);
+  try {
+    field.select();
+    return typeof document.execCommand === "function" && document.execCommand("copy");
+  } catch {
+    return false;
+  } finally {
+    field.remove();
   }
 }

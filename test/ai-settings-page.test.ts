@@ -308,7 +308,6 @@ interface Harness {
   portField(server: McpServerGroup): TestElement;
   portError(server: McpServerGroup): TestElement;
   configSection(): TestElement;
-  configText(): TestElement;
   copyButton(): TestElement;
   copyFeedback(): TestElement;
   secretWarning(): TestElement;
@@ -490,11 +489,6 @@ function fixture(options: HarnessOptions = {}): Harness {
     enableToggle: () => at(at(sandbox.settings, 0, "enable Setting").toggles, 0, "enable toggle").toggleEl,
     writeToggle: () => at(at(sandbox.settings, 2, "write enable Setting").toggles, 0, "write toggle").toggleEl,
     configSection: () => only("mtn-settings-ai-config"),
-    configText: () => {
-      const area = at(sandbox.settings, 4, "config Setting").textAreas[0]?.inputEl;
-      assert.ok(area, "the config Setting needs a textarea");
-      return area;
-    },
     copyButton: () => at(at(sandbox.settings, 4, "config Setting").buttons, 0, "copy button").buttonEl,
     copyFeedback: () => only("mtn-settings-ai-copy-feedback"),
     secretWarning: () => only("mtn-settings-ai-secret-warning"),
@@ -585,8 +579,9 @@ test("lays the section out as master, read, write, config and token warning, in 
   assert.ok(h.indexOf(readBlock) < h.indexOf(writeBlock), "the read server comes before the write server");
   assert.ok(h.indexOf(writeBlock) < h.indexOf(config), "the servers come before the client config");
   assert.ok(h.indexOf(config) < h.indexOf(warning), "the client config comes before the token warning");
-  assert.ok(h.indexOf(h.copyFeedback()) < h.indexOf(h.configText()), "the manual hint names the field below it");
-  assert.ok(h.indexOf(h.configText()) < h.indexOf(h.copyButton()), "the textarea comes before the button that copies it");
+  // The block is a heading, the feedback line and the button that copies — there
+  // is deliberately no field rendering the credentials back to the user.
+  assert.ok(h.indexOf(h.copyFeedback()) < h.indexOf(h.copyButton()), "the feedback sits above the button it reports on");
 
   // Inside the read block: heading, scope, port, status.
   assert.ok(h.indexOf(h.serverHeading("read")) < h.indexOf(h.serverScope("read")));
@@ -726,31 +721,53 @@ test("a platform without MCP support disables every control, hides the config an
   assert.equal(supported.configSection().hidden, false);
 });
 
-test("the config textarea is readonly and holds the model's two-server JSON", () => {
+test("the client config block offers only a copy button, never the credentials", () => {
   const h = fixture({
     enabled: true, writeEnabled: true,
     readPort: 27321, writePort: 27322, readToken: READ_TOKEN, writeToken: WRITE_TOKEN
   });
 
-  assert.equal(h.configText().readOnly, true, "the credentials must not be editable by hand");
-  assert.equal(h.configText().value, expectedConfig([
-    { group: "read", port: 27321, token: READ_TOKEN },
-    { group: "write", port: 27322, token: WRITE_TOKEN }
-  ]));
-  assert.match(h.configText().value, /"mind-tree-nature-read"/);
-  assert.match(h.configText().value, /"mind-tree-nature-write"/);
-  assert.equal(h.configText().getAttribute("aria-label"), translate("settings.ai.mcp.config.heading", "en"));
+  // The credentials exist only as what the button hands to the clipboard. A
+  // readonly textarea used to sit here, but Obsidian's settings control column
+  // squeezed it to a sliver, so the block no longer renders the tokens at all.
+  assert.equal(h.configSection().querySelectorAll("textarea").length, 0,
+    "the block must not render the credentials");
+  const rendered = h.configSection().text;
+  assert.doesNotMatch(rendered, /mind-tree-nature-(read|write)/, "no server key may be shown");
+  assert.doesNotMatch(rendered, /Bearer/, "no authorization header may be shown");
+  assert.equal(rendered.includes(READ_TOKEN), false, "the read token must not be rendered");
+  assert.equal(rendered.includes(WRITE_TOKEN), false, "the write token must not be rendered");
   assert.equal(h.copyButton().text, translate("settings.ai.mcp.config.copy", "en"));
 });
 
-test("the copied configuration only advertises a server that is meant to listen", () => {
+test("what the button copies is the model's two-server JSON", async () => {
+  const h = fixture({
+    enabled: true, writeEnabled: true,
+    readPort: 27321, writePort: 27322, readToken: READ_TOKEN, writeToken: WRITE_TOKEN
+  });
+  h.copy();
+  await settle();
+
+  assert.deepEqual(h.copied, [expectedConfig([
+    { group: "read", port: 27321, token: READ_TOKEN },
+    { group: "write", port: 27322, token: WRITE_TOKEN }
+  ])]);
+  assert.match(h.copied[0] ?? "", /"mind-tree-nature-read"/);
+  assert.match(h.copied[0] ?? "", /"mind-tree-nature-write"/);
+});
+
+test("the copied configuration only advertises a server that is meant to listen", async () => {
   const readOnly = fixture({ enabled: true, writeEnabled: false });
-  assert.equal(readOnly.configText().value, expectedConfig([
+  readOnly.copy();
+  await settle();
+  assert.deepEqual(readOnly.copied, [expectedConfig([
     { group: "read", port: DEFAULT_SETTINGS.mcpReadPort, token: READ_TOKEN }
-  ]));
+  ])]);
 
   const stopped = fixture({ enabled: false, writeEnabled: true });
-  assert.deepEqual(JSON.parse(stopped.configText().value), { mcpServers: {} },
+  stopped.copy();
+  await settle();
+  assert.deepEqual(JSON.parse(stopped.copied[0] ?? ""), { mcpServers: {} },
     "a plugin that is switched off advertises nothing");
 });
 
@@ -773,14 +790,16 @@ test("copying sends the model JSON and confirms once the clipboard accepted it",
   assert.equal(h.timers.size, 0);
 });
 
-test("a failed automatic copy reveals the readonly textarea and shows the manual hint", async () => {
+test("a failed copy reports the cause and offers no dead field", async () => {
   const h = fixture({ enabled: true, copySucceeds: false });
   h.copy();
   await settle();
 
   assert.equal(h.copyFeedback().text, translate("settings.ai.mcp.config.copyFailed", "en"));
-  assert.equal(h.configText().hidden, false, "the text the hint points at must be visible");
-  assert.equal(h.configText().readOnly, true);
+  // With the field gone the message must stand alone, so it names the cause
+  // rather than pointing at text that is not rendered anywhere.
+  assert.doesNotMatch(h.copyFeedback().text, /below|下方/);
+  assert.equal(h.configSection().querySelectorAll("textarea").length, 0);
 });
 
 test("destroy clears the pending copy timer", async () => {
