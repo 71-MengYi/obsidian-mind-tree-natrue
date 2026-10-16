@@ -1,6 +1,6 @@
 /** Stable semantic order used by the command-style top toolbar renderer. */
 export const TOP_TOOLBAR_ORDER = [
-  "expand-all", "collapse-all", "collapse-level", "markers", "link-node",
+  "expand-all", "collapse-all", "collapse-level", "markers",
   "fit", "zoom-out", "zoom", "zoom-in", "search",
   "copy", "import", "export"
 ] as const;
@@ -78,8 +78,11 @@ export function guardNodeMenuAction(isCurrent: () => boolean, action: () => void
 /** Pure menu description used by tests and the visual menu composer. */
 export function nodeMenuItemOrder(state: NodeMenuContractState): NodeMenuEntryId[] {
   const items: NodeMenuEntryId[] = [...nodeResourceMenuItemOrder(state)];
-  // The node link sits directly under the marker entry in every menu surface.
-  items.push("markers", "node-link", "add-child");
+  items.push("markers");
+  // Creating a node link moved to "copy branch reference → paste"; the menu keeps
+  // only the removal row, and only for a node that already takes part in a link.
+  if (state.nodeLinked) items.push("node-link");
+  items.push("add-child");
   if (!state.isRoot) items.push("add-sibling");
   if (state.hasChildren) items.push("toggle-collapse", "expand-all", "collapse-all");
   if (!state.isRoot) items.push("delete-branch", "delete-node-only");

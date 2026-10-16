@@ -58,15 +58,15 @@
 ```
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
-├── src/                        源码（166 个 .ts，唯一的开发区域）
-├── test/                       单元测试（92 个 *.test.ts + test/helpers/）
+├── src/                        源码（168 个 .ts，唯一的开发区域）
+├── test/                       单元测试（93 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
 │   ├── workflows/ci.yml        每次 push/PR：check + build + 产物校验
 │   ├── workflows/release.yml   推 X.Y.Z 标签：构建并发布 Release
 │   └── scripts/                check-runs.mjs、verify-release.mjs（手工运维脚本）
-├── styles.css                  ★ 全插件唯一样式表（68 KB，被 test/styles.test.ts 静态断言）
+├── styles.css                  ★ 全插件唯一样式表（71 KB，被 test/styles.test.ts 静态断言）
 ├── manifest.json               ★ 插件元数据与**发布版本号**
 ├── versions.json               版本 → Obsidian 最低版本映射（提交社区目录用）
 ├── package.json               脚本与依赖（scripts: build/dev/check/test）
@@ -85,7 +85,7 @@ mind-tree-nature/
 
 ```
 src/
-├── main.ts                    插件入口：注册视图/命令/设置页/文件事件，编排各服务（890 行）
+├── main.ts                    插件入口：注册视图/命令/设置页/文件事件，编排各服务（1235 行）
 ├── types.ts                   ★ 领域模型类型（MindTreeDocument、MindTreeNode、ResourceRef、NodeMarker…）
 ├── settings-model.ts          全局设置模型与默认值（DEFAULT_SETTINGS）+ createParseOptions
 ├── settings.ts                设置页 MindTreeSettingTab（分区表驱动）
@@ -106,7 +106,7 @@ src/
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
     ├── renderers/       (4) node-renderer、connection-renderer、node-render-model
     ├── menus/           (8) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览、复制/导出菜单描述、嵌套菜单能力探测
-    ├── modals/         (11) 新建/删除/移动/导入/文件建议/节点关联选择/更新提示等对话框
+    ├── modals/         (10) 新建/删除/移动/导入/文件建议/更新提示等对话框（节点关联选择窗口已删除）
     ├── settings-pages/  (7) 基础设置、思维导图、主题笔记、插件更新分区、管理标记
     └── search/          (3) 搜索核心（search-core）、右侧搜索面板、搜索载荷
 ```
@@ -142,7 +142,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
 | `MindTreeNaturePlugin` | `src/main.ts` | 注册视图/命令/设置页/文件事件，持有各服务，编排冲突清理与更新流程 |
-| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3915 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
+| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3989 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
 | `MindTreeViewShell` / `CanvasShell` / `ViewMenuBar` / `TopToolbar` / `BottomStatusBar` / `StatusIndicator` | `src/ui/components/*` | 视图外壳、画布宿主、左上菜单栏、顶部工具栏、左下状态栏、状态提示层 |
 | `DisposableUiObject` / `DisposerBag` | `src/ui/components/ui-object.ts` | 所有 UI 对象的幂等销毁基类；新增 UI 模块必须接入 |
 | `MindTreeReferenceEmbed` / `MindTreeReferenceRenderChild` | `src/ui/components/mind-tree-reference-embed.ts` | 笔记内嵌只读分支视图（`mind-tree-ref` 代码块）：复用 `ReadOnlyTreePreview`，只增加分支起点、宽度适配与自适应高度、悬浮打开原树按钮与失效文案；只通过注入端口访问仓库，禁止反向导入视图或插件主类 |
@@ -269,7 +269,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，92 个文件，922 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
+- 位置：`test/*.test.ts`（**平铺**，93 个文件，1017 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -284,6 +284,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `test/performance.test.ts` | 1000 节点"解析+索引+布局+序列化" < 2 秒基线 |
 | `test/format.test.ts` / `test/document-conflict.test.ts` / `test/identity-repair.test.ts` | 格式拒绝、迁移逐级、失败不覆盖、身份保护 |
 | `test/node-link.test.ts` | 关联节点只写一条指针、不复制也不改动子节点；拒绝自引用/已有资源/第二条出边；删除清理入边；粘贴不携带关联；大纲块 id 与单向 `id->id` 链接域 |
+| `test/branch-reference-paste.test.ts` | 分支引用粘贴到画布：只在它所属的树里生效（身份不同或当前树无身份都拒绝）、目标被删只报告、成功时插入一个标题取目标标题的关联节点且目标子树原样、一次调用只加一个节点；并钉住视图接线（无选择器/无工具栏入口） |
 | `test/node-renderer.test.ts` | 节点尾部控制列的真实渲染：只有 nodeLink 时必须**仅**渲染链接标志（不能再出现无资源的打开按钮，否则会溢出错位）；点击链接标志调用 `goToLinkedNode`；有关联资源的节点只渲染打开按钮；资源与关联并存时链接标志独占槽位；只读预览默认禁用打开按钮与链接标志，只有笔记内嵌视图 opt-in 后打开按钮才可点击 |
 | `test/branch-reference.test.ts` / `test/mind-tree-reference-service.test.ts` / `test/reference-embed.test.ts` | 分支引用的围栏代码块往返与非法输入塌陷；引用解析五态、按身份重命名命中、路径被占用则失败关闭、缓存共享与失效；内嵌视图复用只读预览且不反向导入视图/主类 |
 | `test/menu-groups.test.ts` | 嵌套菜单能力探测：支持时 = 1 个不绑定动作的父行 + 子菜单内的行；不支持时 = 同一批行平铺进父菜单；探针必须用一次性菜单 |
@@ -388,7 +389,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改单树设置 | `src/document-settings.ts`、`src/document-settings-state.ts`、`src/ui/menus/tree-settings-menu.ts` | `docs/03-document-format.md` §7、`docs/05-technical-design.md` §9.4 | `test/document-settings-state.test.ts`、`test/format.test.ts` |
 | 改文件格式/解析/迁移 | `src/format/document.ts`、`migrations.ts`、`document-identity.ts` | `docs/03-document-format.md` 全篇、`docs/05-technical-design.md` §9.4 | `test/format.test.ts`、`test/identity-repair.test.ts`、`test/document-conflict.test.ts` |
 | 改树操作（增/删/移/复制） | `src/domain/tree.ts`、`src/domain/clipboard-payload.ts` | `docs/02-interface-interactions.md` §6.4–6.5、§6.10 | `test/tree.test.ts`、`test/exchange.test.ts` |
-| 改节点关联（关联/取消关联、跳转标志、大纲链接域） | `src/domain/node-link.ts`、`src/domain/tree.ts`（删除清理）、`src/format/outline.ts`、`src/render/resource-badges.ts`（关联槽位）、`src/ui/renderers/*`、`src/ui/association-target.ts`、`src/ui/menus/node-context-menu.ts`、`src/ui/components/top-toolbar.ts`、`src/ui/modals/node-link-picker-modal.ts` | `docs/02-interface-interactions.md` §5.3/§5.5/§6.6、`docs/03-document-format.md` §7.6 | `test/node-link.test.ts`、`test/node-renderer.test.ts`、`test/ui-modules.test.ts`、`test/top-toolbar.test.ts` |
+| 改节点关联（关联/取消关联、跳转标志、大纲链接域） | `src/domain/node-link.ts`、`src/services/clipboard.ts`（`resolveBranchReferenceTarget` / `insertBranchReferenceNode`）、`src/domain/tree.ts`（删除清理）、`src/format/outline.ts`、`src/render/resource-badges.ts`（关联槽位）、`src/ui/renderers/*`、`src/ui/association-target.ts`、`src/ui/menus/node-context-menu.ts`、`src/ui/ui-contracts.ts`、`src/ui/mind-tree-view.ts` | `docs/02-interface-interactions.md` §5.3/§5.5/§6.6、`docs/03-document-format.md` §7.6 | `test/node-link.test.ts`、`test/branch-reference-paste.test.ts`、`test/node-renderer.test.ts`、`test/ui-modules.test.ts`、`test/top-toolbar.test.ts` |
 | 改分支引用 / 笔记内嵌只读视图 | `src/domain/branch-reference.ts`、`src/services/mind-tree-reference.ts`、`src/services/clipboard.ts`、`src/ui/components/mind-tree-reference-embed.ts`、`src/ui/components/read-only-tree-preview.ts`、`src/ui/renderers/node-renderer.ts`、`src/main.ts`（代码块处理器与端口）、`styles.css` | `docs/02-interface-interactions.md` §6.6/§6.10、`docs/03-document-format.md` §7.7、`docs/05-technical-design.md` §9.1 | `test/branch-reference.test.ts`、`test/mind-tree-reference-service.test.ts`、`test/reference-embed.test.ts`、`test/node-renderer.test.ts`、`test/version-preview.test.ts` |
 | 改布局/节点尺寸 | `src/render/layout.ts`、`src/render/text-measurer.ts`（Canvas 适配在 `src/ui/text-measurer.ts`） | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/performance.test.ts` |
 | 改节点渲染/徽标/样式 | `src/ui/renderers/*`、`src/render/resource-badges.ts`（DOM 适配在 `src/ui/resource-badges.ts`）、`styles.css` | `docs/02-interface-interactions.md` §5.5 | `test/styles.test.ts`、`test/resource-badges.test.ts`、`test/ui-modules.test.ts` |
@@ -435,7 +436,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 11. **笔记内嵌只读视图只能复用、不能反向依赖**：`src/ui/components/mind-tree-reference-embed.ts` 与 `read-only-tree-preview.ts` 不得 import `MindTreeView` 或插件主类，仓库能力一律走注入端口；解析结果、折叠与视口都不写回 `.mtn.md`。给只读预览新增选项时，默认值必须让版本对比与主题悬浮预览行为不变——`test/version-preview.test.ts` 直接断言了 `readOnly: true` 与适配块 `if (!this.fitted && width > 0 && height > 0)` 的字面量。
 12. **`.mtn.md` 的读写契约只以机器数据区为准**（2026-10-15 重构，落点见 `docs/memory.md`）：`format/regions.ts` 按内容定位数据区（与行号无关，0 个 = 报错、≥2 个 = 拒绝改写），`format/yaml-patch.ts` 只补丁插件拥有的 YAML 键，`services/stable-source-read.ts` 要求读取前后 `ctime:mtime:size` 不变才采信字节。**改 `serializeMindTreeFile()` 时最危险的坑是 header 与 body 的接缝**：必须归一到 `\n\n`，少一个空行会让关闭的 `---` 与正文粘成 `---# 标题`，文件头随即变成 `unreadable`（表现为多条既有测试同时变红，很容易误判成"环境问题"）。另外**不要**在保存路径上重新引入"重建整段文件头"或"标记缺失就返回原文"的写法——后者会让文件里出现两个数据区，之后每次读回的都是旧数据。
 13. **并发会话共享工作区**：本仓库会被多个 session/agent 同时改（2026-10-15 就与 MCP 任务并行）。开工先 `git status`；`npm run check` / 全量测试的基线可能因对方正在写而暂时为红，**判定自己的回归前先看哪些文件正在被改、并单独重跑相关测试**。`edit` 的 `ReplaceFileW EIO (Win32 1175)` 原样重试即成功。
+14. **节点关联的创建入口只有一个：粘贴分支引用**（2026-10-17 改）。画布粘贴分支引用会调用 `services/clipboard.ts` 的 `resolveBranchReferenceTarget()` + `insertBranchReferenceNode()`，插入一个标题取目标标题、`nodeLink` 指向目标的新节点；**跨树（`documentId` 不同或当前树无身份）必须只提示**，因为 `nodeLink` 只是同一文档内的 id。工具栏的 `link-node`、右键菜单的创建项与 `ui/modals/node-link-picker-modal.ts`（`NodeLinkSuggestModal`/`nodeLinkCandidates`）都已删除——不要再按"选择窗口"的旧描述补入口；`test/branch-reference-paste.test.ts` 与 `test/ui-modules.test.ts` 会直接拦住回退。移除关联仍走右键菜单的 `menu.unlinkNode`（仅在节点已参与关联时出现），`removeNodeLinks()` 会同时清出边与所有入边。
 
 ---
 
-*最后核对：2026-10-13 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*
+*最后核对：2026-10-17 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*

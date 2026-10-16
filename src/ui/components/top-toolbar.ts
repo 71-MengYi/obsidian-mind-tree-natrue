@@ -1,7 +1,6 @@
 import { setIcon } from "obsidian";
 import type { TopToolbarState } from "./models";
 import { DisposableUiObject } from "./ui-object";
-import { CHAIN_BROKEN_ICON } from "../icons";
 export { TOP_TOOLBAR_ORDER } from "../ui-contracts";
 
 export interface TopToolbarLabels {
@@ -9,8 +8,6 @@ export interface TopToolbarLabels {
   readonly collapseAll: string;
   readonly collapseLevel: string;
   readonly markers: string;
-  readonly linkNode: string;
-  readonly unlinkNode: string;
   readonly fit: string;
   readonly zoomOut: string;
   readonly zoomIn: string;
@@ -25,7 +22,6 @@ export interface TopToolbarActions {
   readonly collapseAll: () => void;
   readonly showCollapseLevel: (event: MouseEvent) => void;
   readonly showMarkers: (anchor: HTMLElement) => void;
-  readonly linkNode: () => void;
   readonly fit: () => void;
   readonly zoomOut: () => void;
   readonly zoomIn: () => void;
@@ -40,7 +36,6 @@ export class TopToolbar extends DisposableUiObject {
   readonly element: HTMLElement;
   private readonly zoomElement: HTMLElement;
   private readonly selectionButtons: HTMLButtonElement[] = [];
-  private readonly linkButton: HTMLButtonElement;
   private readonly labels: TopToolbarLabels;
 
   constructor(parent: HTMLElement, labels: TopToolbarLabels, actions: TopToolbarActions) {
@@ -54,7 +49,6 @@ export class TopToolbar extends DisposableUiObject {
       const anchor = event.currentTarget as HTMLElement | null;
       if (anchor) actions.showMarkers(anchor);
     }, true);
-    this.linkButton = this.addButton("link", labels.linkNode, () => actions.linkNode(), true);
     this.addSeparator();
     this.addButton("maximize", labels.fit, () => actions.fit());
     this.addButton("minus", labels.zoomOut, () => actions.zoomOut());
@@ -71,11 +65,6 @@ export class TopToolbar extends DisposableUiObject {
   update(state: TopToolbarState): void {
     this.zoomElement.setText(`${Math.round(state.zoom * 100)}%`);
     for (const button of this.selectionButtons) button.disabled = !state.hasSelection;
-    // The link entry is one command with two states: link a node, or remove
-    // every link the selected node takes part in.
-    const linkLabel = state.nodeLinked ? this.labels.unlinkNode : this.labels.linkNode;
-    this.linkButton.setAttribute("aria-label", linkLabel);
-    setIcon(this.linkButton, state.nodeLinked ? CHAIN_BROKEN_ICON : "link");
   }
 
   private addButton(icon: string, label: string, action: (event: MouseEvent) => void, requiresSelection = false): HTMLButtonElement {

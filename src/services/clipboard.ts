@@ -1,4 +1,5 @@
 import { addNode, extractBranches } from "../domain/tree";
+import { createNodeLink } from "../domain/node-link";
 import { parseBranchReferenceBlock, renderBranchReferenceBlock, type BranchReference } from "../domain/branch-reference";
 import { normalizeBranchClipboardPayload, payloadRootIds } from "../domain/clipboard-payload";
 import { renderBranchMarkdown } from "../format/outline";
@@ -8,6 +9,7 @@ import type {
   BranchClipboardPayload,
   FileResourceRef,
   MindTreeDocument,
+  MindTreeNode,
   NodeId
 } from "../types";
 import { normalizeSafeHttpUrl, parseTextImport } from "./text-import";
@@ -321,6 +323,46 @@ export async function resolveMarkdownBranchLinks(
 
 export function insertPlainTextAsNode(document: MindTreeDocument, parentId: NodeId, text: string): NodeId {
   return addNode(document, parentId, text.trim()).id;
+}
+
+/** Whether a copied reference can become a node link in this document. */
+export type BranchReferenceTarget =
+  | { readonly kind: "ready"; readonly target: MindTreeNode }
+  | { readonly kind: "other-tree" }
+  | { readonly kind: "missing-target" };
+
+/**
+ * A node link is an id inside one document, so a reference can only be
+ * materialized in the tree it was copied from. Identity is compared instead of
+ * the path hint, so a renamed tree file still accepts its own references.
+ */
+export function resolveBranchReferenceTarget(
+  document: MindTreeDocument,
+  reference: BranchReference
+): BranchReferenceTarget {
+  if (!document.documentId || document.documentId !== reference.documentId) return { kind: "other-tree" };
+  const target = document.nodes[reference.nodeId];
+  return target ? { kind: "ready", target } : { kind: "missing-target" };
+}
+
+/**
+ * Paste one copied branch reference as a node link: a fresh child node titled
+ * after the target, pointing at it. Returns `undefined` when the reference
+ * cannot be materialized here, so callers can report instead of guessing.
+ */
+export function insertBranchReferenceNode(
+  document: MindTreeDocument,
+  parentId: NodeId,
+  reference: BranchReference,
+  untitledTitle: string
+): NodeId | undefined {
+  const target = resolveBranchReferenceTarget(document, reference);
+  if (target.kind !== "ready") return undefined;
+  const created = addNode(document, parentId, target.target.title || untitledTitle);
+  // A brand-new node can never carry a resource or a second link, so this is the
+  // same slot rule the removed picker enforced, minus every stale-target case.
+  createNodeLink(document, created.id, reference.nodeId);
+  return created.id;
 }
 
 async function writeBranchClipboard(markdown: string, payload: BranchClipboardPayload): Promise<void> {

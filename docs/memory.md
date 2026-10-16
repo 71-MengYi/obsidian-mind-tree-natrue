@@ -575,6 +575,26 @@
 
 **验证**：`npm run check` 0 错误；`npm test` **1011 / 1011 / 0 fail**；`npm run build` exit 0，`main.js` 4.54 MiB。
 
+## 2026-10-17 · 关联节点改为「粘贴分支引用」创建，移除工具栏与选择窗口（`feat`）
+
+**用户口径（3 项确认，务必按此读）**：① 分支引用允许粘贴到思维树，粘贴结果是**新增一个节点**（标题取目标节点当前标题）并让它单向关联到引用里的目标节点；② 只支持**同一棵树内**，跨文件只提示（`nodeLink` 只是同一文档内的 id）；③ 右键菜单里的「关联节点」创建项移除（已参与关联时仍保留「取消关联节点」），**工具栏入口与节点选择窗口一并删除**。
+
+**落点**
+
+- `services/clipboard.ts`：新增 `BranchReferenceTarget` + `resolveBranchReferenceTarget(document, reference)`（按 `documentId` 比较身份而不是路径，因此改名后的树仍认自己的引用；当前树没有身份也算“别的树”）与 `insertBranchReferenceNode(document, parentId, reference, untitledTitle)`（`addNode` + `createNodeLink`；被拒时返回 `undefined`，**一个节点都不插**）。
+- `ui/mind-tree-view.ts`：`applyClipboardPasteContent` 的 `branch-reference` 分支改为 `pasteBranchReference()`——先用 `resolveBranchReferenceTarget` 快检（避免为一次被拒的粘贴开出撤销记录），命中才在一次 `commit` 里插入并建边，随后选中并居中；`toggleNodeLink` / `createNodeLinkFor` / `describeNodeLinkError` 删除，`unlinkNode(nodeId)` 只负责移除；`refreshTopToolbar` 不再上报 `nodeLinked`。
+- `ui/menus/node-context-menu.ts`：`toggleNodeLink` → `unlinkNode`，且**只在 `state.nodeLinked` 时渲染**；`ui/ui-contracts.ts`：`TOP_TOOLBAR_ORDER` 去掉 `link-node`，`nodeMenuItemOrder` 改成 `push("markers")` + 条件 `push("node-link")` + `push("add-child")`。
+- `ui/components/top-toolbar.ts` + `models.ts`：删除 `linkButton`、`TopToolbarLabels.linkNode/unlinkNode`、`TopToolbarActions.linkNode`、`TopToolbarState.nodeLinked`。
+- 删除 `ui/modals/node-link-picker-modal.ts`（`NodeLinkSuggestModal` / `nodeLinkCandidates`）及其 barrel 导出。**保留** `domain/node-link.ts` 的 `nodeTitlePath`（现在只有测试在用，MCP/后续视图可复用）与 `createNodeLink`（MCP 的 `linkNode` 写入工具仍在用），`notice.nodeLinkBlockedByResource` 也仍被 MCP 的 `session-writer` 使用。
+- i18n：删 8 个死 key（`toolbar.linkNode`、`toolbar.unlinkNode`、`menu.linkNode`、`modal.nodeLink.*`×3、`notice.nodeLinkCreated`、`notice.branchReferencePasteInTree`），新增 `notice.branchReferenceOtherTree`，并把 `notice.branchReferenceCopied` 改成同时提示“可粘到笔记 / 可粘回本树”。
+
+**测试**：新增 `test/branch-reference-paste.test.ts` 6 条（身份比较三种结果、目标被删只报告、成功插入且目标子树不动、被拒时文档字节不变、空标题回落、以及视图接线源码断言——`NodeLinkSuggestModal|nodeLinkCandidates|createNodeLinkFor|toggleNodeLink` 一律不得出现、`ui-contracts` 不得再有 `"link-node"`）；`test/top-toolbar.test.ts` 把“一个按钮两种状态”改成“工具栏不再有 link 入口”；`test/ui-modules.test.ts` 改成 `plain` 不含 `node-link`、`linkedRoot` 仍在 `markers` 之后。
+
+**验证**：`npm run check` 0 错误；`npm test` **1017 / 1017 / 0 fail**；`npm run build` 通过。
+
+**留给下一任**：创建关联现在只有一条路径（复制分支引用 → 粘到它所属的树），不要再加回选择窗口或工具栏按钮——`AGENTS.md` §12 第 14 条与上述测试会拦住。用户曾明确讨论“跨文件关联”但选择了“只支持同一棵树”；将来若要做，需要把 `nodeLink` 从“只存节点 id”扩展为“树身份 + 节点 id”，并同步大纲链接域、尾部渲染与旧数据兼容。
+
+
 
 
 

@@ -28,8 +28,9 @@ test("UI disposer releases resources once in reverse ownership order", () => {
 
 test("toolbar and keyboard help expose the established semantic order", () => {
   assert.deepEqual(TOP_TOOLBAR_ORDER.slice(0, 4), ["expand-all", "collapse-all", "collapse-level", "markers"]);
-  // The node-link command lives directly to the right of the marker button.
-  assert.equal(TOP_TOOLBAR_ORDER.indexOf("link-node"), TOP_TOOLBAR_ORDER.indexOf("markers") + 1);
+  // The node-link command left the toolbar: a link is now made by pasting a
+  // copied branch reference, and removed from the node menu.
+  assert.equal((TOP_TOOLBAR_ORDER as readonly string[]).includes("link-node"), false);
   assert.deepEqual(TOP_TOOLBAR_ORDER.slice(-3), ["copy", "import", "export"]);
   assert.equal(KEYBOARD_HELP_ACTIONS[0], "add-sibling-below");
   assert.equal(KEYBOARD_HELP_ACTIONS.at(-1), "cancel");
@@ -44,8 +45,9 @@ test("node menu description changes only for applicable resource and tree state"
   assert.ok(plain.includes("add-sibling"));
   assert.ok(plain.includes("toggle-collapse"));
   assert.ok(plain.includes("move-files"));
-  // The node link sits directly under the marker entry, for every node state.
-  assert.equal(plain.indexOf("node-link"), plain.indexOf("markers") + 1);
+  // Removing a link is the only node-link row, and only for a node that already
+  // takes part in one; creation happens by pasting a copied branch reference.
+  assert.equal(plain.includes("node-link"), false);
   const linkedRoot = nodeMenuItemOrder({ hasFileResource: true, hasResource: true, isDesktopApp: true, isRoot: true, hasChildren: false, nodeLinked: true });
   assert.deepEqual(linkedRoot.slice(0, 4), ["title-sync", "open-resource", "open-default-app", "unlink-resource"]);
   assert.equal(linkedRoot.indexOf("node-link"), linkedRoot.indexOf("markers") + 1);

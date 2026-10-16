@@ -30,8 +30,8 @@ export interface NodeContextMenuActions {
   readonly openDefaultApp: () => void;
   readonly unlinkResource: () => void;
   readonly showMarkers: () => void;
-  /** Create a node link, or remove every link this node takes part in. */
-  readonly toggleNodeLink: () => void;
+  /** Remove every link this node takes part in. */
+  readonly unlinkNode: () => void;
   readonly addChild: () => void;
   readonly addSibling: () => void;
   readonly toggleCollapsed: () => void;
@@ -75,8 +75,12 @@ export class NodeContextMenu {
       });
     }
     menu.addItem((item) => item.setTitle(t("toolbar.markers")).setIcon("tags").onClick(guarded(actions.showMarkers)));
-    menu.addItem((item) => item.setTitle(state.nodeLinked ? t("menu.unlinkNode") : t("menu.linkNode"))
-      .setIcon(state.nodeLinked ? CHAIN_BROKEN_ICON : "link").onClick(guarded(actions.toggleNodeLink)));
+    if (state.nodeLinked) {
+      // The creation entry is gone: a node link is made by pasting a copied
+      // branch reference, so the menu only ever offers the removal row.
+      menu.addItem((item) => item.setTitle(t("menu.unlinkNode"))
+        .setIcon(CHAIN_BROKEN_ICON).onClick(guarded(actions.unlinkNode)));
+    }
     menu.addSeparator();
     menu.addItem((item) => item.setTitle(t("menu.addChild")).setIcon("corner-down-right").onClick(guarded(actions.addChild)));
     if (!state.isRoot) menu.addItem((item) => item.setTitle(t("menu.addSibling")).setIcon("list-plus").onClick(guarded(actions.addSibling)));

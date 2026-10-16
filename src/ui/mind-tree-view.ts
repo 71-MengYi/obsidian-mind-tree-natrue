@@ -33,8 +33,6 @@ import {
   updateFileReferencePaths
 } from "../domain/tree";
 import {
-  NodeLinkError,
-  createNodeLink,
   getNodeLinkTargetId,
   isNodeLinkParticipant,
   removeNodeLinks
@@ -59,10 +57,13 @@ import {
   copyBranchReference as copyBranchReferenceToClipboard,
   copyBranches,
   copyPlainText,
+  insertBranchReferenceNode,
+  resolveBranchReferenceTarget,
   resolveMarkdownBranchLinks,
   type ClipboardImageInput,
   type ClipboardPasteContent
 } from "../services/clipboard";
+import type { BranchReference } from "../domain/branch-reference";
 import {
   downloadMarkdown,
   exportBranchPng,
@@ -194,8 +195,6 @@ import {
   TemplateSuggestModal,
   UrlPromptModal,
   MoveFilesModal,
-  NodeLinkSuggestModal,
-  nodeLinkCandidates,
   type CandidateAction,
   type DeleteBranchAction
 } from "./modals/index";
@@ -1407,7 +1406,6 @@ export class MindTreeView extends TextFileView {
       toolbar: {
         expandAll: t("toolbar.expandAll"), collapseAll: t("toolbar.collapseAll"),
         collapseLevel: t("toolbar.collapseLevel"), markers: t("toolbar.markers"),
-        linkNode: t("toolbar.linkNode"), unlinkNode: t("toolbar.unlinkNode"),
         fit: t("toolbar.fit"), zoomOut: t("toolbar.zoomOut"), zoomIn: t("toolbar.zoomIn"),
         search: t("toolbar.search"), copy: t("toolbar.copy"),
         importText: t("toolbar.import"), exportTree: t("toolbar.export")
@@ -1431,10 +1429,6 @@ export class MindTreeView extends TextFileView {
           if (!nodeId) return;
           const rect = button.getBoundingClientRect();
           this.showMarkerPopover(nodeId, { x: rect.left, y: rect.bottom + 6 });
-        },
-        linkNode: () => {
-          const nodeId = this.primarySelectedId;
-          if (nodeId) this.toggleNodeLink(nodeId);
         },
         fit: () => this.fitCanvas(),
         zoomOut: () => this.zoomByStep(-ZOOM_STEP),
@@ -2379,9 +2373,7 @@ export class MindTreeView extends TextFileView {
       return;
     }
     if (content.kind === "branch-reference") {
-      // A reference block points at a branch that lives in another tree; the
-      // canvas never inlines it, so report the pointer instead of pasting a copy.
-      new Notice(t("notice.branchReferencePasteInTree"));
+      this.pasteBranchReference(content.reference, context);
       return;
     }
     if (content.kind === "empty") return;
@@ -2611,7 +2603,7 @@ export class MindTreeView extends TextFileView {
         delete draftNode.titleSync;
       }),
       showMarkers: () => this.showMarkerPopover(nodeId, { x: event.clientX, y: event.clientY }),
-      toggleNodeLink: () => this.toggleNodeLink(nodeId),
+      unlinkNode: () => this.unlinkNode(nodeId),
       addChild: () => { this.selectOnly(nodeId); this.addChildNode(); },
       addSibling: () => {
         let createdId = "";
@@ -2656,69 +2648,49 @@ export class MindTreeView extends TextFileView {
   }
 
   /**
-   * Single command behind both the menu entry and the toolbar button: an
-   * uninvolved node opens the target picker, a node that already takes part in
-   * a link removes every link it belongs to.
+   * A copied branch reference becomes a node link inside its own tree: a fresh
+   * child node is inserted and pointed at the referenced node. A node link is an
+   * id inside one document, so a reference from another tree is reported instead
+   * of being approximated, and a vanished target is reported before any commit.
    */
-  private toggleNodeLink(nodeId: NodeId): void {
+  private pasteBranchReference(reference: BranchReference, context: PasteInsertionContext): void {
     const document = this.document;
-    const node = document?.nodes[nodeId];
-    if (!document || !node || this.mutationLocked()) return;
-    if (isNodeLinkParticipant(document, nodeId)) {
-      let removed = 0;
-      this.commit((draft) => { removed = removeNodeLinks(draft, nodeId); });
-      if (removed > 0) new Notice(t("notice.nodeLinkRemoved", { count: removed }));
+    if (!document || this.documentSessionToken !== context.documentSessionToken) return;
+    const target = resolveBranchReferenceTarget(document, reference);
+    if (target.kind === "other-tree") {
+      new Notice(t("notice.branchReferenceOtherTree"));
       return;
     }
-    // A node with a linked resource already owns its trailing open control and
-    // its file-name sync; node links are only offered to plain topic nodes.
-    if (node.resource) {
-      new Notice(t("notice.nodeLinkBlockedByResource"));
-      return;
-    }
-    const candidates = nodeLinkCandidates(document, nodeId, t("node.untitled"));
-    if (candidates.length === 0) {
-      new Notice(t("modal.nodeLink.empty"));
-      return;
-    }
-    const token = this.documentSessionToken;
-    new NodeLinkSuggestModal(this.app, candidates, (targetId) => {
-      // The picker is asynchronous: the view can switch documents or lock
-      // before the user chooses, so the captured session is revalidated.
-      if (this.documentSessionToken !== token || this.mutationLocked()) return;
-      this.createNodeLinkFor(token, nodeId, targetId);
-    }).open();
-  }
-
-  private createNodeLinkFor(documentSessionToken: string, sourceId: NodeId, targetId: NodeId): void {
-    const document = this.document;
-    if (!document || this.documentSessionToken !== documentSessionToken) return;
-    const target = document.nodes[targetId];
-    if (!document.nodes[sourceId] || !target) {
+    if (target.kind === "missing-target") {
       new Notice(t("notice.nodeLinkMissing"));
       return;
     }
+    const title = target.target.title || t("node.untitled");
+    let createdId = "";
     try {
-      this.commit((draft) => createNodeLink(draft, sourceId, targetId));
+      this.commit((draft) => {
+        createdId = insertBranchReferenceNode(draft, context.parentId, reference, title) ?? "";
+      });
     } catch (error) {
-      new Notice(this.describeNodeLinkError(error));
+      new Notice(t("notice.operationFailed", { message: this.describeResourceError(error) }));
       return;
     }
-    // `commit` can decline silently (a rejected editor draft, a session lock);
-    // only report success once the pointer is actually part of the document.
-    if (this.document?.nodes[sourceId]?.nodeLink !== targetId) return;
-    new Notice(t("notice.nodeLinkCreated", { title: target.title || t("node.untitled") }));
+    // `commit` can decline silently (a rejected editor draft, a locked session).
+    if (!createdId || !this.document?.nodes[createdId]) return;
+    this.selectOnly(createdId);
+    this.centerNodeInViewport(createdId);
   }
 
-  private describeNodeLinkError(error: unknown): string {
-    if (error instanceof NodeLinkError) {
-      if (error.code === "source-has-resource") return t("notice.nodeLinkBlockedByResource");
-      if (error.code === "missing-target") return t("notice.nodeLinkMissing");
-      // A stale picker may target a node that already links, or a vanished
-      // source: both mean the captured menu/picker target is out of date.
-      return t("notice.resourceTargetChanged");
-    }
-    return error instanceof Error ? error.message : String(error);
+  /**
+   * Removing a link is the only node-link command left in the menus: creating one
+   * happens by pasting a copied branch reference.
+   */
+  private unlinkNode(nodeId: NodeId): void {
+    const document = this.document;
+    if (!document?.nodes[nodeId] || this.mutationLocked()) return;
+    let removed = 0;
+    this.commit((draft) => { removed = removeNodeLinks(draft, nodeId); });
+    if (removed > 0) new Notice(t("notice.nodeLinkRemoved", { count: removed }));
   }
 
   /** Follow this node's one-way link; a missing target only reports. */
@@ -3964,11 +3936,7 @@ export class MindTreeView extends TextFileView {
     const document = this.document;
     this.shell?.toolbar.update({
       zoom: this.viewport.zoom,
-      hasSelection: Boolean(!this.parseError && nodeId && this.selectedIds.has(nodeId) && document?.nodes[nodeId]),
-      // The toolbar entry is a single command that flips between linking and
-      // unlinking whichever node is currently primary-selected.
-      nodeLinked: Boolean(document && nodeId && document.nodes[nodeId]
-        && isNodeLinkParticipant(document, nodeId))
+      hasSelection: Boolean(!this.parseError && nodeId && this.selectedIds.has(nodeId) && document?.nodes[nodeId])
     });
   }
 
