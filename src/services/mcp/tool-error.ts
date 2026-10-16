@@ -6,10 +6,13 @@
  * carries a stable machine-readable code plus a short human sentence. Keeping
  * the code separate from the sentence lets callers branch without parsing
  * prose, and lets the wording change without breaking a client.
+ *
+ * There is deliberately no code for "the plugin refused this on permission
+ * grounds": the two-server split is the boundary, so a tool that does not belong
+ * to the server being called is reported as `invalid-arguments` (an unknown tool
+ * there) rather than as a denied-but-known tool.
  */
 export type McpToolErrorCode =
-  | "writes-disabled"
-  | "tree-creation-disabled"
   | "service-unavailable"
   | "invalid-arguments"
   | "tree-not-found"

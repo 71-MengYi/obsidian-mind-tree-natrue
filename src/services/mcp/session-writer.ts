@@ -33,8 +33,6 @@ export interface MindTreeSessionWriterPorts {
   /** `Vault.process`: the compare-and-set write, under the vault's per-file lock. */
   process(path: string, transform: (source: string) => string): Promise<unknown>;
   parseOptions(): Readonly<ParseMindTreeOptions>;
-  /** The write-permission switch, read at call time so a toggle applies at once. */
-  allowsWrites(): boolean;
   /** Turns one existing vault file into a stable resource reference. */
   fileReference(filePath: string): Promise<ResourceRef>;
   creation: MindTreeCreatePort;
@@ -182,9 +180,14 @@ export class MindTreeSessionWriter {
     });
   }
 
-  /** Creates a new tree through the one shared creation path, without focus. */
+  /**
+   * Creates a new tree through the one shared creation path, without focus.
+   *
+   * No permission check here: this class is only ever reachable through the
+   * write server, which is not listening unless the user enabled it. The
+   * boundary is the server split, not a per-tool switch.
+   */
   async createTree(input: { title: string; folder?: string; children?: readonly string[] }): Promise<McpCreatedTree> {
-    if (!this.ports.allowsWrites()) throw this.writesDisabled();
     const created = await this.ports.creation.create({
       title: input.title,
       ...(input.folder !== undefined ? { folderPath: input.folder } : {}),
@@ -212,7 +215,6 @@ export class MindTreeSessionWriter {
     fallback: McpToolErrorCode,
     run: (document: MindTreeDocument) => NodeId
   ): Promise<{ path: string; document: MindTreeDocument; nodeId: NodeId }> {
-    if (!this.ports.allowsWrites()) throw this.writesDisabled();
     const path = canonicalTreePath(treePath);
     if (!isMindTreePath(path) || !this.ports.fileExists(path)) {
       throw new McpToolError("tree-not-found", t("mcp.error.treeNotFound", { target: path }));
@@ -335,10 +337,6 @@ export class MindTreeSessionWriter {
       case "source-linked":
         return new McpToolError("invalid-operation", t("notice.associationTargetChanged"));
     }
-  }
-
-  private writesDisabled(): McpToolError {
-    return new McpToolError("writes-disabled", t("mcp.error.writesDisabled"));
   }
 
   private conflictLocked(): McpToolError {

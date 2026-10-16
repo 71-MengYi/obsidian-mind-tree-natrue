@@ -521,6 +521,49 @@
 
 **环境变化（对后续 agent 很重要）**：本轮沙箱策略已从 `workspace-write` 变为 **`danger-full-access`**，`npm test` 与 `npm run build` 都能直接跑通，`esbuild spawn EPERM` 的旧替代方案可以不用了；但 `AGENTS.md` §5 里记的「7 条必然失败」基线仍适用于**受限**沙箱，别把环境差异当成回归。
 
+## 2026-10-17 · MCP 改为**两个服务器**（只读 / 写入），去掉插件级权限开关（`feat`）
+
+**需求（用户两次纠正后的最终口径）**：用户的原话是「写入和创建都是一个服务器，不保留插件级开关」——即把 MCP 拆成**两个服务器**：一个只读、一个承载全部会改动的工具（含 `create_tree`）。理由是**有些 agent 插件的审核强度只能以 MCP 服务器为单位配置**，所以「读工具完全放行、写与创建需要审批」只能在服务器这一层切开。用户另外确认：**两个端口**（客户端按 host:port 区分，避免被去重成同一个）、**升级后只开只读**。
+
+**这里的关键认知（不要退回去）**：MCP 客户端的工具审批策略挂在**服务器**上，不是单个工具上。所以「一个服务器 + 按工具的权限开关」这个思路本身是错的——插件若在服务端拒绝写工具，客户端里那条「我批准了」的调用就永远失败，用户体验是坏的。**分权必须落在服务器边界上**，插件不再对工具调用做任何权限判断。
+
+**口径**
+- `read` 服务器（`mind-tree-nature-read`，默认 27321）：9 个只读工具，**不含任何会写入的工具**，随总开关开启，可免审批运行。
+- `write` 服务器（`mind-tree-nature-write`，默认 27322）：8 个节点/文件工具 + `create_tree`（共 9 个），**默认关闭**，有自己的开关。
+- **`add_node` 属于 write**：它改动一棵已存在的树。判据是「是否改动文件」，不是名字里有没有 create。
+- 两个服务器的工具清单**完全不重叠且合起来是全部 18 个**，由 `tool-schemas.ts` 的 `server` 字段声明。
+- 调用不属于当前服务器的工具 = **该服务器上的未知工具**（`invalid-arguments`），不是「权限不足」。`McpToolErrorCode` 里的 `writes-disabled` / `tree-creation-disabled` 已删除——**插件不再有「拒绝但工具存在」这个状态**。
+
+**落点**
+- `connection.ts`：`McpServerGroup = "read" | "write"`、`mcpServerName(group)`、`mcpServerRecordKey(pluginId, group)`（键 `${manifest.id}:mcp-server:<group>`）。两个服务器**端口与令牌都不同**，只读配置拿不到写入权限。
+- `tool-schemas.ts`：`access` 字段改为 `server`；`getToolDefinitionsFor(server)` / `getToolDefinitionFor(name, server)` / `serverOfTool(name)`。`accessOfTool`、`isWriteTool` 删除。
+- `mcp-core.ts`：`handleMcpMessage(raw, host, server)` 与 `callTool(host, server, name, args)` 都带服务器；删除整个 `permissionRefusal` 闸门表；`initialize` 的 `serverInfo.name` 用 `mcpServerName(server)`，让客户端能把两个服务器区分开。
+- `contracts.ts`：`McpHostEnvironment` 变成 `isSupported()` + `connection(group)` + `version?()` + `logger?`，`allowsWrites`/`allowsTreeCreation` 删除。
+- `session-writer.ts`：删掉 `allowsWrites` 端口与其两处检查——**边界是「写入服务器是否在监听」，不是逐工具开关**。
+- `mcp-server.ts`：`McpServerController` 增加 `group`（注意用 getter 而不是字段：`useDefineForClassFields` 会在构造函数体之前初始化字段，字段写法会读到 `undefined`），`storageKey` 按 group 派生，新增 `boundPort` getter。
+- `settings-model.ts`：`mcpEnabled` / `mcpReadPort`(27321) / `mcpWriteEnabled`(false) / `mcpWritePort`(27322)；删除 `mcpAllowWrites` / `mcpAllowTreeCreation` / `mcpPort`。`DEFAULT_MCP_PORT` → `DEFAULT_MCP_READ_PORT`。
+- `plugin-data.ts` 迁移：**旧 `mcpPort` 沿用为 `mcpReadPort`**（既有客户端配置仍指向一个存在的服务器），**旧 `mcpAllowWrites` 一律不继承**（`mcpWriteEnabled` 默认 false）——升级只能收窄授权，绝不能默默新增一个入站服务。
+- `main.ts`：两个 `McpServerController` 实例；`applyMcpServers()` 是**唯一**的协调点（先停两个，再按 `mcpEnabled` / `mcpWriteEnabled` 启动），所有开关与端口变更都走它，避免出现「设置说关闭但还在监听」。
+- `client-config.ts`：`buildMcpClientConfig(connections: readonly {group, port, token}[])`——只列出调用方传入的服务器，因此配置永远不会广告一个没有在服务的端点。
+- `settings-page-model.ts`：`McpPageState = { supported, enabled, read, writeEnabled, write }`，每个端点带 `port`/`boundPort`/`status`/`token`；`enabledConnections(state)` 决定配置里出现哪几条。
+- `ai-settings-page.ts`：总开关 → 只读块（小标题/范围/端口/状态）→ 写入块（同样 + 自己的开关）→ 配置 → 令牌提醒。
+
+**一个分层修正（Lead 收尾做的）**：`McpServerModel` 原本只有 `value` 没有 `disabled`，页面为了禁用写入开关，自己拼了 `model.enable.disabled || !model.enable.value`。这是把**策略**放回了视图层，所以给模型加了 `disabled` 字段（含义是「总开关关着或平台不支持」，**不包含**写入开关自身关闭——否则用户就没法打开它了）。
+
+**验证**
+- `npm run check` **0 错误**；`npm test`（真命令）**1010 tests / 1010 pass / 0 fail**（92 个文件，全部声明都真实执行）；`npm run build` **exit 0，`main.js` 4.53 MiB**（上限 10 MiB），产物中 `node:http` **仍无字面量 require**。
+- 安全边界有测试钉死：两个目录恰好 9+9、**不重叠且并集为全部 18**；把 9 个写工具全部打到只读服务器（以及 9 个读工具打到写入服务器）逐个得到 `isError` 的「未知工具」，且 recording fake 证明**端口调用数为 0**；另有**正向对照**证明「同样这 18 个调用在拥有该工具的服务器上成功」，排除「拒绝是因为工具体坏了」。
+- 两个服务器**记录键/令牌/端口互不相同**（`…:mcp-server:read` / `…-write`），只读令牌拿不到写入权限。
+- 迁移测试：`{mcpPort:30000, mcpAllowWrites:true, mcpAllowTreeCreation:true}` → `mcpReadPort:30000` + `mcpWriteEnabled:false`。
+
+**被移除的断言（已复核，均有更强的替代）**：旧「按开关门禁工具」的 12 条（`mcp-tools`，前提已不存在，由两个方向的边界测试 + 正向对照取代）；`resolveConfiguredPort` / `buildMcpConfigText` 两个已删除函数的函数级断言（范围回退改由 `plugin-data` 的两个端口 + `normalizeMcpPort` 覆盖）；`mcp-session-writer` 中「写权限关闭时 create_tree 被拒」一条（生产者已删除）。**注意**：`test/ai-settings-page.test.ts` 与 `test/settings-index-wiring.test.ts` 里曾断言旧端口 API 的两处源码字符串，已随本轮同步更新（前者由页面负责人发现并上报，后者由 Lead 改）。
+
+**未做 / 待真机确认**
+- 未在真实 Obsidian 里人工验收：两个端口同时在网、客户端里两条服务器记录分别设置审批策略后的实际观感、以及只读那条免审批时是否真的不弹确认。
+- 若用户把两个端口填成同一个值，后启动的那个会回退到邻近端口（状态行显示实际地址）。这是可接受的降级，但没有在 UI 上专门提示「两个端口撞了」。
+- `mcp-tree-locator` / `mcp-tree-reader` / `tree-creation` / `resource-index-service` / `search-panel` 这 5 个文件仍用 `module.registerHooks`（需 Node ≥ 22.15，而项目钉 ≥ 20）。本轮 `mcp-session-writer` 已改成 `module.register`（Node ≥ 20.6），其余 5 个仍待清理。
+
+
 
 
 

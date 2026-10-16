@@ -131,31 +131,36 @@ A reference is bound to a *tree identity plus node id*, not to a path: moving no
 
 ### 6. Let AI read and write mind trees over MCP
 
-On desktop the plugin exposes a local MCP server, so MCP clients such as Claude Desktop and Cursor can read and write your mind trees by node id.
+On desktop the plugin exposes **two local MCP servers**, so MCP clients such as Claude Desktop and Cursor can read and write your mind trees by node id.
+
+**Why two servers**: an MCP client attaches its "does this tool need my approval?" policy to a *server*, not to an individual tool. So the only way to let an assistant read without approval while writes still require confirmation is to offer them as two servers. The plugin itself no longer intercepts any tool call — how you divide permission is decided per server, in your client.
 
 1. Open **Settings → Mind Tree Nature → AI** (this page only exists on desktop).
-2. Turn on **Enable MCP server**. It listens on this computer only (`127.0.0.1`), default port `27321`; if that port is busy it tries nearby ports and the status line shows the address actually in use. Switching it off stops the server immediately.
-3. Click **Copy configuration JSON** and paste it into your client's MCP configuration file (Claude Desktop's `claude_desktop_config.json`, or Cursor's `mcp.json`). The snippet already contains the address and this computer's access token — no fields to fill in by hand.
-4. Turn on **Allow tools that edit nodes** when you want AI to change nodes (add, move, rename and delete a node, and link or unlink a file).
-5. Turn on **Allow tools that create mind trees** separately when you want AI to start a whole new mind tree. The two switches are **independent**: you can grant either one on its own.
+2. Turn on **Enable MCP servers**. Both listen on this computer only (`127.0.0.1`); if a port is busy it tries nearby ports and the status line shows the address actually in use.
+3. Click **Copy configuration JSON** and paste it into your client's MCP configuration file (Claude Desktop's `claude_desktop_config.json`, or Cursor's `mcp.json`). The snippet already contains both addresses and each server's access token — no fields to fill in by hand.
+4. Give the two entries different approval policies in your client: leave the **read-only server** unattended and require confirmation for the **write server**. That is the whole point of the split.
+5. If you do not want AI to change anything yet, leave **Enable write server** off (it is off by default) and only the read-only entry appears in the configuration.
 
-Read-only tools (no permission switch needed): list mind trees; read a whole tree (nested or flat shape, paged by node count); find nodes by title; read one node; read its parent; read its children (optionally the whole subtree); read the title path from the root to it; read its linked files and node reference; read a tree's node, file and depth counts.
-
-Node-editing tools (require **Allow tools that edit nodes**): move a node to become a child of another node; add a child node; rename a node; delete a single node (its children move up); link an existing vault file; unlink a file; create or remove a same-document node reference.
-
-Tree-creation tools (require **Allow tools that create mind trees**): create a whole new mind tree file (optionally in a specific folder, with initial child titles). It is kept apart from node editing because it produces a new file rather than changing the tree you are looking at, and it only creates files — it never moves, renames or deletes any file.
+| | Read-only server (`mind-tree-nature-read`) | Write server (`mind-tree-nature-write`) |
+| --- | --- | --- |
+| Default port | `27321` | `27322` |
+| Default state | Follows the master switch | **Off**; you turn it on separately |
+| Tools | list mind trees; read a whole tree (nested or flat, paged by node count); find nodes by title; read a node with its parent, children (optionally the whole subtree), title path, linked files and node reference; read node/file/depth counts | move a node under another; add a child node; rename a node; delete a single node (children move up); link or unlink a file; create or remove a same-document node reference; **create a whole new mind tree** |
+| Can it change a file? | **No.** Nothing here writes | Yes; every change lives here |
 
 A few deliberate rules:
 
 - Every edit is an ordinary **single-step undoable** change, exactly as if you had made it in the UI, and it is saved to the file right away.
-- **Both permission switches default to off and are independent of each other.** Granting creation does not also grant node editing, and granting node editing does not also grant creating files.
+- **The read-only server contains no write tool at all**, so it cannot modify your vault and is safe to run unattended. The write server contains no read tool — the two catalogs do not overlap.
+- The two servers use **different ports and different access tokens**, so the read-only configuration cannot obtain write authority.
+- After upgrading, the **write server is always off by default** and you must turn it on; the plugin will not widen access just because an older version had granted write tools.
 - **Unlinking only removes the reference on the node — it never deletes your file.** Linking only accepts files that already exist in the vault, and MCP never creates, imports or moves a file (a non-Markdown file that has no resource identity yet gains its identity suffix in the same folder, exactly as when you link it in the UI).
 - MCP cannot delete a whole branch and cannot delete a file.
 - If a tree has unresolved external changes, or the file is changed by another program while an operation runs, the write is refused with a reason and **nothing is overwritten**.
 - Creating a mind tree through MCP never steals the view you are currently looking at.
-- Mobile shows no such page and never starts the server; even if you sync a desktop configuration with MCP enabled to your phone, the phone still will not start it.
+- Mobile shows no such page and never starts the servers; even if you sync a desktop configuration with MCP enabled to your phone, the phone still will not start them.
 
-The access token lives in **device-local storage**, not in plugin data, so it is never synced to another device. Treat it like a password: anyone who can read it can change your mind trees, so handle the copied text accordingly.
+The access tokens live in **device-local storage**, not in plugin data, so they are never synced to another device. Treat them like passwords: anyone who can read one can use that server's authority on your mind trees.
 
 ## File format and privacy
 

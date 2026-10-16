@@ -1,7 +1,14 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { register } from "node:module";
-import { MAX_MCP_PORT, MCP_PORT_FALLBACK_ATTEMPTS, MIN_MCP_PORT } from "../src/settings-model";
+import {
+  DEFAULT_MCP_READ_PORT,
+  DEFAULT_MCP_WRITE_PORT,
+  MAX_MCP_PORT,
+  MCP_PORT_FALLBACK_ATTEMPTS,
+  MIN_MCP_PORT
+} from "../src/settings-model";
+import type { McpEndpointState, McpPageState } from "../src/services/mcp/settings-page-model";
 
 // `describeMcpStatus`, `buildMcpPageModel` and `describePortFallbacks` produce
 // display text, so the page model needs the same host language value any real
@@ -13,7 +20,11 @@ import { MAX_MCP_PORT, MCP_PORT_FALLBACK_ATTEMPTS, MIN_MCP_PORT } from "../src/s
 // supported one. The hook is scoped to the i18n facade itself - not to every
 // `obsidian` import - so it cannot mask a real resolution failure elsewhere, and
 // because async hooks cannot be removed it must never answer for another module.
-const OBSIDIAN_STUB = "data:text/javascript," + encodeURIComponent('export const getLanguage = () => "en";\n');
+// The stub source carries a file-specific marker so this file's module URL is
+// unique: `--test-isolation=none` shares one process-wide ESM cache keyed by URL.
+const OBSIDIAN_STUB = "data:text/javascript," + encodeURIComponent(
+  '// obsidian stub for mcp-settings-page-model.test.ts\nexport const getLanguage = () => "en";\n'
+);
 register("data:text/javascript," + encodeURIComponent(
   "export async function resolve(specifier, context, next) {\n" +
   '  if (specifier === "obsidian" && context.parentURL?.endsWith("/i18n/index.ts")) {\n' +
@@ -23,33 +34,48 @@ register("data:text/javascript," + encodeURIComponent(
   "}\n"
 ));
 const {
-  buildMcpConfigText,
   buildMcpPageModel,
+  describeMcpServerStatus,
   describeMcpStatus,
   describePortFallbacks,
+  enabledConnections,
   parseMcpPortInput,
-  resolveConfiguredPort,
+  DEFAULT_MCP_HOST: reExportedHost,
   MAX_MCP_PORT: reExportedMax,
   MIN_MCP_PORT: reExportedMin
 } = await import("../src/services/mcp/settings-page-model");
-const { buildMcpClientConfig, buildMcpClientConfigText } = await import("../src/services/mcp/client-config");
+const { buildMcpClientConfigText } = await import("../src/services/mcp/client-config");
+const { mcpUrl } = await import("../src/services/mcp/connection");
 const { t } = await import("../src/i18n");
 
-
 const TOKEN = "S4mpleT0kenValue_1234";
+const WRITE_TOKEN = "Wr1teT0kenValue_5678";
 
-function state(
-  overrides: Partial<Parameters<typeof buildMcpPageModel>[0]> = {}
-): Parameters<typeof buildMcpPageModel>[0] {
+function readEndpoint(overrides: Partial<McpEndpointState> = {}): McpEndpointState {
+  return {
+    port: DEFAULT_MCP_READ_PORT,
+    status: { kind: "running", url: mcpUrl(DEFAULT_MCP_READ_PORT) },
+    token: TOKEN,
+    ...overrides
+  };
+}
+
+function writeEndpoint(overrides: Partial<McpEndpointState> = {}): McpEndpointState {
+  return {
+    port: DEFAULT_MCP_WRITE_PORT,
+    status: { kind: "running", url: mcpUrl(DEFAULT_MCP_WRITE_PORT) },
+    token: WRITE_TOKEN,
+    ...overrides
+  };
+}
+
+function state(overrides: Partial<McpPageState> = {}): McpPageState {
   return {
     supported: true,
     enabled: true,
-    allowWrites: true,
-    allowTreeCreation: true,
-    port: 27321,
-    status: { kind: "running", url: "http://127.0.0.1:27321/mcp" } as const,
-    configuredPort: 27321,
-    token: TOKEN,
+    read: readEndpoint(),
+    writeEnabled: true,
+    write: writeEndpoint(),
     ...overrides
   };
 }
@@ -72,41 +98,18 @@ test("anything outside the range or not a whole number is rejected", () => {
   }
 });
 
-test("the configured port falls back to the lowest bindable port", () => {
-  assert.equal(resolveConfiguredPort(27321), 27321);
-  assert.equal(resolveConfiguredPort(MIN_MCP_PORT), MIN_MCP_PORT);
-  for (const broken of [0, -5, 1023, 70000, Number.NaN, Number.POSITIVE_INFINITY]) {
-    assert.equal(resolveConfiguredPort(broken), MIN_MCP_PORT, String(broken));
-  }
-});
-
 test("the fallback count and the port bounds are the shared settings values", () => {
   assert.equal(describePortFallbacks(), MCP_PORT_FALLBACK_ATTEMPTS);
   assert.equal(reExportedMin, MIN_MCP_PORT);
   assert.equal(reExportedMax, MAX_MCP_PORT);
-});
-
-// ─── client configuration text ───────────────────────────────────────────────
-
-test("the config text is the same block the client-config builder produces", () => {
-  assert.equal(buildMcpConfigText(27321, TOKEN), buildMcpClientConfigText(27321, TOKEN));
-  assert.deepEqual(JSON.parse(buildMcpConfigText(27321, TOKEN)), buildMcpClientConfig(27321, TOKEN));
-});
-
-test("the config text points at the live loopback endpoint with the token in a header", () => {
-  const parsed = JSON.parse(buildMcpConfigText(27321, TOKEN)) as {
-    mcpServers: Record<string, { url: string; headers: { Authorization: string } }>;
-  };
-  const server = parsed.mcpServers["mind-tree-nature"];
-  assert.equal(server?.url, "http://127.0.0.1:27321/mcp");
-  assert.equal(server?.headers.Authorization, `Bearer ${TOKEN}`);
+  assert.equal(reExportedHost, "127.0.0.1");
 });
 
 // ─── status wording ──────────────────────────────────────────────────────────
 
 test("every status kind is described through the catalog", () => {
-  const running = describeMcpStatus({ kind: "running", url: "http://127.0.0.1:27321/mcp" });
-  assert.equal(running, t("settings.ai.mcp.status.running", { url: "http://127.0.0.1:27321/mcp" }));
+  const running = describeMcpStatus({ kind: "running", url: mcpUrl(27321) });
+  assert.equal(running, t("settings.ai.mcp.status.running", { url: mcpUrl(27321) }));
   assert.match(running, /127\.0\.0\.1:27321/);
 
   assert.equal(describeMcpStatus({ kind: "stopped" }), t("settings.ai.mcp.status.stopped"));
@@ -121,70 +124,164 @@ test("every status kind is described through the catalog", () => {
   }
 });
 
+test("a server's status line is the status wording, for either group", () => {
+  const running = { kind: "running", url: mcpUrl(27322) } as const;
+  assert.equal(describeMcpServerStatus("read", running), describeMcpStatus(running));
+  assert.equal(describeMcpServerStatus("write", running), describeMcpStatus(running));
+  assert.equal(describeMcpServerStatus("write", { kind: "stopped" }), t("settings.ai.mcp.status.stopped"));
+  assert.equal(
+    describeMcpServerStatus("read", { kind: "failed", message: "EADDRINUSE" }),
+    t("settings.ai.mcp.status.failed", { message: "EADDRINUSE" })
+  );
+});
+
 // ─── page model ──────────────────────────────────────────────────────────────
 
-test("a running, writable desktop server enables every control", () => {
+test("a running, write-capable desktop setup enables every control", () => {
   const model = buildMcpPageModel(state());
   assert.equal(model.supported, true);
   assert.equal(model.heading, t("settings.ai.mcp.heading"));
   assert.equal(model.description, t("settings.ai.mcp.desc"));
   assert.deepEqual(model.enable, { value: true, disabled: false });
-  assert.deepEqual(model.writes, { value: true, disabled: false });
-  assert.deepEqual(model.treeCreation, { value: true, disabled: false });
-  assert.deepEqual(model.port, { value: 27321, disabled: false });
-  assert.deepEqual(model.status, { kind: "running", text: t("settings.ai.mcp.status.running", { url: "http://127.0.0.1:27321/mcp" }) });
+
+  assert.equal(model.read.heading, t("settings.ai.mcp.read.heading"));
+  assert.equal(model.read.scope, t("settings.ai.mcp.read.scope"));
+  assert.deepEqual(model.read.port, { value: DEFAULT_MCP_READ_PORT, disabled: false });
+  assert.deepEqual(model.read.status, { kind: "running", text: t("settings.ai.mcp.status.running", { url: mcpUrl(27321) }) });
+
+  assert.equal(model.write.heading, t("settings.ai.mcp.write.heading"));
+  assert.equal(model.write.scope, t("settings.ai.mcp.write.scope"));
+  assert.equal(model.write.value, true);
+  assert.deepEqual(model.write.port, { value: DEFAULT_MCP_WRITE_PORT, disabled: false });
+  assert.deepEqual(model.write.status, { kind: "running", text: t("settings.ai.mcp.status.running", { url: mcpUrl(27322) }) });
+
   assert.equal(model.config.visible, true);
+  assert.equal(model.config.text, buildMcpClientConfigText(enabledConnections(state())));
 });
 
-test("an unsupported platform disables the controls and hides the secret", () => {
-  const model = buildMcpPageModel(state({ supported: false, status: { kind: "unsupported" } }));
+test("the two server scopes are distinct and non-empty", () => {
+  const model = buildMcpPageModel(state());
+  assert.ok(model.read.scope.length > 0);
+  assert.ok(model.write.scope.length > 0);
+  assert.notEqual(model.read.scope, model.write.scope);
+  assert.notEqual(model.read.heading, model.write.heading);
+});
+
+test("an unsupported platform disables every control and hides the secret", () => {
+  const model = buildMcpPageModel(state({
+    supported: false,
+    read: readEndpoint({ status: { kind: "unsupported" } }),
+    write: writeEndpoint({ status: { kind: "unsupported" } })
+  }));
   assert.deepEqual(model.enable, { value: true, disabled: true });
-  assert.deepEqual(model.port, { value: 27321, disabled: true });
-  assert.deepEqual(model.writes, { value: true, disabled: true });
-  assert.deepEqual(model.treeCreation, { value: true, disabled: true });
+  assert.deepEqual(model.read.port, { value: DEFAULT_MCP_READ_PORT, disabled: true });
+  assert.deepEqual(model.write.port, { value: DEFAULT_MCP_WRITE_PORT, disabled: true });
   assert.equal(model.config.visible, false);
-  assert.equal(model.status.text, t("settings.ai.mcp.status.desktopOnly"));
+  assert.equal(model.read.status.text, t("settings.ai.mcp.status.desktopOnly"));
+  // No token may be handed out by a platform that cannot serve one.
+  assert.doesNotMatch(model.config.text, new RegExp(TOKEN));
+  assert.doesNotMatch(model.config.text, new RegExp(WRITE_TOKEN));
 });
 
-test("the write switch is shown but inert while the server is off", () => {
-  const model = buildMcpPageModel(state({ enabled: false, allowWrites: true, status: { kind: "stopped" } }));
-  assert.deepEqual(model.writes, { value: true, disabled: true });
-  assert.deepEqual(model.treeCreation, { value: true, disabled: true });
+test("both servers are shown but inert while the master switch is off", () => {
+  const model = buildMcpPageModel(state({
+    enabled: false,
+    writeEnabled: true,
+    read: readEndpoint({ status: { kind: "stopped" } }),
+    write: writeEndpoint({ status: { kind: "stopped" } })
+  }));
   assert.deepEqual(model.enable, { value: false, disabled: false });
-  assert.equal(model.status.kind, "stopped");
+  assert.deepEqual(model.read.port, { value: DEFAULT_MCP_READ_PORT, disabled: true });
+  assert.equal(model.write.value, true);
+  assert.deepEqual(model.write.port, { value: DEFAULT_MCP_WRITE_PORT, disabled: true });
+  assert.equal(model.read.status.kind, "stopped");
+  assert.equal(model.write.status.kind, "stopped");
 });
 
-// The two capabilities are independent, so neither switch may reflect or
-// disable the other: the user hands them out separately.
-test("the two capability switches report and gate independently of each other", () => {
-  const editOnly = buildMcpPageModel(state({ allowWrites: true, allowTreeCreation: false }));
-  assert.deepEqual(editOnly.writes, { value: true, disabled: false });
-  assert.deepEqual(editOnly.treeCreation, { value: false, disabled: false });
+test("the write switch never disables the read server, and vice versa", () => {
+  // There is no per-tool permission any more: the read server runs unattended
+  // whatever the write switch says, so the two controls must stay independent.
+  const readOnly = buildMcpPageModel(state({ writeEnabled: false }));
+  assert.deepEqual(readOnly.enable, { value: true, disabled: false });
+  assert.deepEqual(readOnly.read.port, { value: DEFAULT_MCP_READ_PORT, disabled: false });
+  assert.equal(readOnly.write.value, false);
+  // A write server that is off cannot have its port edited into a running state.
+  assert.deepEqual(readOnly.write.port, { value: DEFAULT_MCP_WRITE_PORT, disabled: true });
 
-  const createOnly = buildMcpPageModel(state({ allowWrites: false, allowTreeCreation: true }));
-  assert.deepEqual(createOnly.writes, { value: false, disabled: false });
-  assert.deepEqual(createOnly.treeCreation, { value: true, disabled: false });
+  const writeOnly = buildMcpPageModel(state({ writeEnabled: true }));
+  assert.deepEqual(writeOnly.read.port, { value: DEFAULT_MCP_READ_PORT, disabled: false });
+  assert.equal(writeOnly.write.value, true);
+  assert.deepEqual(writeOnly.write.port, { value: DEFAULT_MCP_WRITE_PORT, disabled: false });
 });
 
-test("a writable-capable server still reports the user's write preference", () => {
-  const model = buildMcpPageModel(state({ allowWrites: false }));
-  assert.deepEqual(model.writes, { value: false, disabled: false });
+test("each server reports its own port and its own bound port is what the client gets", () => {
+  const model = buildMcpPageModel(state({
+    read: readEndpoint({ port: 1234, boundPort: 27321 }),
+    write: writeEndpoint({
+      port: 4321,
+      boundPort: 27324,
+      status: { kind: "running", url: mcpUrl(27324) },
+      token: WRITE_TOKEN
+    })
+  }));
+  // The preference is shown; the configuration must carry the port that bound.
+  assert.equal(model.read.port.value, 1234);
+  assert.equal(model.write.port.value, 4321);
+  const parsed = JSON.parse(model.config.text) as { mcpServers: Record<string, { url: string }> };
+  assert.equal(parsed.mcpServers["mind-tree-nature-read"]?.url, mcpUrl(27321));
+  assert.equal(parsed.mcpServers["mind-tree-nature-write"]?.url, mcpUrl(27324));
 });
 
-test("the config text uses the port the server actually bound", () => {
-  const model = buildMcpPageModel(state({ port: 1234, configuredPort: 27321 }));
-  assert.equal(model.config.text, buildMcpConfigText(27321, TOKEN));
-  assert.equal(model.port.value, 1234);
+test("a failed start keeps the failure message in that server's status line", () => {
+  const model = buildMcpPageModel(state({
+    read: readEndpoint({ status: { kind: "failed", message: "EADDRINUSE" } }),
+    write: writeEndpoint({ status: { kind: "running", url: mcpUrl(27322) } })
+  }));
+  assert.equal(model.read.status.kind, "failed");
+  assert.match(model.read.status.text, /EADDRINUSE/);
+  assert.equal(model.write.status.kind, "running");
 });
 
-test("a failed start keeps the failure message in the status line", () => {
-  const model = buildMcpPageModel(state({ enabled: true, status: { kind: "failed", message: "EADDRINUSE" } }));
-  assert.equal(model.status.kind, "failed");
-  assert.match(model.status.text, /EADDRINUSE/);
-});
-
-test("the config block stays visible while the server is merely stopped", () => {
-  const model = buildMcpPageModel(state({ enabled: false, status: { kind: "stopped" } }));
-  assert.equal(model.status.kind, "stopped");
+test("the config block stays visible while the servers are merely stopped", () => {
+  const model = buildMcpPageModel(state({
+    enabled: true,
+    read: readEndpoint({ status: { kind: "stopped" } }),
+    write: writeEndpoint({ status: { kind: "stopped" } })
+  }));
+  assert.equal(model.read.status.kind, "stopped");
+  assert.equal(model.write.status.kind, "stopped");
   assert.equal(model.config.visible, true);
+});
+
+// ─── client connections handed to the config builder ─────────────────────────
+
+test("no connection is advertised unless the servers are supported and enabled", () => {
+  assert.deepEqual(enabledConnections(state({ enabled: false })), []);
+  assert.deepEqual(enabledConnections(state({ supported: false })), []);
+  assert.deepEqual(enabledConnections(state({ enabled: false, writeEnabled: true })), []);
+});
+
+test("the read entry is always there; the write entry only once its server is on", () => {
+  const readOnly = enabledConnections(state({ writeEnabled: false }));
+  assert.deepEqual(readOnly, [{ group: "read", port: DEFAULT_MCP_READ_PORT, token: TOKEN }]);
+
+  const both = enabledConnections(state({ writeEnabled: true }));
+  assert.deepEqual(both, [
+    { group: "read", port: DEFAULT_MCP_READ_PORT, token: TOKEN },
+    { group: "write", port: DEFAULT_MCP_WRITE_PORT, token: WRITE_TOKEN }
+  ]);
+  // Distinct tokens: the read-only entry must never carry write authority.
+  assert.notEqual(both[0]?.token, both[1]?.token);
+});
+
+test("each connection prefers the bound port and falls back to the preference", () => {
+  const connections = enabledConnections(state({
+    read: readEndpoint({ port: 1234, boundPort: 27321 }),
+    writeEnabled: true,
+    write: writeEndpoint({ port: 4321, boundPort: undefined, token: WRITE_TOKEN })
+  }));
+  assert.deepEqual(connections, [
+    { group: "read", port: 27321, token: TOKEN },
+    { group: "write", port: 4321, token: WRITE_TOKEN }
+  ]);
 });

@@ -9,7 +9,12 @@
  * (write tools while the user's switch is off) testable without a runtime.
  */
 import { t } from "../../i18n";
-import { DEFAULT_MCP_FIND_LIMIT, DEFAULT_MCP_READ_MAX_NODES } from "./connection";
+import {
+  DEFAULT_MCP_FIND_LIMIT,
+  DEFAULT_MCP_READ_MAX_NODES,
+  mcpServerName,
+  type McpServerGroup
+} from "./connection";
 import type { McpToolHost } from "./contracts";
 import {
   buildToolErrorResult,
@@ -26,10 +31,12 @@ import {
   type McpToolResult
 } from "./json-rpc-core";
 import { McpToolError, normalizeToolError, type McpToolErrorCode } from "./tool-error";
-import { collectArgumentProblems, getAllToolDefinitions, getToolDefinition, type McpToolDefinition } from "./tool-schemas";
-
-/** Advertised to clients as the server identity; informational only. */
-export const MCP_SERVER_NAME = "mind-tree-nature";
+import {
+  collectArgumentProblems,
+  getToolDefinitionFor,
+  getToolDefinitionsFor,
+  type McpToolDefinition
+} from "./tool-schemas";
 
 /**
  * Reported when the host supplies no version.
@@ -241,54 +248,35 @@ async function executeTool(
 }
 
 /**
- * Call one tool by name.
+ * Call one tool by name **on one server**.
  *
  * Argument faults are answers, not protocol errors: the model is the caller and
- * a readable `isError` result is the only way it can correct itself. The
- * capability gate runs before validation and before any port is touched, so a
- * refused write cannot even look at the vault.
+ * a readable `isError` result is the only way it can correct itself.
  *
- * Localization rule: only the errors originated here (`writes-disabled`,
- * `tree-creation-disabled`, `invalid-arguments`) are translated. A `McpToolError`
+ * The server matters here rather than a plugin-side permission check. Reads and
+ * writes are two servers precisely so a client attaches its own approval policy
+ * to each; the plugin never answers "you may not", it only answers "that tool is
+ * not on this server". A write tool called against the read server is therefore
+ * an unknown tool there, which is exactly what `tools/list` already told the
+ * client.
+ *
+ * Localization rule: only `invalid-arguments` originates here. A `McpToolError`
  * thrown by the host owns its own already-localized sentence and is forwarded
  * verbatim - the code is for branching, the message is for display.
  */
-/**
- * The capability gate, as one table so a new access tier cannot be half-wired.
- *
- * Every check reads the host at call time (never at construction), which is what
- * lets the user flip a switch and have the very next tool call honour it.
- */
-function permissionRefusal(definition: McpToolDefinition, host: McpToolHost): McpToolResult | undefined {
-  switch (definition.access) {
-    case "read":
-      return undefined;
-    case "create-tree":
-      return host.environment.allowsTreeCreation()
-        ? undefined
-        : toolFailure("tree-creation-disabled", t("mcp.error.treeCreationDisabled"));
-    case "write":
-      return host.environment.allowsWrites()
-        ? undefined
-        : toolFailure("writes-disabled", t("mcp.error.writesDisabled"));
-  }
-}
-
 export async function callTool(
   host: McpToolHost,
+  server: McpServerGroup,
   name: string,
   rawArguments: unknown
 ): Promise<McpToolResult> {
-  const definition = getToolDefinition(name);
+  const definition = getToolDefinitionFor(name, server);
   if (definition === undefined) {
     return toolFailure(
       "invalid-arguments",
       t("mcp.error.invalidArguments", { detail: `unknown tool "${name}"` })
     );
   }
-
-  const refusal = permissionRefusal(definition, host);
-  if (refusal !== undefined) return refusal;
 
   const problems = collectArgumentProblems(definition, rawArguments);
   if (problems.length > 0) {
@@ -304,34 +292,48 @@ export async function callTool(
   }
 }
 
-function buildInitializeResult(host: McpToolHost, params: Record<string, unknown>): unknown {
+function buildInitializeResult(
+  host: McpToolHost,
+  server: McpServerGroup,
+  params: Record<string, unknown>
+): unknown {
   return {
     protocolVersion: negotiateProtocolVersion(params["protocolVersion"]),
     capabilities: { tools: { listChanged: false } },
-    // The release version is a host fact, not a protocol constant: the pure
-    // layer must not import manifest.json and a copy here would drift.
-    serverInfo: { name: MCP_SERVER_NAME, version: host.environment.version?.() ?? MCP_DEV_SERVER_VERSION }
+    // The two servers must be distinguishable in a client's server list, so the
+    // advertised identity carries the group; it matches the `mcpServers` key the
+    // copied configuration uses.
+    serverInfo: {
+      name: mcpServerName(server),
+      // The release version is a host fact, not a protocol constant: the pure
+      // layer must not import manifest.json and a copy here would drift.
+      version: host.environment.version?.() ?? MCP_DEV_SERVER_VERSION
+    }
   };
 }
 
-async function handleToolCall(host: McpToolHost, params: Record<string, unknown>): Promise<McpToolResult> {
+async function handleToolCall(
+  host: McpToolHost,
+  server: McpServerGroup,
+  params: Record<string, unknown>
+): Promise<McpToolResult> {
   const name = params["name"];
   if (typeof name !== "string" || name.trim() === "") {
     // The tool selector is part of the request envelope, not of the tool's own
     // arguments, so a missing name is a protocol fault rather than a tool result.
     throw new JsonRpcFault(JSON_RPC_ERROR_CODES.invalidParams, "Invalid params");
   }
-  return callTool(host, name, params["arguments"]);
+  return callTool(host, server, name, params["arguments"]);
 }
 
-function createMethodTable(host: McpToolHost): JsonRpcMethodTable {
+function createMethodTable(host: McpToolHost, server: McpServerGroup): JsonRpcMethodTable {
   return {
-    initialize: (params) => buildInitializeResult(host, params),
+    initialize: (params) => buildInitializeResult(host, server, params),
     ping: () => ({}),
-    // Write tools are always advertised and refused at call time instead: a
-    // client that caches `tools/list` must still learn why the write failed.
-    "tools/list": () => buildToolsListResult(getAllToolDefinitions()),
-    "tools/call": (params) => handleToolCall(host, params)
+    // Each server advertises only its own catalog, which is what lets the client
+    // decide the approval policy per server instead of per tool.
+    "tools/list": () => buildToolsListResult(getToolDefinitionsFor(server)),
+    "tools/call": (params) => handleToolCall(host, server, params)
   };
 }
 
@@ -348,8 +350,9 @@ function createNotificationTable(): JsonRpcNotificationTable {
  */
 export async function handleMcpMessage(
   raw: string,
-  host: McpToolHost
+  host: McpToolHost,
+  server: McpServerGroup
 ): Promise<JsonRpcResponse | undefined> {
   const message = parseJsonRpcText(raw);
-  return dispatchJsonRpcMessage(message, createMethodTable(host), createNotificationTable());
+  return dispatchJsonRpcMessage(message, createMethodTable(host, server), createNotificationTable());
 }

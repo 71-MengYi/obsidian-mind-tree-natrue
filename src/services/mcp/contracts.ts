@@ -11,6 +11,7 @@
  * through the shared document session so they share history, undo and the
  * per-file write lane with the canvas.
  */
+import type { McpServerGroup } from "./connection";
 import type { MindTreeNode, NodeId, ResourceRef } from "../../types";
 
 /** One node rendered for tool output; never a whole document. */
@@ -130,21 +131,17 @@ export interface McpTreeLocator {
 }
 
 export interface McpHostEnvironment {
-  /** Only a supported platform may construct or start the transport. */
+  /** Only a supported platform may construct or start a transport. */
   isSupported(): boolean;
-  /** The persisted edit switch, read at call time so a toggle applies at once. */
-  allowsWrites(): boolean;
   /**
-   * The persisted whole-tree-creation switch, read at call time.
+   * Live configuration of one server, for one-click client setup.
    *
-   * Deliberately separate from `allowsWrites`: creating a new file and editing an
-   * existing one are different risks, so a user can let an assistant reorganise
-   * a tree they are watching without also letting it create files unattended.
-   * Adding a node *inside* an existing tree is editing, not creation.
+   * Per group because each server has its own port and its own token: a token
+   * that unlocked writes must never be the token the read-only entry carries.
+   * There is deliberately no per-tool permission here — the read and write
+   * catalogs are the boundary, and approval lives in the client.
    */
-  allowsTreeCreation(): boolean;
-  /** Live configuration for one-click client setup. */
-  connection(): { port: number; token: string };
+  connection(group: McpServerGroup): { port: number; token: string };
   /**
    * Release version reported in the `initialize` handshake.
    *

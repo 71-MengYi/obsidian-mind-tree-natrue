@@ -35,7 +35,11 @@ UI 采用命令式 DOM 组件但保持单向数据流。`MindTreeView` 只负责
 
 组件不得反向导入 `MindTreeView` 或插件主类。界面事件先转换为命名操作，由领域命令产生新文档状态，随后视图重新计算状态并调用组件 `update()`；本阶段仍使用完整布局和重绘，不引入虚拟 DOM。
 
-MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`contracts.ts` 冻结边界接口，`mcp-core.ts`、`json-rpc-core.ts`、`tool-schemas.ts`、`client-config.ts`、`settings-page-model.ts`、`availability.ts` 是零 Obsidian 依赖的纯模块，可以被 `node:test` 直接覆盖；`obsidian-tool-host.ts`、`tree-reader.ts`、`tree-locator.ts`、`session-writer.ts`、`http-transport.ts`、`mcp-server.ts` 才允许接触仓库、会话与设置。协议层不引入 `@modelcontextprotocol/sdk`（会带来整棵依赖树并触碰体积上限），只实现传输规范要求的子集：单一 `POST /mcp` 端点、`application/json` 响应、`Mcp-Session-Id` 与 `MCP-Protocol-Version` 头、通知返回 `202`、未提供 SSE 时 `GET` 返回 `405`。读取工具经由 `tree-reader.ts` 直接解析文件，**不要求打开视图**；写入工具经由 `session-writer.ts` 复用 `SharedMindTreeSession` 的历史与文件级串行写队列，因此与画布操作共用撤销栈和保存基线，磁盘基线不一致时宁可拒绝也不覆盖。思维树的创建路径被抽到 `services/tree-creation.ts`，界面命令与 MCP 工具共用同一实现。参见 [MCP Streamable HTTP 传输规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。
+MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`contracts.ts` 冻结边界接口，`mcp-core.ts`、`json-rpc-core.ts`、`tool-schemas.ts`、`client-config.ts`、`settings-page-model.ts`、`availability.ts`、`connection.ts` 是零 Obsidian 依赖的纯模块，可以被 `node:test` 直接覆盖；`obsidian-tool-host.ts`、`tree-reader.ts`、`tree-locator.ts`、`session-writer.ts`、`http-transport.ts`、`mcp-server.ts` 才允许接触仓库、会话与设置。协议层不引入 `@modelcontextprotocol/sdk`（会带来整棵依赖树并触碰体积上限），只实现传输规范要求的子集：`POST /mcp` 端点、`application/json` 响应、`Mcp-Session-Id` 与 `MCP-Protocol-Version` 头、通知返回 `202`、未提供 SSE 时 `GET` 返回 `405`。
+
+**分权模型是“两个服务器”，不是“一个服务器加权限开关”**：`McpServerGroup` 为 `"read" | "write"`，每个工具在 `tool-schemas.ts` 里声明自己属于哪个服务器（`server` 字段），`mcp-core` 的 `handleMcpMessage(raw, host, server)` 只暴露该服务器的目录。客户端把工具审批策略挂在服务器上，所以这是唯一能让“读取免审批、写入需确认”成立的形状。`McpServerController` 每个 group 一个实例，各自持有端口、令牌与 `McpServerRecord`（键 `${manifest.id}:mcp-server:<group>`）；`connection(group)` 与 `buildMcpClientConfig(connections)` 保证只读那条配置永远拿不到写入令牌。插件**不对工具调用做权限判断**：不属于当前服务器的工具就是该服务器上的未知工具。
+
+读取工具经由 `tree-reader.ts` 直接解析文件，**不要求打开视图**；写入工具经由 `session-writer.ts` 复用 `SharedMindTreeSession` 的历史与文件级串行写队列，因此与画布操作共用撤销栈和保存基线，磁盘基线不一致时宁可拒绝也不覆盖。思维树的创建路径被抽到 `services/tree-creation.ts`，界面命令与 MCP 工具共用同一实现。参见 [MCP Streamable HTTP 传输规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。
 
 核心树操作必须与 UI 框架解耦，并通过纯数据单元测试验证。所有文件变更统一经过 `ResourceService`，避免菜单、命令和拖拽各自实现一套规则。
 
@@ -132,11 +136,11 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 | 节点文字换行宽度 | 240 px | 只限制标题文字区域；标记、文件按钮与节点边距追加到节点总宽度。 |
 | 自定义标记（Emoji） | 空 | 全局“管理标记”页；有序的 `{ id, kind: "emoji", value }` 列表，最多 64 项，每项必须是**单个 Emoji 字形**；取值只能来自 `src/ui/emoji-data.ts` 的离线目录（由 `scripts/generate-emoji-data.mjs` 生成），检索走 `src/ui/emoji-search.ts` 的本地匹配，决定标记面板中 Emoji 组的顺序与节点尾部 Emoji 的显示。 |
 | 自定义标记（文字标记） | 空 | 全局“管理标记”页；有序的 `{ id, kind: "tag", value }` 列表，最多 64 项、每项 24 字符，决定标记面板中文字标记组的顺序与节点尾部文字标签的显示。 |
-| MCP 服务开关 | 关闭 | 全局“AI”页；仅桌面端。开启后在本机 `127.0.0.1` 上启动 MCP 端点，关闭立即释放端口。默认关闭，因此默认不监听、不加载 HTTP 模块。 |
-| MCP 修改节点权限 | 关闭 | 全局“AI”页；与总开关独立的开关。只有它为开时才暴露修改已有思维树的工具，否则这些工具返回具名错误且不触碰任何端口。 |
-| MCP 创建思维树权限 | 关闭 | 全局“AI”页；**与“修改节点”并列的独立开关**。只有它为开时才暴露 `create_tree`。两者互不牵连：改动已有文件与产出新文件是不同风险，用户可只授予其中一项。旧配置里没有该键时回落为关闭（宁可少授予，不可升级即默默放开建文件）。 |
-| MCP 端口 | 27321 | 全局“AI”页，取值 `1024–65535`；占用时按顺序尝试其后最多 10 个端口，实际生效值写入设备本地存储并在状态行显示。 |
-| MCP 访问令牌 | 每台设备自动生成 | **不属于全局设置**：保存在设备本地存储（键 `${manifest.id}:mcp-server`），随仓库隔离并跟随本机，不写 `data.json`，因此不会被同步复制到其他设备。 |
+| MCP 服务开关 | 关闭 | 全局“AI”页；仅桌面端。开启后在本机 `127.0.0.1` 上启动只读服务器（写入服务器按其自身开关决定）。默认关闭，因此默认不监听、不加载 HTTP 模块。 |
+| MCP 只读服务器端口 | 27321 | 全局“AI”页，取值 `1024–65535`；占用时按顺序尝试其后最多 10 个端口，实际生效值写入设备本地存储并在状态行显示。 |
+| MCP 写入服务器开关 | 关闭 | 全局“AI”页；当前只读服务器之外的第二个服务器。承载全部会改动的工具。**默认关闭，且升级时不继承旧的写权限开关**——升级只能收窄授权，不能默默新增一个入站服务。 |
+| MCP 写入服务器端口 | 27322 | 全局“AI”页，规则同只读端口。客户端按 host:port 区分服务器，因此两者必须是不同的端口。 |
+| MCP 访问令牌 | 每台设备、每个服务器各自生成 | **不属于全局设置**：保存在设备本地存储（键 `${manifest.id}:mcp-server:<read\|write>`），随仓库隔离并跟随本机，不写 `data.json`，因此不会被同步复制到其他设备，且只读令牌无法解锁写入服务器。 |
 
 表中“布局模式”“主题”“连线样式”“节点形状”“文件收集策略”和“递归扫描子目录”是文档设置；六者以可读 YAML 保存，不能复制进底部压缩 JSON。表中的“默认布局”“默认配色主题”“默认连线样式”“默认节点形状”和“默认文件收集策略”是插件全局设置，为所有尚未显式设置该项的导图（含新建导图）提供运行时默认值。文档设置变化进入当前视图的撤销栈并触发自动保存；文件收集策略或递归扫描变化还会使当前目录扫描缓存失效。
 
@@ -220,7 +224,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
   2. `Host` 与 `Origin` 头必须落在回环主机集合内，否则拒绝（防 DNS rebinding）；
   3. 每个请求都必须带该设备的 `Authorization: Bearer` 令牌；令牌保存在设备本地存储而不进入 `data.json`，以免被同步复制到别的设备；
   4. 请求体有固定字节上限，超限在解析前拒绝；
-  5. 写权限是**两个独立开关**（“修改节点”与“创建思维树”），默认均关闭，且互不牵连。关闭时对应工具一律返回具名错误，且不触碰任何端口；调用点在任何参数校验之前先查权限。
+  5. 分权靠**两个服务器**而不是按工具拦截：`read` 目录不含任何会写入的工具，`write` 目录不含任何只读工具，两者端口与令牌都不同。插件不对工具调用做权限判断——不属于当前服务器的工具就是“该服务器上没有这个工具”。这样客户端的逐服务器审批策略才有意义。
 - 该通道的日志只记录方法与工具名，绝不记录节点标题或笔记正文。
 - URL 只允许安全协议，并使用 Obsidian 提供的外部链接打开方式。
 - 节点标题、Markdown 和 SVG/HTML 导出内容必须转义，避免脚本注入。

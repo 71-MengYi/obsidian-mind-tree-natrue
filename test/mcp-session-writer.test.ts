@@ -1,28 +1,35 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { registerHooks } from "node:module";
+import { register } from "node:module";
 
 // Only the host boundary is stubbed: the writer runs the real sessions, the real
 // compare-and-set logic, the real conflict assessment and the real domain
 // commands, because those are exactly the parts that must not be re-implemented.
-// The mock URL is unique to this file: one process shares the ESM cache by URL.
-const mockUrl = "file:///mind-tree-test-host/obsidian-session-writer.mjs";
-const hooks = registerHooks({
-  resolve(specifier, context, next) {
-    return specifier === "obsidian" ? { url: mockUrl, shortCircuit: true } : next(specifier, context);
-  },
-  load(url, context, next) {
-    return url === mockUrl ? { format: "module", shortCircuit: true, source:
-      'export const getLanguage = () => "en";' } : next(url, context);
-  }
-});
+//
+// `module.register` (Node >= 20.6) is used instead of `module.registerHooks`
+// (Node >= 22.15) because AGENTS.md and the release workflow pin this project at
+// Node >= 20: a test that only runs on a newer runtime is not runnable on a
+// supported one. The hook is scoped to the i18n facade itself - the only
+// `obsidian` importer in this module graph - and the stub source carries a
+// file-specific marker so this file's module URL is unique: with
+// `--test-isolation=none` the ESM cache is process-wide and keyed by URL.
+const OBSIDIAN_STUB = "data:text/javascript," + encodeURIComponent(
+  '// obsidian stub for mcp-session-writer.test.ts\nexport const getLanguage = () => "en";\n'
+);
+register("data:text/javascript," + encodeURIComponent(
+  "export async function resolve(specifier, context, next) {\n" +
+  '  if (specifier === "obsidian" && context.parentURL?.endsWith("/i18n/index.ts")) {\n' +
+  `    return { url: ${JSON.stringify(OBSIDIAN_STUB)}, shortCircuit: true };\n` +
+  "  }\n" +
+  "  return next(specifier, context);\n" +
+  "}\n"
+));
 const { MindTreeSessionWriter } = await import("../src/services/mcp/session-writer");
 const { McpToolError } = await import("../src/services/mcp/tool-error");
 const { MindTreeSessionRegistry } = await import("../src/services/mind-tree-session-registry");
 const { createEmptyDocument, addNode } = await import("../src/domain/tree");
 const { parseMindTreeFile, serializeMindTreeFile } = await import("../src/format/document");
 const { t } = await import("../src/i18n");
-hooks.deregister();
 
 const PATH = "Folder/Tree.mtn.md";
 
@@ -39,9 +46,7 @@ interface Participant {
   commitActiveDraft(): "committed" | "rejected";
 }
 
-function fixture(initial = buildTree(), overrides: {
-  allowsWrites?: () => boolean;
-} = {}) {
+function fixture(initial = buildTree()) {
   const files = new Map<string, string>([[PATH, initial.source]]);
   const processCalls: string[] = [];
   const writes: string[] = [];
@@ -73,7 +78,6 @@ function fixture(initial = buildTree(), overrides: {
       return next;
     },
     parseOptions: () => ({}),
-    allowsWrites: overrides.allowsWrites ?? (() => true),
     fileReference: async (filePath) => ({
       type: "file",
       resourceId: `rid-${filePath}`,
@@ -353,33 +357,19 @@ test("node links are one-way and reject self or second links", async () => {
   assert.equal(fixtureState.documentAt().nodes[fixtureState.initial.second]!.nodeLink, undefined);
 });
 
-test("create_tree never steals focus and refuses when writes are off", async () => {
+test("create_tree never steals focus and forwards only what the caller asked for", async () => {
   const fixtureState = fixture();
   const created = await fixtureState.writer.createTree({ title: "New", folder: "New", children: ["One"] });
   assert.deepEqual(fixtureState.createdTrees, [
     { title: "New", folderPath: "New", children: ["One"], focus: false }
   ]);
   assert.deepEqual(created, { path: "New/Tree.mtn.md", documentId: "new-id", rootId: "root", childIds: ["child-1"] });
+});
 
-  const off = fixture();
-  const readOnly = new MindTreeSessionWriter({
-    sessions: off.registry,
-    fileExists: (path) => off.files.has(path),
-    read: async (path) => off.files.get(path) ?? "",
-    process: async (path, transform) => transform(off.files.get(path) ?? ""),
-    parseOptions: () => ({}),
-    allowsWrites: () => false,
-    fileReference: async () => ({ type: "file", resourceId: "x", pathHint: "x", fileKind: "note" }),
-    creation: { create: async () => { throw new Error("must not be called"); } },
-    notifyExternalChange: () => undefined
-  });
-  await assert.rejects(
-    () => readOnly.createTree({ title: "New" }),
-    (error: unknown) => {
-      assert.ok(error instanceof McpToolError);
-      assert.equal(error.code, "writes-disabled");
-      assert.equal(error.message, t("mcp.error.writesDisabled"));
-      return true;
-    }
-  );
+test("create_tree invents no folder or children and always asks for no focus", async () => {
+  const fixtureState = fixture();
+  await fixtureState.writer.createTree({ title: "Solo" });
+  // The writer has no permission port any more: the boundary is that `create_tree`
+  // is only served by the write server, which `test/mcp-tools.test.ts` pins.
+  assert.deepEqual(fixtureState.createdTrees, [{ title: "Solo", focus: false }]);
 });

@@ -120,11 +120,14 @@ test("the AI page delegates every decision to the pure settings-page model", () 
   assert.doesNotMatch(page, /port\s*[<>]=?\s*(?:MIN|MAX)_MCP_PORT|(?:MIN|MAX)_MCP_PORT\s*[<>]=?\s*port/);
 });
 
-test("the AI page mutates the server only through named port transitions", () => {
+test("the AI page mutates the servers only through named transitions", () => {
   const page = source("ui/settings-pages/ai-settings-page.ts");
   assert.match(page, /this\.port\.mcp\.setEnabled\(value\)/);
-  assert.match(page, /this\.port\.mcp\.setAllowWrites\(value\)/);
-  assert.match(page, /this\.port\.mcp\.applyPortInput\(raw\)/);
+  // The write server has its own switch; there are no per-tool permission
+  // switches any more, because approval lives in the client per server.
+  assert.match(page, /this\.port\.mcp\.setWriteEnabled\(value\)/);
+  // Ports are per server, so the transition carries which one is being edited.
+  assert.match(page, /this\.port\.mcp\.applyPortInput\(server, raw\)/);
   assert.match(page, /this\.port\.mcp\.copyText\(text\)/);
   // MCP preferences live in the device-local record, so this page must not
   // claim a `data.json` write or touch the shared settings object.

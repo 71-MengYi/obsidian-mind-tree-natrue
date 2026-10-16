@@ -15,18 +15,19 @@ import {
   DEFAULT_MCP_FIND_LIMIT,
   DEFAULT_MCP_READ_MAX_NODES,
   MAX_MCP_FIND_LIMIT,
-  MAX_MCP_READ_MAX_NODES
+  MAX_MCP_READ_MAX_NODES,
+  type McpServerGroup
 } from "./connection";
 
 /**
- * What a tool is allowed to do, and therefore which switch gates it.
+ * Which server a tool belongs to, and therefore which client policy applies.
  *
- * `create-tree` is deliberately its own tier rather than another `write` tool:
- * creating a whole new file is a different kind of risk from editing one the
- * user is already looking at, so the user can hand out one without the other.
- * (Adding a node *inside* an existing tree is editing, not creating.)
+ * This is not a per-tool permission: the plugin does not gate tools. It decides
+ * which of the two catalogs a name appears in, so `tools/list` on the read
+ * server can never advertise anything that writes, and a write tool called
+ * against the read server is simply an unknown tool there.
  */
-export type McpToolAccess = "read" | "write" | "create-tree";
+export type McpToolServer = McpServerGroup;
 
 export type McpJsonPropertySchema = {
   type: "string" | "integer" | "boolean" | "array";
@@ -48,8 +49,8 @@ export type McpToolDefinition = {
   name: McpToolName;
   description: string;
   inputSchema: McpToolInputSchema;
-  /** `write` tools need the edit switch; `create-tree` needs its own. */
-  access: McpToolAccess;
+  /** The server that serves this tool; the read catalog must stay write-free. */
+  server: McpToolServer;
 };
 
 /**
@@ -147,7 +148,7 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
     description:
       "List every mind tree in the vault with its path, document id and node count. Start here when you do not know which mind tree the user means.",
     inputSchema: schemaOf({}, []),
-    access: "read"
+    server: "read"
   },
   {
     name: "read_tree",
@@ -166,7 +167,7 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: "Row offset for pagination. The response reports nextOffset while more rows remain."
       }
     }),
-    access: "read"
+    server: "read"
   },
   {
     name: "find_nodes",
@@ -183,19 +184,19 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: `Maximum matches to return. Defaults to ${DEFAULT_MCP_FIND_LIMIT}.`
       }
     }, ["query"]),
-    access: "read"
+    server: "read"
   },
   {
     name: "get_node",
     description: "Read one node with its parent id, child ids, markers, file resource and node link.",
     inputSchema: nodeSchema(),
-    access: "read"
+    server: "read"
   },
   {
     name: "get_parent",
     description: "Read the parent of one node. Returns null when the node is the tree root.",
     inputSchema: nodeSchema(),
-    access: "read"
+    server: "read"
   },
   {
     name: "get_children",
@@ -206,25 +207,25 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: "When true, return every descendant in document order instead of the direct children."
       }
     }),
-    access: "read"
+    server: "read"
   },
   {
     name: "get_node_path",
     description: "Read the ancestor chain of one node, from the root down to and including the node.",
     inputSchema: nodeSchema(),
-    access: "read"
+    server: "read"
   },
   {
     name: "get_linked_files",
     description: "Read the file resource and the node link attached to one node.",
     inputSchema: nodeSchema(),
-    access: "read"
+    server: "read"
   },
   {
     name: "get_tree_stats",
     description: "Read node count, linked file count and maximum depth for one mind tree.",
     inputSchema: selectionSchema(),
-    access: "read"
+    server: "read"
   },
   {
     name: "create_tree",
@@ -245,7 +246,10 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: "Titles of the top-level nodes to create under the new root."
       }
     }, ["title"]),
-    access: "create-tree"
+    // Creating a whole tree sits on the write server: it produces a file, so it
+    // belongs behind the same approval as the edits. Adding a node *inside* an
+    // existing tree is an edit, not a creation, and lives here too.
+    server: "write"
   },
   {
     name: "move_node",
@@ -254,7 +258,7 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
       nodeId: NODE_ID_PROPERTY,
       targetId: TARGET_ID_PROPERTY
     }, ["nodeId", "targetId"]),
-    access: "write"
+    server: "write"
   },
   {
     name: "add_node",
@@ -271,20 +275,20 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: "Zero-based position among the parent's children. Appends when omitted."
       }
     }, ["parentId", "title"]),
-    access: "write"
+    server: "write"
   },
   {
     name: "rename_node",
     description: "Change the title of one node.",
     inputSchema: nodeSchema({ title: TITLE_PROPERTY }, ["title"]),
-    access: "write"
+    server: "write"
   },
   {
     name: "delete_node",
     description:
       "Remove one node and promote its children to the node's parent. Never deletes a branch and never deletes a file.",
     inputSchema: nodeSchema(),
-    access: "write"
+    server: "write"
   },
   {
     name: "link_file",
@@ -296,13 +300,13 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: "Vault-relative path of the file to associate."
       }
     }, ["filePath"]),
-    access: "write"
+    server: "write"
   },
   {
     name: "unlink_file",
     description: "Remove the file association from a node. The file itself is left untouched.",
     inputSchema: nodeSchema(),
-    access: "write"
+    server: "write"
   },
   {
     name: "link_node",
@@ -312,7 +316,7 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
       sourceId: SOURCE_ID_PROPERTY,
       targetId: TARGET_ID_PROPERTY
     }, ["sourceId", "targetId"]),
-    access: "write"
+    server: "write"
   },
   {
     name: "unlink_node",
@@ -320,7 +324,7 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
     inputSchema: selectionSchema({
       sourceId: SOURCE_ID_PROPERTY
     }, ["sourceId"]),
-    access: "write"
+    server: "write"
   }
 ]);
 
@@ -329,18 +333,22 @@ export function getAllToolDefinitions(): readonly McpToolDefinition[] {
   return MCP_TOOL_DEFINITIONS;
 }
 
+/** The catalog one server advertises, in declaration order. */
+export function getToolDefinitionsFor(server: McpServerGroup): readonly McpToolDefinition[] {
+  return MCP_TOOL_DEFINITIONS.filter((definition) => definition.server === server);
+}
+
 export function getToolDefinition(name: string): McpToolDefinition | undefined {
   return MCP_TOOL_DEFINITIONS.find((definition) => definition.name === name);
 }
 
-/**
- * The declared access of a tool, or `undefined` when the name is unknown.
- *
- * Replaces the old `isWriteTool` boolean: with two independent capability tiers
- * a yes/no answer can no longer say *which* switch gates a tool.
- */
-export function accessOfTool(name: string): McpToolAccess | undefined {
-  return getToolDefinition(name)?.access;
+export function getToolDefinitionFor(name: string, server: McpServerGroup): McpToolDefinition | undefined {
+  return MCP_TOOL_DEFINITIONS.find((definition) => definition.name === name && definition.server === server);
+}
+
+/** The server a tool belongs to, or `undefined` when the name is unknown. */
+export function serverOfTool(name: string): McpServerGroup | undefined {
+  return getToolDefinition(name)?.server;
 }
 
 function describePropertyType(property: McpJsonPropertySchema): string {

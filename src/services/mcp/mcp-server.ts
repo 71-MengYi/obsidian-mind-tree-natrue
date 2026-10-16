@@ -1,6 +1,12 @@
-import { DEFAULT_MCP_PORT, MAX_MCP_PORT, MCP_PORT_FALLBACK_ATTEMPTS, normalizeMcpPort } from "../../settings-model";
+import {
+  DEFAULT_MCP_READ_PORT,
+  DEFAULT_MCP_WRITE_PORT,
+  MAX_MCP_PORT,
+  MCP_PORT_FALLBACK_ATTEMPTS,
+  normalizeMcpPort
+} from "../../settings-model";
 import { isMcpSupported } from "./availability";
-import { mcpUrl, normalizeMcpServerRecord, type McpServerRecord } from "./connection";
+import { mcpServerRecordKey, mcpUrl, normalizeMcpServerRecord, type McpServerGroup, type McpServerRecord } from "./connection";
 import { McpHttpTransport, type McpListenerFactory } from "./http-transport";
 import type { McpSettingsStatus } from "./settings-page-model";
 
@@ -13,6 +19,8 @@ export interface McpServerStorage {
 export interface McpServerControllerOptions {
   /** `manifest.id`; the record key is per plugin and never leaves the device. */
   pluginId: string;
+  /** Which of the two servers this controller owns. */
+  group: McpServerGroup;
   /** `!Platform.isMobile`, read at call time so a reload cannot stale it. */
   isDesktop(): boolean;
   storage: McpServerStorage;
@@ -23,7 +31,11 @@ export interface McpServerControllerOptions {
 }
 
 /**
- * Owns the lifetime of the local MCP endpoint.
+ * Owns the lifetime of one local MCP endpoint.
+ *
+ * One instance per group, because the two servers are independent: separate
+ * ports for separate client approval policies, and separate tokens so a read
+ * configuration can never unlock writes.
  *
  * The controller keeps three things apart on purpose: the *preference* (the port
  * the user asked for, from plugin settings), the *record* (this device's bound
@@ -36,14 +48,23 @@ export interface McpServerControllerOptions {
 export class McpServerController {
   private transport?: McpHttpTransport;
   private live: McpSettingsStatus = { kind: "stopped" };
-  private preferredPort: number = DEFAULT_MCP_PORT;
+  private preferredPort: number;
   private memory?: McpServerRecord;
 
-  constructor(private readonly options: McpServerControllerOptions) {}
+  constructor(private readonly options: McpServerControllerOptions) {
+    this.preferredPort = DEFAULT_PORT_BY_GROUP[options.group];
+  }
 
-  /** The record key; device-local, so it is never part of `data.json`. */
+  /** A getter, not a field: `useDefineForClassFields` initializes fields before
+   * the constructor assigns the parameter property, so a field copy would read
+   * `undefined`. */
+  get group(): McpServerGroup {
+    return this.options.group;
+  }
+
+  /** The record key; per group and device-local, so never part of `data.json`. */
   get storageKey(): string {
-    return `${this.options.pluginId}:mcp-server`;
+    return mcpServerRecordKey(this.options.pluginId, this.options.group);
   }
 
   /**
@@ -66,6 +87,11 @@ export class McpServerController {
     return this.transport?.boundPort ?? this.readRecord()?.port ?? this.preferredPort;
   }
 
+  /** The live bound port, or `undefined` while nothing is listening. */
+  get boundPort(): number | undefined {
+    return this.transport?.boundPort;
+  }
+
   status(): McpSettingsStatus {
     if (!this.options.isDesktop()) return { kind: "unsupported" };
     return this.live;
@@ -73,7 +99,7 @@ export class McpServerController {
 
   /** Binds, falling back to nearby ports, and reports what happened. */
   async start(preferredPort: number): Promise<McpSettingsStatus> {
-    this.preferredPort = normalizeMcpPort(preferredPort) ?? DEFAULT_MCP_PORT;
+    this.preferredPort = normalizeMcpPort(preferredPort) ?? DEFAULT_PORT_BY_GROUP[this.options.group];
     // Defence in depth: construct-time support is not evidence that the runtime
     // can still serve, and a half-started service is worse than an absent one.
     if (!isMcpSupported({ isDesktop: this.options.isDesktop() })) {
@@ -132,7 +158,21 @@ export class McpServerController {
     try {
       this.options.storage.save(this.storageKey, record);
     } catch (error) {
-      this.options.logger?.(`MCP record could not be stored: ${error instanceof Error ? error.message : String(error)}`);
+      this.options.logger?.(`MCP record could not be stored: ${describeThrown(error)}`);
     }
   }
+}
+
+/** The port each group prefers when settings supply none. */
+const DEFAULT_PORT_BY_GROUP: Record<McpServerGroup, number> = {
+  read: DEFAULT_MCP_READ_PORT,
+  write: DEFAULT_MCP_WRITE_PORT
+};
+
+function describeThrown(error: unknown): string {
+  if (error !== null && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  return String(error);
 }

@@ -1838,6 +1838,24 @@
 
 /* ── AI settings: MCP server section ─────────────────────────────────────── */
 
+/*
+ * One block per server: a sub-heading, the sentence that says what that server
+ * holds, then its own switch (write only), port and status. The two blocks are
+ * laid out identically so a difference in behaviour is the only difference the
+ * user has to read.
+ */
+.mtn-settings-ai-server {
+  margin-top: 18px;
+}
+
+.mtn-settings-ai-server-heading {
+  margin-bottom: 4px;
+}
+
+.mtn-settings-ai-server-scope {
+  margin-top: 0;
+}
+
 /* A bindable port is at most five digits, so the field stays short. */
 .mtn-settings-ai-port-input {
   width: 10ch;
@@ -1873,6 +1891,11 @@
   font-family: var(--font-monospace);
   font-size: var(--font-ui-smaller);
   resize: vertical;
+}
+
+/* The warning is about the token in the field above it, so it sits after it. */
+.mtn-settings-ai-secret-warning {
+  margin-top: 8px;
 }
 
 .mtn-settings-ai-notice {

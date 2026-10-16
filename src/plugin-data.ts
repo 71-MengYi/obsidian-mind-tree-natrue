@@ -77,14 +77,17 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
       connectionStyle: normalizeConnectionStyle(settings?.["connectionStyle"], DEFAULT_SETTINGS.connectionStyle),
       nodeShape: normalizeNodeShape(settings?.["nodeShape"], DEFAULT_SETTINGS.nodeShape),
       mcpEnabled: safeBoolean(settings?.["mcpEnabled"], DEFAULT_SETTINGS.mcpEnabled),
-      mcpAllowWrites: safeBoolean(settings?.["mcpAllowWrites"], DEFAULT_SETTINGS.mcpAllowWrites),
-      // A tree written before the split has no value here. Defaulting to `false`
-      // rather than inheriting the edit switch hands the user *less* access than
-      // before, so an upgrade can never silently grant file creation.
-      mcpAllowTreeCreation: safeBoolean(settings?.["mcpAllowTreeCreation"], DEFAULT_SETTINGS.mcpAllowTreeCreation),
+      // A configuration written before the two-server split only had a single
+      // port. Carrying it forward as the *read* port keeps an existing client
+      // configuration pointing at a server that still exists, and the write
+      // server stays off: an upgrade must never widen what is exposed, so a
+      // previously granted write permission is deliberately NOT carried over.
+      mcpReadPort: normalizeMcpPort(settings?.["mcpReadPort"] ?? settings?.["mcpPort"])
+        ?? DEFAULT_SETTINGS.mcpReadPort,
+      mcpWriteEnabled: safeBoolean(settings?.["mcpWriteEnabled"], DEFAULT_SETTINGS.mcpWriteEnabled),
       // An out-of-range port falls back to the default rather than clamping:
       // silently binding to 1024 because someone typed 80 would be surprising.
-      mcpPort: normalizeMcpPort(settings?.["mcpPort"]) ?? DEFAULT_SETTINGS.mcpPort
+      mcpWritePort: normalizeMcpPort(settings?.["mcpWritePort"]) ?? DEFAULT_SETTINGS.mcpWritePort
     }
   };
 }
