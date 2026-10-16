@@ -268,6 +268,7 @@ interface HarnessOptions {
   readonly supported?: boolean;
   readonly enabled?: boolean;
   readonly allowWrites?: boolean;
+  readonly allowTreeCreation?: boolean;
   readonly port?: number;
   readonly configuredPort?: number;
   readonly token?: string;
@@ -289,6 +290,7 @@ interface Harness {
   page: PageInstance;
   enableToggle(): TestElement;
   writeToggle(): TestElement;
+  treeCreationToggle(): TestElement;
   portField(): TestElement;
   portError(): TestElement;
   statusLine(): TestElement;
@@ -333,6 +335,7 @@ function fixture(options: HarnessOptions = {}): Harness {
     supported: options.supported ?? true,
     enabled: options.enabled ?? false,
     allowWrites: options.allowWrites ?? false,
+    allowTreeCreation: options.allowTreeCreation ?? false,
     port: options.port ?? configuredPort,
     status,
     configuredPort,
@@ -361,6 +364,10 @@ function fixture(options: HarnessOptions = {}): Harness {
       setAllowWrites: async (allowWrites) => {
         calls.push(`setAllowWrites:${allowWrites}`);
         state.allowWrites = allowWrites;
+      },
+      setAllowTreeCreation: async (allowTreeCreation) => {
+        calls.push(`setAllowTreeCreation:${allowTreeCreation}`);
+        state.allowTreeCreation = allowTreeCreation;
       },
       setPort: async (value) => {
         calls.push(`setPort:${value}`);
@@ -398,7 +405,7 @@ function fixture(options: HarnessOptions = {}): Harness {
     return found[0]!;
   };
   const field = (): TestElement => {
-    const input = at(sandbox.settings, 2, "port Setting").texts[0]?.inputEl;
+    const input = at(sandbox.settings, 3, "port Setting").texts[0]?.inputEl;
     assert.ok(input, "the port Setting needs a text field");
     return input;
   };
@@ -420,17 +427,19 @@ function fixture(options: HarnessOptions = {}): Harness {
     byClass,
     enableToggle: () => at(at(sandbox.settings, 0, "enable Setting").toggles, 0, "enable toggle").toggleEl,
     writeToggle: () => at(at(sandbox.settings, 1, "writes Setting").toggles, 0, "writes toggle").toggleEl,
+    treeCreationToggle: () =>
+      at(at(sandbox.settings, 2, "tree creation Setting").toggles, 0, "tree creation toggle").toggleEl,
     portField: field,
     portError: () => only("mtn-settings-ai-port-error"),
     statusLine: () => only("mtn-settings-ai-status"),
     notice: () => only("mtn-settings-ai-notice"),
     configSection: () => only("mtn-settings-ai-config"),
     configText: () => {
-      const area = at(sandbox.settings, 3, "config Setting").textAreas[0]?.inputEl;
+      const area = at(sandbox.settings, 4, "config Setting").textAreas[0]?.inputEl;
       assert.ok(area, "the config Setting needs a textarea");
       return area;
     },
-    copyButton: () => at(at(sandbox.settings, 3, "config Setting").buttons, 0, "copy button").buttonEl,
+    copyButton: () => at(at(sandbox.settings, 4, "config Setting").buttons, 0, "copy button").buttonEl,
     copyFeedback: () => only("mtn-settings-ai-copy-feedback"),
     typePort,
     pressEnter: (value) => {
@@ -438,7 +447,7 @@ function fixture(options: HarnessOptions = {}): Harness {
       input.value = value;
       input.fire("keydown", { key: "Enter" });
     },
-    copy: () => { at(at(sandbox.settings, 3, "config Setting").buttons, 0, "copy button").buttonEl.fire("click"); },
+    copy: () => { at(at(sandbox.settings, 4, "config Setting").buttons, 0, "copy button").buttonEl.fire("click"); },
     runTimers: () => {
       const pending = [...sandbox.timers.values()];
       sandbox.timers.clear();
@@ -467,17 +476,19 @@ test("renders the AI tab heading and the model's MCP heading and description", (
   assert.equal(description.hasClass("setting-item-description"), true);
   assert.equal(description.text, translate("settings.ai.mcp.desc", "en"));
 
-  // The four rows are the enable switch, the write switch, the port and the
-  // client config, in the order the panel documents.
+  // The five rows are the enable switch, the two independent capability
+  // switches, the port and the client config, in the order the panel documents.
   assert.deepEqual(h.settings.map((setting) => setting.nameEl.text), [
     translate("settings.ai.mcp.enable", "en"),
     translate("settings.ai.mcp.writes", "en"),
+    translate("settings.ai.mcp.treeCreation", "en"),
     translate("settings.ai.mcp.port", "en"),
     ""
   ]);
   assert.deepEqual(h.settings.map((setting) => setting.descEl.text), [
     translate("settings.ai.mcp.enable.desc", "en"),
     translate("settings.ai.mcp.writes.desc", "en"),
+    translate("settings.ai.mcp.treeCreation.desc", "en"),
     translate("settings.ai.mcp.port.desc", "en", {
       min: MIN_MCP_PORT, max: MAX_MCP_PORT, fallbacks: MCP_PORT_FALLBACK_ATTEMPTS
     }),
@@ -500,6 +511,35 @@ test("both switches show the resolved state and the write switch is inert while 
   const on = fixture({ enabled: true });
   assert.equal(on.enableToggle().checked, true);
   assert.equal(on.writeToggle().disabled, false);
+  assert.equal(on.treeCreationToggle().disabled, false);
+});
+
+test("the two capability switches render and transition independently", async () => {
+  // Editing a tree and creating one are separate grants: each switch must show
+  // only its own value and must never be disabled by the other's state.
+  const editOnly = fixture({ enabled: true, allowWrites: true, allowTreeCreation: false });
+  assert.equal(editOnly.writeToggle().checked, true);
+  assert.equal(editOnly.treeCreationToggle().checked, false);
+  assert.equal(editOnly.writeToggle().disabled, false);
+  assert.equal(editOnly.treeCreationToggle().disabled, false);
+
+  editOnly.treeCreationToggle().checked = true;
+  editOnly.treeCreationToggle().fire("change");
+  await settle();
+  assert.deepEqual(editOnly.calls, ["setAllowTreeCreation:true"]);
+  assert.equal(editOnly.state.allowTreeCreation, true);
+  assert.equal(editOnly.state.allowWrites, true, "granting creation must not revoke editing");
+
+  const createOnly = fixture({ enabled: true, allowWrites: false, allowTreeCreation: true });
+  assert.equal(createOnly.writeToggle().checked, false);
+  assert.equal(createOnly.treeCreationToggle().checked, true);
+
+  createOnly.writeToggle().checked = true;
+  createOnly.writeToggle().fire("change");
+  await settle();
+  assert.deepEqual(createOnly.calls, ["setAllowWrites:true"]);
+  assert.equal(createOnly.state.allowWrites, true);
+  assert.equal(createOnly.state.allowTreeCreation, true, "granting editing must not revoke creation");
 });
 
 test("flipping the server switch runs the named transition and re-reads the port's state", async () => {

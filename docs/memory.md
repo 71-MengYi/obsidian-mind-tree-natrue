@@ -488,6 +488,40 @@
 - Mermaid 复制不含资源链接与节点标记（按「minimal / 可解析」取舍）。若用户要求带资源，需要先确定 mermaid 侧的承载形式（`click` 行只对 flowchart/graph 有效，mindmap 不支持）。
 - `edit` 的 `ReplaceFileW EIO (Win32 1175)` 本轮在 `src/ui/mind-tree-view.ts`、`README.en.md`、`AGENTS.md` 上各出现一次，原样重试即成功；AGENTS.md 每次编辑后会被重新注入指令（正常现象）。
 
+## 2026-10-16 · MCP 两个独立权限：修改节点 / 创建思维树（`feat`）
+
+**需求（用户追加）**：把「写入思维树」的 MCP 拆成独立权限。原先 `create_tree` 与修改节点的工具共用 `mcpAllowWrites` 一个开关，用户希望**创建整棵思维树**是一条**独立授权**。
+
+**口径（按「改动已有文件」与「产出新文件」是两种不同风险来切）**
+- **读**：9 个只读工具，永远可用，不受任何开关影响。
+- **修改节点**（`mcpAllowWrites`）：`move_node`、`add_node`、`rename_node`、`delete_node`、`link_file`、`unlink_file`、`link_node`、`unlink_node`。
+- **创建思维树**（新设置 `mcpAllowTreeCreation`）：只有 `create_tree`。
+- **`add_node` 属于「修改」而不是「创建」** —— 它改动的是一棵已存在的树。判据是「是否产出新文件」，不是「名字里有没有 create」。
+- 两个开关**默认都关、互不牵连**：任何一个都不启用或禁用另一个。
+
+**落点**
+- `contracts.ts`：`McpToolAccess` 由 `"read" | "write"` 扩展为 `"read" | "write" | "create-tree"`；`McpHostEnvironment` 新增 `allowsTreeCreation()`（与 `allowsWrites()` 并列，均在 **call time** 读取，因此用户改开关后下一次调用就生效）。
+- `tool-schemas.ts`：`create_tree` 声明 `access: "create-tree"`；**`isWriteTool(name): boolean` 已删除并替换为 `accessOfTool(name): McpToolAccess | undefined`** —— 三档能力用一个布尔已经答不出「归哪个开关管」，这是必须换 API 的原因。
+- `mcp-core.ts`：新增 `permissionRefusal(definition, host)` 作为**唯一闸门表**（`switch (definition.access)`，穷尽分支），在**参数校验之前**执行，所以被拒的调用连一个端口都不会碰。
+- `tool-error.ts`：新增错误码 `"tree-creation-disabled"`。
+- `settings-model.ts` / `plugin-data.ts`：新增 `mcpAllowTreeCreation`；**旧配置缺该键时回落为 `false` 而不是继承 `mcpAllowWrites`** —— 升级只能**少**授权，绝不能默默放开建文件。
+- `settings-page-model.ts`：`McpPageState`/`McpPageModel` 增加 `allowTreeCreation`/`treeCreation`；两个开关都只受「服务是否开启」禁用，**不互相禁用**。
+- `ai-settings-page.ts`：新增第三个开关；`ports.ts` 增加 `setAllowTreeCreation`。
+- i18n：`settings.ai.mcp.writes` 措辞改为「允许修改节点的工具」，新增 `settings.ai.mcp.treeCreation(.desc)` 与 `mcp.error.treeCreationDisabled`，并同步改写 `writesDisabled` 与 README 段落（两语言占位符一致）。
+
+**⚠ 本轮抓到并修掉一个真缺陷（跨 realm 的 `instanceof`）**
+`ai-settings-page.ts` 的 `describeError()` 原本是 `error instanceof Error ? error.message : String(error)`。当页面被 `esbuild buildSync + node:vm` 在一个**新 realm** 里求值时，测试（另一个 realm）抛出的 `Error` **不满足该 realm 的 `instanceof Error`**，于是走 `String(error)` 兜底，状态行变成 **`Could not start: Error: address already in use`**（多一个 `Error:` 前缀）。改为鸭子类型读 `message` 后不再依赖 realm。
+**教训**：`instanceof` 是 realm 局部的，任何**跨 realm 传错误对象**的代码都不能用它；这类缺陷只在「把该模块放进独立 realm 求值」的测试里才暴露——**而它直到本轮沙箱变成 `danger-full-access`、`buildSync` 终于能跑时才第一次被发现**（此前该测试文件整段是 `spawn EPERM`，0 用例执行）。凡是「文件级失败看起来像环境问题」的测试，都是长期盲区。
+
+**验证（本轮沙箱已放宽为 danger-full-access，因此是全量真跑）**
+- `npm run check` **0 错误**。
+- `npm test`（真命令）→ 实际用替代运行器：**1002 tests / 1002 pass / 0 fail**（此前 7 条 `spawn EPERM` 的 DOM 测试这次全部真实执行，`ai-settings-page` 15 条全过）。
+- `npm run build`（真命令，本轮可跑）：**exit 0，`main.js` 4,750,162 字节 ≈ 4.53 MiB**（上限 10 MiB），产物中 `node:http` **无字面量 `require`**（仍只有字符串常量），移动端加载不受影响。
+- 新增/改写测试：`mcp-tools` 新增「四种权限组合」断言（只开修改时 `create_tree` 被拒、只开创建时修改类被拒、两个都关时各自报自己的码）；`mcp-settings-page-model` 新增两开关互不牵连；`ai-settings-page` 新增行序 + 两开关独立过渡；`plugin-data` 新增「旧配置不继承创建权限」。
+
+**环境变化（对后续 agent 很重要）**：本轮沙箱策略已从 `workspace-write` 变为 **`danger-full-access`**，`npm test` 与 `npm run build` 都能直接跑通，`esbuild spawn EPERM` 的旧替代方案可以不用了；但 `AGENTS.md` §5 里记的「7 条必然失败」基线仍适用于**受限**沙箱，别把环境差异当成回归。
+
+
 
 
 

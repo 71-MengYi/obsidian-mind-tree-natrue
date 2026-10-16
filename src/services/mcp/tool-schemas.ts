@@ -18,7 +18,15 @@ import {
   MAX_MCP_READ_MAX_NODES
 } from "./connection";
 
-export type McpToolAccess = "read" | "write";
+/**
+ * What a tool is allowed to do, and therefore which switch gates it.
+ *
+ * `create-tree` is deliberately its own tier rather than another `write` tool:
+ * creating a whole new file is a different kind of risk from editing one the
+ * user is already looking at, so the user can hand out one without the other.
+ * (Adding a node *inside* an existing tree is editing, not creating.)
+ */
+export type McpToolAccess = "read" | "write" | "create-tree";
 
 export type McpJsonPropertySchema = {
   type: "string" | "integer" | "boolean" | "array";
@@ -40,7 +48,7 @@ export type McpToolDefinition = {
   name: McpToolName;
   description: string;
   inputSchema: McpToolInputSchema;
-  /** `write` tools are refused while the user's write switch is off. */
+  /** `write` tools need the edit switch; `create-tree` needs its own. */
   access: McpToolAccess;
 };
 
@@ -237,7 +245,7 @@ export const MCP_TOOL_DEFINITIONS: readonly McpToolDefinition[] = Object.freeze(
         description: "Titles of the top-level nodes to create under the new root."
       }
     }, ["title"]),
-    access: "write"
+    access: "create-tree"
   },
   {
     name: "move_node",
@@ -325,9 +333,14 @@ export function getToolDefinition(name: string): McpToolDefinition | undefined {
   return MCP_TOOL_DEFINITIONS.find((definition) => definition.name === name);
 }
 
-/** Only write tools are gated, so the check is asked as one closed question. */
-export function isWriteTool(name: string): boolean {
-  return getToolDefinition(name)?.access === "write";
+/**
+ * The declared access of a tool, or `undefined` when the name is unknown.
+ *
+ * Replaces the old `isWriteTool` boolean: with two independent capability tiers
+ * a yes/no answer can no longer say *which* switch gates a tool.
+ */
+export function accessOfTool(name: string): McpToolAccess | undefined {
+  return getToolDefinition(name)?.access;
 }
 
 function describePropertyType(property: McpJsonPropertySchema): string {

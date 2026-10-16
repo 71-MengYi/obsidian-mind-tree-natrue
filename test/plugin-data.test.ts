@@ -72,6 +72,7 @@ test("an absent MCP configuration stays off, read-only and on the default port",
   const normalized = normalizePluginData({ settings: {} });
   assert.equal(normalized.settings.mcpEnabled, false);
   assert.equal(normalized.settings.mcpAllowWrites, false);
+  assert.equal(normalized.settings.mcpAllowTreeCreation, false);
   assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
   assert.equal(DEFAULT_SETTINGS.mcpEnabled, false);
 });
@@ -81,12 +82,22 @@ test("a damaged MCP configuration is repaired field by field", () => {
     settings: {
       mcpEnabled: "yes",
       mcpAllowWrites: 1,
+      mcpAllowTreeCreation: "true",
       mcpPort: "27321"
     }
   });
   assert.equal(normalized.settings.mcpEnabled, false);
   assert.equal(normalized.settings.mcpAllowWrites, false);
+  assert.equal(normalized.settings.mcpAllowTreeCreation, false);
   assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
+});
+
+test("a configuration written before the capability split grants no tree creation", () => {
+  // An upgrade must never hand out *more* access than the user asked for, so the
+  // new switch defaults to off instead of inheriting the old write switch.
+  const normalized = normalizePluginData({ settings: { mcpEnabled: true, mcpAllowWrites: true } });
+  assert.equal(normalized.settings.mcpAllowWrites, true);
+  assert.equal(normalized.settings.mcpAllowTreeCreation, false);
 });
 
 test("an out-of-range MCP port falls back instead of clamping into the privileged range", () => {
@@ -103,10 +114,11 @@ test("an out-of-range MCP port falls back instead of clamping into the privilege
 
 test("the MCP switches survive a valid configuration and never leak elsewhere", () => {
   const normalized = normalizePluginData({
-    settings: { mcpEnabled: true, mcpAllowWrites: true, mcpPort: 29_000 }
+    settings: { mcpEnabled: true, mcpAllowWrites: true, mcpAllowTreeCreation: true, mcpPort: 29_000 }
   });
   assert.equal(normalized.settings.mcpEnabled, true);
   assert.equal(normalized.settings.mcpAllowWrites, true);
+  assert.equal(normalized.settings.mcpAllowTreeCreation, true);
   assert.equal(normalized.settings.mcpPort, 29_000);
   // The access token is device-local and must never be part of plugin data.
   assert.equal(Object.hasOwn(normalized.settings, "mcpToken"), false);

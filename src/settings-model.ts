@@ -50,8 +50,17 @@ export interface MindTreeSettings {
    * inbound connections; desktop-only, and the access token never lives here.
    */
   mcpEnabled: boolean;
-  /** Gates every tool that changes a document. Read-only tools stay available. */
+  /**
+   * Gates every tool that changes an existing document. Read-only tools stay
+   * available. Adding a node inside an existing tree counts as editing.
+   */
   mcpAllowWrites: boolean;
+  /**
+   * Gates the tool that creates a whole new `.mtn.md`. Deliberately separate
+   * from `mcpAllowWrites`: producing a new file and editing a file the user is
+   * watching are different risks, so the user picks which to hand out.
+   */
+  mcpAllowTreeCreation: boolean;
   /** Preferred port; a busy port falls back to nearby ones. */
   mcpPort: number;
 }
@@ -87,6 +96,7 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   nodeShape: "rounded",
   mcpEnabled: false,
   mcpAllowWrites: false,
+  mcpAllowTreeCreation: false,
   mcpPort: DEFAULT_MCP_PORT
 };
 

@@ -28,6 +28,7 @@ export interface McpSettingsPagePort {
   state(): McpPageState;
   setEnabled(enabled: boolean): Promise<void>;
   setAllowWrites(allowWrites: boolean): Promise<void>;
+  setAllowTreeCreation(allowTreeCreation: boolean): Promise<void>;
   setPort(port: number): Promise<void>;
   /** Applies the port text as typed; returns false when it is not a valid port. */
   applyPortInput(raw: string): Promise<boolean>;
@@ -50,6 +51,7 @@ export function unsupportedMcpSettingsPort(): McpSettingsPagePort {
       supported: false,
       enabled: false,
       allowWrites: false,
+      allowTreeCreation: false,
       port: 0,
       status: { kind: "unsupported" },
       configuredPort: 0,
@@ -57,6 +59,7 @@ export function unsupportedMcpSettingsPort(): McpSettingsPagePort {
     }),
     setEnabled: async () => undefined,
     setAllowWrites: async () => undefined,
+    setAllowTreeCreation: async () => undefined,
     setPort: async () => undefined,
     applyPortInput: async () => false,
     start: async () => ({ kind: "unsupported" }),

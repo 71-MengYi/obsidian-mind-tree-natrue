@@ -3,8 +3,9 @@
  *
  * The page itself is only DOM plumbing: it asks these functions what to render
  * and what a control change means. Keeping the rules here means the
- * desktop-only gate, the write-tool gate and the port validation are covered
- * by ordinary unit tests instead of a browser-shaped harness.
+ * desktop-only gate, the two capability switches (editing an existing tree and
+ * creating a whole new one) and the port validation are covered by ordinary unit
+ * tests instead of a browser-shaped harness.
  */
 import { t } from "../../i18n";
 import {
@@ -26,6 +27,7 @@ export interface McpPageState {
   supported: boolean;
   enabled: boolean;
   allowWrites: boolean;
+  allowTreeCreation: boolean;
   port: number;
   status: McpSettingsStatus;
   configuredPort: number;
@@ -39,6 +41,7 @@ export interface McpPageModel {
   description: string;
   enable: { value: boolean; disabled: boolean };
   writes: { value: boolean; disabled: boolean };
+  treeCreation: { value: boolean; disabled: boolean };
   port: { value: number; disabled: boolean };
   status: { kind: McpSettingsStatus["kind"]; text: string };
   config: { text: string; visible: boolean };
@@ -83,9 +86,12 @@ export function buildMcpPageModel(state: McpPageState): McpPageModel {
     heading: t("settings.ai.mcp.heading"),
     description: t("settings.ai.mcp.desc"),
     enable: { value: state.enabled, disabled: !state.supported },
-    // Write tools are meaningless while the server is off, so the switch is
-    // shown but inert instead of hidden, which would hide the capability.
+    // Editing and creating are meaningless while the server is off, so both
+    // switches stay visible but inert instead of hidden, which would hide the
+    // capability. They are also independent of each other: a user may want one
+    // without the other, so neither disables its sibling.
     writes: { value: state.allowWrites, disabled: writesDisabled },
+    treeCreation: { value: state.allowTreeCreation, disabled: writesDisabled },
     port: { value: state.port, disabled: !state.supported },
     status: { kind: state.status.kind, text: describeMcpStatus(state.status) },
     config: {

@@ -249,10 +249,31 @@ async function executeTool(
  * refused write cannot even look at the vault.
  *
  * Localization rule: only the errors originated here (`writes-disabled`,
- * `invalid-arguments`) are translated. A `McpToolError` thrown by the host owns
- * its own already-localized sentence and is forwarded verbatim - the code is
- * for branching, the message is for display.
+ * `tree-creation-disabled`, `invalid-arguments`) are translated. A `McpToolError`
+ * thrown by the host owns its own already-localized sentence and is forwarded
+ * verbatim - the code is for branching, the message is for display.
  */
+/**
+ * The capability gate, as one table so a new access tier cannot be half-wired.
+ *
+ * Every check reads the host at call time (never at construction), which is what
+ * lets the user flip a switch and have the very next tool call honour it.
+ */
+function permissionRefusal(definition: McpToolDefinition, host: McpToolHost): McpToolResult | undefined {
+  switch (definition.access) {
+    case "read":
+      return undefined;
+    case "create-tree":
+      return host.environment.allowsTreeCreation()
+        ? undefined
+        : toolFailure("tree-creation-disabled", t("mcp.error.treeCreationDisabled"));
+    case "write":
+      return host.environment.allowsWrites()
+        ? undefined
+        : toolFailure("writes-disabled", t("mcp.error.writesDisabled"));
+  }
+}
+
 export async function callTool(
   host: McpToolHost,
   name: string,
@@ -266,9 +287,8 @@ export async function callTool(
     );
   }
 
-  if (definition.access === "write" && !host.environment.allowsWrites()) {
-    return toolFailure("writes-disabled", t("mcp.error.writesDisabled"));
-  }
+  const refusal = permissionRefusal(definition, host);
+  if (refusal !== undefined) return refusal;
 
   const problems = collectArgumentProblems(definition, rawArguments);
   if (problems.length > 0) {

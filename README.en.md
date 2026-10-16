@@ -136,15 +136,19 @@ On desktop the plugin exposes a local MCP server, so MCP clients such as Claude 
 1. Open **Settings → Mind Tree Nature → AI** (this page only exists on desktop).
 2. Turn on **Enable MCP server**. It listens on this computer only (`127.0.0.1`), default port `27321`; if that port is busy it tries nearby ports and the status line shows the address actually in use. Switching it off stops the server immediately.
 3. Click **Copy configuration JSON** and paste it into your client's MCP configuration file (Claude Desktop's `claude_desktop_config.json`, or Cursor's `mcp.json`). The snippet already contains the address and this computer's access token — no fields to fill in by hand.
-4. Turn on **Allow write tools** when you want AI to change your mind trees. It is off by default and is a separate second switch.
+4. Turn on **Allow tools that edit nodes** when you want AI to change nodes (add, move, rename and delete a node, and link or unlink a file).
+5. Turn on **Allow tools that create mind trees** separately when you want AI to start a whole new mind tree. The two switches are **independent**: you can grant either one on its own.
 
-Read-only tools (no write permission needed): list mind trees; read a whole tree (nested or flat shape, paged by node count); find nodes by title; read one node; read its parent; read its children (optionally the whole subtree); read the title path from the root to it; read its linked files and node reference; read a tree's node, file and depth counts.
+Read-only tools (no permission switch needed): list mind trees; read a whole tree (nested or flat shape, paged by node count); find nodes by title; read one node; read its parent; read its children (optionally the whole subtree); read the title path from the root to it; read its linked files and node reference; read a tree's node, file and depth counts.
 
-Write tools (require write permission): **create a mind tree** (optionally in a specific folder, with initial child titles); move a node to become a child of another node; add a child node; rename a node; delete a single node (its children move up); link an existing vault file; unlink a file; create or remove a same-document node reference.
+Node-editing tools (require **Allow tools that edit nodes**): move a node to become a child of another node; add a child node; rename a node; delete a single node (its children move up); link an existing vault file; unlink a file; create or remove a same-document node reference.
+
+Tree-creation tools (require **Allow tools that create mind trees**): create a whole new mind tree file (optionally in a specific folder, with initial child titles). It is kept apart from node editing because it produces a new file rather than changing the tree you are looking at, and it only creates files — it never moves, renames or deletes any file.
 
 A few deliberate rules:
 
-- Every write is an ordinary **single-step undoable** edit, exactly as if you had made it in the UI, and it is saved to the file right away.
+- Every edit is an ordinary **single-step undoable** change, exactly as if you had made it in the UI, and it is saved to the file right away.
+- **Both permission switches default to off and are independent of each other.** Granting creation does not also grant node editing, and granting node editing does not also grant creating files.
 - **Unlinking only removes the reference on the node — it never deletes your file.** Linking only accepts files that already exist in the vault, and MCP never creates, imports or moves a file (a non-Markdown file that has no resource identity yet gains its identity suffix in the same folder, exactly as when you link it in the UI).
 - MCP cannot delete a whole branch and cannot delete a file.
 - If a tree has unresolved external changes, or the file is changed by another program while an operation runs, the write is refused with a reason and **nothing is overwritten**.

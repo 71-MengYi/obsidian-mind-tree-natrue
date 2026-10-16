@@ -132,8 +132,17 @@ export interface McpTreeLocator {
 export interface McpHostEnvironment {
   /** Only a supported platform may construct or start the transport. */
   isSupported(): boolean;
-  /** The persisted write-permission switch, read at call time so a toggle applies at once. */
+  /** The persisted edit switch, read at call time so a toggle applies at once. */
   allowsWrites(): boolean;
+  /**
+   * The persisted whole-tree-creation switch, read at call time.
+   *
+   * Deliberately separate from `allowsWrites`: creating a new file and editing an
+   * existing one are different risks, so a user can let an assistant reorganise
+   * a tree they are watching without also letting it create files unattended.
+   * Adding a node *inside* an existing tree is editing, not creation.
+   */
+  allowsTreeCreation(): boolean;
   /** Live configuration for one-click client setup. */
   connection(): { port: number; token: string };
   /**

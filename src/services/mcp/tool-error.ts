@@ -9,6 +9,7 @@
  */
 export type McpToolErrorCode =
   | "writes-disabled"
+  | "tree-creation-disabled"
   | "service-unavailable"
   | "invalid-arguments"
   | "tree-not-found"

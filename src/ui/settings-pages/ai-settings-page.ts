@@ -44,6 +44,7 @@ export class AiSettingsPage implements SettingsPageObject {
 
   private enableToggle?: ToggleLike;
   private writeToggle?: ToggleLike;
+  private treeCreationToggle?: ToggleLike;
   private portInput?: HTMLInputElement;
   private configText?: HTMLTextAreaElement;
   private readonly configSection: HTMLElement;
@@ -82,6 +83,18 @@ export class AiSettingsPage implements SettingsPageObject {
         toggle.setDisabled(model.writes.disabled);
         toggle.onChange((value) => {
           void this.transition(() => this.port.mcp.setAllowWrites(value));
+        });
+      });
+
+    new Setting(parent)
+      .setName(t("settings.ai.mcp.treeCreation"))
+      .setDesc(t("settings.ai.mcp.treeCreation.desc"))
+      .addToggle((toggle) => {
+        this.treeCreationToggle = toggle;
+        toggle.setValue(model.treeCreation.value);
+        toggle.setDisabled(model.treeCreation.disabled);
+        toggle.onChange((value) => {
+          void this.transition(() => this.port.mcp.setAllowTreeCreation(value));
         });
       });
 
@@ -186,6 +199,8 @@ export class AiSettingsPage implements SettingsPageObject {
     this.enableToggle?.setDisabled(model.enable.disabled);
     this.writeToggle?.setValue(model.writes.value);
     this.writeToggle?.setDisabled(model.writes.disabled);
+    this.treeCreationToggle?.setValue(model.treeCreation.value);
+    this.treeCreationToggle?.setDisabled(model.treeCreation.disabled);
     if (this.portInput) {
       this.portInput.value = String(model.port.value);
       this.portInput.disabled = model.port.disabled;
@@ -286,7 +301,19 @@ export class AiSettingsPage implements SettingsPageObject {
   }
 }
 
-/** Error objects format differently across hosts; the message is what matters. */
+/**
+ * Error objects format differently across hosts; the message is what matters.
+ *
+ * Deliberately not `error instanceof Error`: `instanceof` is realm-local, so a
+ * failure raised by another realm (a plugin host, an iframe, or the `vm` realm a
+ * test evaluates this module in) would not match and would fall back to
+ * `String(error)`, leaking an "Error:" prefix into the user's status line. A
+ * duck-typed `message` string is both sufficient and realm-independent.
+ */
 function describeError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  if (error !== null && typeof error === "object") {
+    const message = (error as { message?: unknown }).message;
+    if (typeof message === "string" && message.length > 0) return message;
+  }
+  return String(error);
 }

@@ -32,7 +32,7 @@ register("data:text/javascript," + encodeURIComponent(
   "}\n"
 ));
 const { callTool, handleMcpMessage } = await import("../src/services/mcp/mcp-core");
-const { collectArgumentProblems, getAllToolDefinitions, getToolDefinition, isWriteTool, MCP_TOOL_NAMES } =
+const { accessOfTool, collectArgumentProblems, getAllToolDefinitions, getToolDefinition, MCP_TOOL_NAMES } =
   await import("../src/services/mcp/tool-schemas");
 const { t } = await import("../src/i18n");
 
@@ -73,7 +73,12 @@ function page(nodes: McpTreePage["nodes"]): McpTreePage {
  * The write gate is only trustworthy if a refused call cannot reach a port, so
  * the assertion is on this list staying empty - not on the returned text.
  */
-function createHost(options: { allowsWrites?: boolean; failure?: unknown; version?: () => string } = {}) {
+function createHost(options: {
+  allowsWrites?: boolean;
+  allowsTreeCreation?: boolean;
+  failure?: unknown;
+  version?: () => string;
+} = {}) {
   const calls: string[] = [];
   const note = (name: string) => {
     calls.push(name);
@@ -172,6 +177,7 @@ function createHost(options: { allowsWrites?: boolean; failure?: unknown; versio
   const environment: McpHostEnvironment = {
     isSupported: () => true,
     allowsWrites: () => options.allowsWrites ?? false,
+    allowsTreeCreation: () => options.allowsTreeCreation ?? false,
     connection: () => ({ port: 27321, token: "token" })
   };
   // Only the hosts that are meant to report a release version provide one.
@@ -236,8 +242,9 @@ const READ_TOOL_NAMES = [
   "get_linked_files",
   "get_tree_stats"
 ];
+/** The one tool behind its own switch; see `CREATE_TREE_TOOL_NAME`. */
+const CREATE_TREE_TOOL_NAME = "create_tree";
 const WRITE_TOOL_NAMES = [
-  "create_tree",
   "move_node",
   "add_node",
   "rename_node",
@@ -249,13 +256,17 @@ const WRITE_TOOL_NAMES = [
 ];
 
 test("the catalog exposes exactly the documented tools in order", () => {
-  assert.deepEqual([...MCP_TOOL_NAMES], [...READ_TOOL_NAMES, ...WRITE_TOOL_NAMES]);
-  assert.deepEqual(getAllToolDefinitions().map((tool) => tool.name), [...READ_TOOL_NAMES, ...WRITE_TOOL_NAMES]);
+  const all = [...READ_TOOL_NAMES, CREATE_TREE_TOOL_NAME, ...WRITE_TOOL_NAMES];
+  assert.deepEqual([...MCP_TOOL_NAMES], all);
+  assert.deepEqual(getAllToolDefinitions().map((tool) => tool.name), all);
 });
 
-test("read and write tools are split exactly as documented", () => {
-  for (const name of READ_TOOL_NAMES) assert.equal(isWriteTool(name), false, name);
-  for (const name of WRITE_TOOL_NAMES) assert.equal(isWriteTool(name), true, name);
+test("each tool declares read, node-editing or tree-creation access", () => {
+  for (const name of READ_TOOL_NAMES) assert.equal(accessOfTool(name), "read", name);
+  for (const name of WRITE_TOOL_NAMES) assert.equal(accessOfTool(name), "write", name);
+  // Creating a whole file is its own tier, so it must not be lumped in with edits.
+  assert.equal(accessOfTool(CREATE_TREE_TOOL_NAME), "create-tree");
+  assert.equal(accessOfTool("no_such_tool"), undefined);
 });
 
 test("every tool declares an object schema that rejects unknown properties", () => {
@@ -329,7 +340,8 @@ test("tools/list returns every tool without internal catalog fields", async () =
   const { host } = createHost();
   const response = await handleMcpMessage(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }), host);
   const result = rpcResultOf(response) as { tools: Record<string, unknown>[] };
-  assert.deepEqual(result.tools.map((tool) => tool["name"]), [...READ_TOOL_NAMES, ...WRITE_TOOL_NAMES]);
+  assert.deepEqual(result.tools.map((tool) => tool["name"]),
+    [...READ_TOOL_NAMES, CREATE_TREE_TOOL_NAME, ...WRITE_TOOL_NAMES]);
   for (const tool of result.tools) {
     assert.deepEqual(Object.keys(tool).sort(), ["description", "inputSchema", "name"]);
   }
@@ -339,7 +351,8 @@ test("write tools stay advertised while writes are disabled", async () => {
   const { host } = createHost();
   const response = await handleMcpMessage(JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }), host);
   const result = rpcResultOf(response) as { tools: { name: string }[] };
-  assert.deepEqual(result.tools.map((tool) => tool.name), [...READ_TOOL_NAMES, ...WRITE_TOOL_NAMES]);
+  assert.deepEqual(result.tools.map((tool) => tool.name),
+    [...READ_TOOL_NAMES, CREATE_TREE_TOOL_NAME, ...WRITE_TOOL_NAMES]);
 });
 
 // ─── the write gate ──────────────────────────────────────────────────────────
@@ -356,10 +369,9 @@ test("a write tool with writes disabled fails without touching any host port", a
   assert.deepEqual(recorder.calls, []);
 });
 
-test("every write tool is gated while writes are disabled", async () => {
-  const { host, recorder } = createHost({ allowsWrites: false });
+test("every node-editing tool is gated while edits are disabled", async () => {
+  const { host, recorder } = createHost({ allowsWrites: false, allowsTreeCreation: true });
   const bodies: [string, Record<string, unknown>][] = [
-    ["create_tree", { title: "New" }],
     ["move_node", { nodeId: "a", targetId: "b" }],
     ["add_node", { parentId: "a", title: "T" }],
     ["rename_node", { nodeId: "a", title: "T" }],
@@ -376,6 +388,53 @@ test("every write tool is gated while writes are disabled", async () => {
   assert.deepEqual(recorder.calls, []);
 });
 
+// The two capabilities are independent, so each combination is pinned. Getting
+// this wrong in either direction is a security-relevant bug: it would either
+// grant file creation to a user who only allowed edits, or refuse a tool the
+// user explicitly turned on.
+test("tree creation is refused while only node editing is allowed", async () => {
+  const { host, recorder } = createHost({ allowsWrites: true, allowsTreeCreation: false });
+  const response = await handleMcpMessage(callBody(CREATE_TREE_TOOL_NAME, { title: "New" }), host);
+
+  const result = toolResultOf(response);
+  assert.equal(result.isError, true);
+  assert.deepEqual(JSON.parse(result.content[0]?.text ?? ""), {
+    error: { code: "tree-creation-disabled", message: t("mcp.error.treeCreationDisabled") }
+  });
+  assert.deepEqual(recorder.calls, []);
+});
+
+test("node editing is refused while only tree creation is allowed", async () => {
+  const { host, recorder } = createHost({ allowsWrites: false, allowsTreeCreation: true });
+  const response = await handleMcpMessage(callBody("add_node", { parentId: "root", title: "New" }), host);
+
+  assert.equal(errorCodeOf(response), "writes-disabled");
+  assert.deepEqual(recorder.calls, []);
+});
+
+test("both capabilities off refuses both tiers with their own wording", async () => {
+  const { host, recorder } = createHost({ allowsWrites: false, allowsTreeCreation: false });
+  assert.equal(errorCodeOf(await handleMcpMessage(callBody(CREATE_TREE_TOOL_NAME, { title: "New" }), host)),
+    "tree-creation-disabled");
+  assert.equal(errorCodeOf(await handleMcpMessage(callBody("rename_node", { nodeId: "a", title: "T" }), host)),
+    "writes-disabled");
+  assert.deepEqual(recorder.calls, []);
+});
+
+test("the tree-creation tool runs once its own switch is on", async () => {
+  const { host, recorder } = createHost({ allowsWrites: false, allowsTreeCreation: true });
+  const response = await handleMcpMessage(callBody(CREATE_TREE_TOOL_NAME, { title: "New" }), host);
+
+  assert.equal(toolResultOf(response).isError, undefined);
+  assert.deepEqual(recorder.calls, [`createTree:${JSON.stringify({ title: "New" })}`]);
+});
+
+test("read tools are never blocked by either switch", async () => {
+  const { host } = createHost({ allowsWrites: false, allowsTreeCreation: false });
+  const response = await handleMcpMessage(callBody("list_trees"), host);
+  assert.equal(toolResultOf(response).isError, undefined);
+});
+
 test("the same write tool runs normally once writes are allowed", async () => {
   const { host, recorder } = createHost({ allowsWrites: true });
   const response = await handleMcpMessage(callBody("add_node", { parentId: "root", title: "New", index: 2 }), host);
@@ -384,12 +443,6 @@ test("the same write tool runs normally once writes are allowed", async () => {
   assert.equal(payload["treePath"], TREE_PATH);
   assert.deepEqual(payload["node"], nodeView("new", { title: "New", parentId: "root" }));
   assert.deepEqual(recorder.calls, ["resolve:{}", `addNode:${TREE_PATH}:root:New:2`]);
-});
-
-test("read tools are never blocked by the write switch", async () => {
-  const { host } = createHost({ allowsWrites: false });
-  const response = await handleMcpMessage(callBody("list_trees"), host);
-  assert.equal(toolResultOf(response).isError, undefined);
 });
 
 // ─── argument faults are tool results ────────────────────────────────────────
@@ -407,7 +460,7 @@ test("an unknown tool is an error result, not a protocol error", async () => {
 });
 
 test("invalid arguments are error results that never reach a port", async () => {
-  const { host, recorder } = createHost({ allowsWrites: true });
+  const { host, recorder } = createHost({ allowsWrites: true, allowsTreeCreation: true });
   const cases: [string, unknown][] = [
     ["get_node", {}],
     ["get_node", { nodeId: "a", extra: true }],
@@ -519,7 +572,7 @@ test("get_tree_stats and list_trees embed the identity a client needs", async ()
 });
 
 test("create_tree never consults the locator", async () => {
-  const { host, recorder } = createHost({ allowsWrites: true });
+  const { host, recorder } = createHost({ allowsWrites: true, allowsTreeCreation: true });
   const payload = payloadOf(
     await handleMcpMessage(callBody("create_tree", { title: "New tree", folder: "trees", children: ["A", "B"] }), host)
   );
@@ -528,7 +581,7 @@ test("create_tree never consults the locator", async () => {
 });
 
 test("create_tree omits absent optional arguments instead of sending undefined", async () => {
-  const { host, recorder } = createHost({ allowsWrites: true });
+  const { host, recorder } = createHost({ allowsWrites: true, allowsTreeCreation: true });
   await handleMcpMessage(callBody("create_tree", { title: "Solo" }), host);
   assert.deepEqual(recorder.calls, [`createTree:${JSON.stringify({ title: "Solo" })}`]);
 });

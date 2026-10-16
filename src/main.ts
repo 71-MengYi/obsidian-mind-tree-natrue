@@ -1000,6 +1000,7 @@ export default class MindTreeNaturePlugin extends Plugin {
       environment: {
         isSupported: () => isMcpSupported({ isDesktop: !Platform.isMobile }),
         allowsWrites: () => this.settings.mcpAllowWrites,
+        allowsTreeCreation: () => this.settings.mcpAllowTreeCreation,
         connection: () => ({
           port: this.mcpServer?.port ?? this.settings.mcpPort,
           token: this.mcpServer?.token() ?? ""
@@ -1063,6 +1064,7 @@ export default class MindTreeNaturePlugin extends Plugin {
         supported: true,
         enabled: this.settings.mcpEnabled,
         allowWrites: this.settings.mcpAllowWrites,
+        allowTreeCreation: this.settings.mcpAllowTreeCreation,
         port: this.settings.mcpPort,
         status: controller.status(),
         configuredPort: controller.port,
@@ -1080,6 +1082,11 @@ export default class MindTreeNaturePlugin extends Plugin {
         this.settings.mcpAllowWrites = allowWrites;
         // Read at call time by the writer and the protocol gate, so the next
         // tool call already honours it without restarting the server.
+        await this.saveSettings();
+      },
+      setAllowTreeCreation: async (allowTreeCreation) => {
+        if (this.settings.mcpAllowTreeCreation === allowTreeCreation) return;
+        this.settings.mcpAllowTreeCreation = allowTreeCreation;
         await this.saveSettings();
       },
       setPort,

@@ -38,11 +38,14 @@ const { t } = await import("../src/i18n");
 
 const TOKEN = "S4mpleT0kenValue_1234";
 
-function state(overrides: Partial<Parameters<typeof buildMcpPageModel>[0]> = {}) {
+function state(
+  overrides: Partial<Parameters<typeof buildMcpPageModel>[0]> = {}
+): Parameters<typeof buildMcpPageModel>[0] {
   return {
     supported: true,
     enabled: true,
     allowWrites: true,
+    allowTreeCreation: true,
     port: 27321,
     status: { kind: "running", url: "http://127.0.0.1:27321/mcp" } as const,
     configuredPort: 27321,
@@ -127,6 +130,7 @@ test("a running, writable desktop server enables every control", () => {
   assert.equal(model.description, t("settings.ai.mcp.desc"));
   assert.deepEqual(model.enable, { value: true, disabled: false });
   assert.deepEqual(model.writes, { value: true, disabled: false });
+  assert.deepEqual(model.treeCreation, { value: true, disabled: false });
   assert.deepEqual(model.port, { value: 27321, disabled: false });
   assert.deepEqual(model.status, { kind: "running", text: t("settings.ai.mcp.status.running", { url: "http://127.0.0.1:27321/mcp" }) });
   assert.equal(model.config.visible, true);
@@ -137,6 +141,7 @@ test("an unsupported platform disables the controls and hides the secret", () =>
   assert.deepEqual(model.enable, { value: true, disabled: true });
   assert.deepEqual(model.port, { value: 27321, disabled: true });
   assert.deepEqual(model.writes, { value: true, disabled: true });
+  assert.deepEqual(model.treeCreation, { value: true, disabled: true });
   assert.equal(model.config.visible, false);
   assert.equal(model.status.text, t("settings.ai.mcp.status.desktopOnly"));
 });
@@ -144,8 +149,21 @@ test("an unsupported platform disables the controls and hides the secret", () =>
 test("the write switch is shown but inert while the server is off", () => {
   const model = buildMcpPageModel(state({ enabled: false, allowWrites: true, status: { kind: "stopped" } }));
   assert.deepEqual(model.writes, { value: true, disabled: true });
+  assert.deepEqual(model.treeCreation, { value: true, disabled: true });
   assert.deepEqual(model.enable, { value: false, disabled: false });
   assert.equal(model.status.kind, "stopped");
+});
+
+// The two capabilities are independent, so neither switch may reflect or
+// disable the other: the user hands them out separately.
+test("the two capability switches report and gate independently of each other", () => {
+  const editOnly = buildMcpPageModel(state({ allowWrites: true, allowTreeCreation: false }));
+  assert.deepEqual(editOnly.writes, { value: true, disabled: false });
+  assert.deepEqual(editOnly.treeCreation, { value: false, disabled: false });
+
+  const createOnly = buildMcpPageModel(state({ allowWrites: false, allowTreeCreation: true }));
+  assert.deepEqual(createOnly.writes, { value: false, disabled: false });
+  assert.deepEqual(createOnly.treeCreation, { value: true, disabled: false });
 });
 
 test("a writable-capable server still reports the user's write preference", () => {
