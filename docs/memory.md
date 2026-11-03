@@ -606,6 +606,36 @@
 
 **验证**：`npm run check` 0 错误；`npm test` **1018 / 1018 / 0 fail**（新加 1 条）；临时可视化 `.layout-before-after.png`（可删）。
 
+## 2026-11-04 · 未修改的思维树不再写盘（`fix`）
+
+**问题（用户口径）**：只是打开、关闭、切换标签、按 `Ctrl/Cmd+S` 或让更新器刷新，`.mtn.md` 也会被重写。同步客户端把 mtime 变化当内容变化，于是反复上传、产生版本历史/冲突副本 —— “不修改思维树时，不要编辑文件，导致重复同步”。
+
+**根因**：`MindTreeView` 覆写了 `TextFileView.save()`，却没有复刻基类的两层短路。
+1. 基类 `TextFileView.onUnloadFile(file)` 每次都调 `this.save(true)`（关闭标签/切换文件必走），插件版 `save()` 只看“能不能写”，不看“有没有要写”。
+2. 基类 `save()` 在 `getViewData() === this.lastSavedData` 时跳过 `vault.modify`；插件版直接 `Vault.process()`，而 `Vault.process()` **只在回调返回与入参相同的字符串时才不写文件**（本机 Obsidian 1.14 `resources/obsidian.asar` 反编译确认：adapter.process 里 `if ((o = t(r)) === r) return r;` 之后才是 writeFile）。
+   于是“干净会话关闭/切换/主动保存”和“脏但序列化结果与磁盘一致”都会真实写盘。
+
+**落点**
+
+- 新增 `src/services/save-plan.ts`：`planMindTreeSave(baselineSource, document, diskSource, options)` → `deferred | identical | write`。`identical` 把磁盘字节原样回传（让 `Vault.process` 跳过写入），`deferred` 表示外部版本/身份/格式阻止自动写、交给外部变更路径，只有 `write` 才带出真正要写的字节与 `changedSettings`。
+- `src/ui/mind-tree-view.ts`：
+  - `save()` 在 `!this.hasUnsavedState()`（`documentSession.dirty || sharedSession.draft`）时直接返回 —— 关闭、切换、更新器刷新、主动保存一个未修改的树都不再写盘。
+  - `performQueuedSave()` 的 `vault.process` 回调改用 `planMindTreeSave`；只有 `write` 才设置 `pendingSerializedSource` 并 `session.beginWrite()`，`identical` 分支在发布写回执之前返回 `disk`。新增 `wroteBytes` 控制 `finally` 里的 `endWrite()`，避免为未发生的写入发回执。
+- 文档：`docs/03` §7.6、`docs/05` §11.1/§11.2、`docs/06` P0 第 10 条补“未修改不写盘 / 不改变 mtime 与同步历史”。
+
+**测试**：新增 `test/save-persistence.test.ts` 5 条 —— 未改树 → `identical` 且 `source === disk`；改树 → `write` 且写出的文件是再保存的不动点（`serialize(parse(source), source) === source`）；外部机器数据变化 → `deferred`；只改文档设置 → `write`；视图接线源码断言（clean 守卫在 `requestSave` 之前、`identical` 在 `pendingSerializedSource`/`beginWrite` 之前、view 只有一处 `vault.process`）。
+
+**验证**：`npm run check` 0 错误；`npm test` **1023 / 1023 / 0 fail**（含新 5 条）；`npm run build` 通过，`main.js` 4,753,718 B ≈ 4.53 MiB（上限 10 MiB）。
+
+**环境坑（本会话，后续 agent 先看这里）**
+
+- 本会话沙箱是 `workspace-write`，开始时 pwsh 完全无法启动（`SetNamedSecurityInfoW failed (Win32 5): grantWrite(...)`）。用 `diagnose-windows-sandbox-acl` 技能的一条命令（一次性 `danger-full-access`）修好：工作区根缺 `WRITE_OWNER`，补了当前用户 FullControl；备份与回滚命令在 `D:\Code\dsh-acl-recovery-mind-tree\`。
+- 受限沙箱下 `npm install` 会因生命周期脚本 `spawn EPERM` 与写 `package-lock.json` 被拒而失败；可用 `npm install --ignore-scripts --package-lock=false --no-save`，并把 `npm_config_cache`/`npm_config_logs_dir` 指到工作区内（本次用 `.dsh-tmp/`，收尾已删）。`npm test` 与 `npm run build` 仍要一次 `danger-full-access`（esbuild 需 spawn 子进程），跑完一切正常。
+- `edit` 的 `ReplaceFileW EIO (Win32 1175)` 仍会偶发，原样重试即成功（本次一次命中）。
+
+**留给下一任**：不要用 `getViewData()`/`lastSavedData` 去“恢复”基类短路——插件已经绕开基类保存逻辑，判断依据是 `DocumentSession.dirty`/`hasUnsavedState()` 与序列化字节比较。改 `performQueuedSave()` 时保持“`identical` 分支先返回、再发布写回执”的顺序：先 `beginWrite()` 会让其他视图把这次不存在的写入当成外部写入。
+
+
 
 
 

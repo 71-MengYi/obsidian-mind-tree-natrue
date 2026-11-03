@@ -76,6 +76,7 @@ import { ResourceVerificationChangedError } from "../services/resource-catalog";
 import {
   assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot
 } from "../services/document-conflict";
+import { planMindTreeSave } from "../services/save-plan";
 import { VersionComparison } from "./components/version-comparison";
 import { ThemePreviewPanel } from "./components/theme-preview";
 import { confirmUsableSource, readStableSource, STABLE_READ_DELAYS_MS, type StableSourcePorts } from "../services/stable-source-read";
@@ -728,6 +729,11 @@ export class MindTreeView extends TextFileView {
     if (this.mutationLocked()) throw new SaveConflictError();
     // Writing a deleted path would recreate the file the user just removed.
     if (!this.backingFilePresent()) return;
+    // TextFileView calls save() whenever a leaf is unloaded or switches file,
+    // and the update barrier calls it as well. A document without unsaved work
+    // must not be written: every write bumps the file's mtime, so sync clients
+    // re-upload the untouched note on each close or manual save.
+    if (!this.hasUnsavedState()) return;
     await this.documentSession.requestSave(() => this.performQueuedSave());
   }
 
@@ -760,17 +766,25 @@ export class MindTreeView extends TextFileView {
     const revision = this.documentSession.currentRevision;
     const baseline = this.documentSession.sourceBaseline || this.sourceData;
     let serialized: string | undefined;
+    let wroteBytes = false;
     let racedSettings: TreeSettingKey[] = [];
     try {
       await this.app.vault.process(file, (disk) => {
         if (this.mutationLocked() || this.sharedSession !== session || this.documentSessionToken !== token) return disk;
-        const assessment = assessExternalVersion(baseline, document, disk, this.parseOptions());
-        if (assessment.kind !== "unchanged") return disk;
-        racedSettings = assessment.changedSettings;
-        serialized = serializeMindTreeFile(assessment.document, disk);
-        this.pendingSerializedSource = serialized;
-        session?.beginWrite(serialized);
-        return serialized;
+        const plan = planMindTreeSave(baseline, document, disk, this.parseOptions());
+        // A different external version, or an identity/format block, is owned by
+        // the external-change path: this pass must not write over it.
+        if (plan.kind === "deferred") return disk;
+        racedSettings = [...plan.changedSettings];
+        serialized = plan.source;
+        // Handing the callback its own bytes back makes Vault.process skip the
+        // write, so a save that would reproduce the file exactly never touches
+        // mtime, sync history, or the file itself.
+        if (plan.kind === "identical") return disk;
+        this.pendingSerializedSource = plan.source;
+        session?.beginWrite(plan.source);
+        wroteBytes = true;
+        return plan.source;
       });
       const latest = await this.app.vault.read(file);
       if (this.sharedSession !== session || this.documentSessionToken !== token) return false;
@@ -801,7 +815,7 @@ export class MindTreeView extends TextFileView {
       return this.documentSession.dirty;
     } finally {
       this.pendingSerializedSource = undefined;
-      if (serialized !== undefined) session?.endWrite(serialized);
+      if (wroteBytes && serialized !== undefined) session?.endWrite(serialized);
     }
   }
 

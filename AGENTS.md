@@ -58,8 +58,8 @@
 ```
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
-├── src/                        源码（168 个 .ts，唯一的开发区域）
-├── test/                       单元测试（93 个 *.test.ts + test/helpers/）
+├── src/                        源码（169 个 .ts，唯一的开发区域）
+├── test/                       单元测试（94 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -100,7 +100,7 @@ src/
 ├── format/      (9)  .mtn.md 格式：document.ts、outline.ts、mermaid.ts（分支 → Mermaid mindmap 代码块）、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts、regions.ts（数据区/大纲区定位，内容索引、与行号无关）、yaml-patch.ts（只补丁插件拥有的 YAML 键，注释与键序逐字节保留）
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
 ├── render/      (9)  ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、color、inline-math
-├── services/   (25)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线
+├── services/   (26)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）/保存计划（`save-plan.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线
 └── ui/         (21)  视图与全部 DOM/SVG：
     ├── components/     (14) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、笔记内嵌分支视图、ui-object 基类
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
@@ -142,7 +142,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
 | `MindTreeNaturePlugin` | `src/main.ts` | 注册视图/命令/设置页/文件事件，持有各服务，编排冲突清理与更新流程 |
-| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3989 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
+| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（4003 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
 | `MindTreeViewShell` / `CanvasShell` / `ViewMenuBar` / `TopToolbar` / `BottomStatusBar` / `StatusIndicator` | `src/ui/components/*` | 视图外壳、画布宿主、左上菜单栏、顶部工具栏、左下状态栏、状态提示层 |
 | `DisposableUiObject` / `DisposerBag` | `src/ui/components/ui-object.ts` | 所有 UI 对象的幂等销毁基类；新增 UI 模块必须接入 |
 | `MindTreeReferenceEmbed` / `MindTreeReferenceRenderChild` | `src/ui/components/mind-tree-reference-embed.ts` | 笔记内嵌只读分支视图（`mind-tree-ref` 代码块）：复用 `ReadOnlyTreePreview`，只增加分支起点、宽度适配与自适应高度、悬浮打开原树按钮与失效文案；只通过注入端口访问仓库，禁止反向导入视图或插件主类 |
@@ -185,6 +185,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | --- | --- | --- |
 | `MindTreeSessionRegistry` / `SharedMindTreeSession` | `mind-tree-session-registry.ts` | 按规范路径保证同一文件只有一份文档、历史、保存队列、冲突状态 |
 | `DocumentSession` | `document-session.ts` | 串行保存、100 步历史、冻结与冲突锁定 |
+| `planMindTreeSave` | `save-plan.ts` | 纯函数保存计划：`deferred`（外部版本，不写）/ `identical`（字节一致，回传入参让 `Vault.process` 跳过写入）/ `write` |
 | `VersionConflictCoordinator` | `version-conflict-coordinator.ts` | 外部机器数据变化时的双栏版本选择 |
 | `PendingConflictStore` | `pending-conflict-store.ts` | 未决版本暂存（`pending-conflicts/<本机标识>/`） |
 | `ResourceIndexService` | `resource-index.ts` | 创建/关联/移动文件与标题同步的唯一入口 |
@@ -269,7 +270,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，93 个文件，1017 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
+- 位置：`test/*.test.ts`（**平铺**，94 个文件，1023 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -289,6 +290,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `test/branch-reference.test.ts` / `test/mind-tree-reference-service.test.ts` / `test/reference-embed.test.ts` | 分支引用的围栏代码块往返与非法输入塌陷；引用解析五态、按身份重命名命中、路径被占用则失败关闭、缓存共享与失效；内嵌视图复用只读预览且不反向导入视图/主类 |
 | `test/menu-groups.test.ts` | 嵌套菜单能力探测：支持时 = 1 个不绑定动作的父行 + 子菜单内的行；不支持时 = 同一批行平铺进父菜单；探针必须用一次性菜单 |
 | `test/mermaid.test.ts` | 分支 → Mermaid mindmap 的围栏、2 空格缩进、标签纯文本化与转义（含 `"` 的圆括号回退、括号与引号并存时的替换）、悬空/环状 childIds 不挂死、缺失起点返回空串 |
+| `test/save-persistence.test.ts` | 未修改的导图不写盘：干净会话 `save()` 不请求写入；序列化字节与磁盘一致时 `Vault.process` 不产生写入（`identical` 在发布写回执之前返回）；外部机器数据变化仍走 `deferred`，只改文档设置仍会 `write` |
 
 约定：**新增行为必须带测试**；不允许为了让测试变绿而删除或放宽既有断言（除非需求本身变化，并在 `docs/` 里写明）。
 
@@ -322,7 +324,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 1. 解析失败、格式不认识、压缩数据损坏时：**只读打开并报错**，绝不用空数据覆盖原文件。 **[测试守护]**
 2. 保存必须以**最新磁盘文本**为底稿，不能拿旧基线覆盖大纲、正文、未知 Frontmatter。 **[测试守护]**
 3. 一切不可信输入（压缩数据、剪贴板、导入文本、拖拽路径、图片）都必须走 `src/input-limits.ts` 的体积/节点数/深度上限。 **[测试守护]**
-4. 所有仓库文件写入走统一服务与文件级串行队列（`DocumentSession`、`ResourceIndexService`、`SettingsPersistence`）；不要在 UI 层直接 `vault.modify/create/delete`。 **[产品基线]**
+4. 所有仓库文件写入走统一服务与文件级串行队列（`DocumentSession`、`ResourceIndexService`、`SettingsPersistence`）；不要在 UI 层直接 `vault.modify/create/delete`。保存不得为**没有未保存修改**的文档写盘（`services/save-plan.ts` 与视图 `save()` 的守卫）：每次写入都会改 mtime，让同步客户端把未改动的笔记重新上传。 **[测试守护] [产品基线]**
 5. 删除节点 ≠ 删除文件。真实文件删除必须用户确认并经 Obsidian 回收站；批量操作先展示影响范围、后给结果报告。 **[测试守护]**
 6. 资源身份只认稳定 ID、规范路径与实际文件核对；重名/重复 ID 一律拒绝，**不猜测**同名文件。 **[测试守护]**
 7. 不新建或扫描旧 Recovery 文件；未决版本一律走 `PendingConflictStore`（插件目录 `pending-conflicts/<本机标识>/`）。 **[产品基线]**
@@ -395,7 +397,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改节点渲染/徽标/样式 | `src/ui/renderers/*`、`src/render/resource-badges.ts`（DOM 适配在 `src/ui/resource-badges.ts`）、`styles.css` | `docs/02-interface-interactions.md` §5.5 | `test/styles.test.ts`、`test/resource-badges.test.ts`、`test/ui-modules.test.ts` |
 | 改画布交互/手势/拖拽 | `src/ui/controllers/*`、`src/render/viewport.ts`、`src/ui/drop-placement.ts` | `docs/02-interface-interactions.md` §6.3、`docs/05-technical-design.md` §12.1 | `test/pointer-operations.test.ts`、`test/touch-gesture.test.ts`、`test/touch-routing.test.ts`、`test/drop-placement.test.ts` |
 | 改文件关联/索引/缓存 | `src/services/resource-index.ts`、`resource-catalog.ts`、`resource-identity.ts`、`local-resource-cache.ts`、`linked-resource-sync.ts` | `docs/04-resource-index.md` 全篇 | `test/resource-index-service.test.ts`、`test/resource-catalog.test.ts`、`test/resource-identity.test.ts`、`test/local-resource-cache.test.ts` |
-| 改冲突/未决版本/保存 | `src/services/version-conflict-coordinator.ts`、`pending-conflict-store.ts`、`document-conflict.ts`、`document-session.ts`、`mind-tree-session-registry.ts` | `docs/05-technical-design.md` §11 | `test/version-conflict.test.ts`、`test/pending-conflict-store.test.ts`、`test/safety.test.ts`、`test/document-session.test.ts` |
+| 改冲突/未决版本/保存 | `src/services/version-conflict-coordinator.ts`、`pending-conflict-store.ts`、`document-conflict.ts`、`document-session.ts`、`save-plan.ts`、`mind-tree-session-registry.ts`、`src/ui/mind-tree-view.ts`（`save` / `performQueuedSave`） | `docs/03-document-format.md` §7.6、`docs/05-technical-design.md` §11 | `test/save-persistence.test.ts`、`test/version-conflict.test.ts`、`test/pending-conflict-store.test.ts`、`test/safety.test.ts`、`test/document-session.test.ts` |
 | 改模板文件流程 | `src/services/template-files.ts` | `docs/05-technical-design.md` §9.1 | `test/template-files.test.ts` |
 | 改导入/粘贴 | `src/services/text-import.ts`、`text-links.ts`、`text-url.ts`、`clipboard.ts`、`src/ui/paste-routing.ts` | `docs/02-interface-interactions.md` §6.10 | `test/text-import.test.ts`、`test/text-links.test.ts`、`test/exchange.test.ts`、`test/paste-routing.test.ts` |
 | 改导出（PNG/SVG/Markdown）与 Mermaid 复制 | `src/services/export.ts`、`src/format/mermaid.ts`、`src/services/clipboard.ts`、`src/ui/menus/copy-export-menu.ts` | `docs/02-interface-interactions.md` §5.3、§6.6、§6.10 | `test/exchange.test.ts`、`test/mermaid.test.ts`、`test/menu-groups.test.ts` |
@@ -437,7 +439,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 12. **`.mtn.md` 的读写契约只以机器数据区为准**（2026-10-15 重构，落点见 `docs/memory.md`）：`format/regions.ts` 按内容定位数据区（与行号无关，0 个 = 报错、≥2 个 = 拒绝改写），`format/yaml-patch.ts` 只补丁插件拥有的 YAML 键，`services/stable-source-read.ts` 要求读取前后 `ctime:mtime:size` 不变才采信字节。**改 `serializeMindTreeFile()` 时最危险的坑是 header 与 body 的接缝**：必须归一到 `\n\n`，少一个空行会让关闭的 `---` 与正文粘成 `---# 标题`，文件头随即变成 `unreadable`（表现为多条既有测试同时变红，很容易误判成"环境问题"）。另外**不要**在保存路径上重新引入"重建整段文件头"或"标记缺失就返回原文"的写法——后者会让文件里出现两个数据区，之后每次读回的都是旧数据。
 13. **并发会话共享工作区**：本仓库会被多个 session/agent 同时改（2026-10-15 就与 MCP 任务并行）。开工先 `git status`；`npm run check` / 全量测试的基线可能因对方正在写而暂时为红，**判定自己的回归前先看哪些文件正在被改、并单独重跑相关测试**。`edit` 的 `ReplaceFileW EIO (Win32 1175)` 原样重试即成功。
 14. **节点关联的创建入口只有一个：粘贴分支引用**（2026-10-17 改）。画布粘贴分支引用会调用 `services/clipboard.ts` 的 `resolveBranchReferenceTarget()` + `insertBranchReferenceNode()`，插入一个标题取目标标题、`nodeLink` 指向目标的新节点；**跨树（`documentId` 不同或当前树无身份）必须只提示**，因为 `nodeLink` 只是同一文档内的 id。工具栏的 `link-node`、右键菜单的创建项与 `ui/modals/node-link-picker-modal.ts`（`NodeLinkSuggestModal`/`nodeLinkCandidates`）都已删除——不要再按"选择窗口"的旧描述补入口；`test/branch-reference-paste.test.ts` 与 `test/ui-modules.test.ts` 会直接拦住回退。移除关联仍走右键菜单的 `menu.unlinkNode`（仅在节点已参与关联时出现），`removeNodeLinks()` 会同时清出边与所有入边。
+15. **“未修改不写盘”的判定不要复刻基类**（2026-11-04 改）：`MindTreeView` 覆写了 `TextFileView.save()`，**没有**走基类的 `getViewData() === lastSavedData` 短路，所以不能靠 `lastSavedData`/`getViewData()` 判断是否需要写盘。规则落在两处：`save()` 的 `!hasUnsavedState()` 守卫（`DocumentSession.dirty` 或共享草稿），以及 `services/save-plan.ts` 的 `identical` 分支——把磁盘字节原样回传给 `Vault.process()` 才会跳过写入（Obsidian 只在这一条件下不写文件）。改 `performQueuedSave()` 时保持“`identical` 先返回、再发 `pendingSerializedSource`/`beginWrite()` 回执”的顺序，否则其他视图会把不存在的写入当成外部写入。
 
 ---
 
-*最后核对：2026-10-17 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*
+*最后核对：2026-11-04 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*
