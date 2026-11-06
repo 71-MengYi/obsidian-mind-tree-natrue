@@ -74,7 +74,10 @@ import { reconcileLinkedFileReferences } from "../services/linked-resource-sync"
 import { CreatedNoteAssociationError, DuplicateResourceIdError, type FileAssociationProgress } from "../services/resource-index";
 import { ResourceVerificationChangedError } from "../services/resource-catalog";
 import {
-  assessExternalVersion, createManagedMindTreeSnapshot, sameManagedMindTreeSnapshot
+  assessExternalVersion,
+  createManagedMindTreeSnapshot,
+  decideExternalChange,
+  sameManagedMindTreeSnapshot
 } from "../services/document-conflict";
 import { planMindTreeSave } from "../services/save-plan";
 import { VersionComparison } from "./components/version-comparison";
@@ -891,17 +894,26 @@ export class MindTreeView extends TextFileView {
   private async acceptExternalSource(source: string): Promise<void> {
     const document = this.document;
     if (!document) return;
-    const assessment = assessExternalVersion(this.documentSession.sourceBaseline || this.sourceData,
+    const baseline = this.documentSession.sourceBaseline || this.sourceData;
+    const assessment = assessExternalVersion(baseline,
       this.documentWithPendingDraft(), source, this.parseOptions());
-    if (assessment.kind !== "unchanged") { await this.enterVersionPreview(); return; }
-    if (assessment.document.documentId && !document.documentId && this.file) {
-      this.adoptDocumentIdentity(this.file.path, assessment.document.documentId);
+    const decision = decideExternalChange(assessment, this.hasLocalWork());
+    // A clean session follows the file: sync clients and external editors refresh
+    // an open tree in place instead of opening the comparison. Local work, or an
+    // unsafe identity/format change, keeps the explicit version choice.
+    if (decision.kind === "conflict") { await this.enterVersionPreview(); return; }
+    if (decision.kind === "adopt") {
+      this.adoptExternalVersion(source, decision.assessment.external.document);
+      return;
+    }
+    if (decision.assessment.document.documentId && !document.documentId && this.file) {
+      this.adoptDocumentIdentity(this.file.path, decision.assessment.document.documentId);
     }
     // Rebase YAML on the confirmed document, NOT on the draft-overlay candidate.
     // The textarea and any linked-file rename stay untouched by property edits.
     const accepted = mergeTreeSettings(document,
-      createManagedMindTreeSnapshot(this.documentSession.sourceBaseline || this.sourceData, this.parseOptions()).document,
-      assessment.external.document);
+      createManagedMindTreeSnapshot(baseline, this.parseOptions()).document,
+      decision.assessment.external.document);
     this.sourceData = source;
     this.data = source;
     this.documentSession.replaceBaseline(source);
@@ -910,6 +922,36 @@ export class MindTreeView extends TextFileView {
       this.document = accepted.document;
       this.documentSession.rebaseSettings(accepted.document, accepted.changedSettings);
     }
+  }
+
+  /**
+   * Replace the open document with the settled disk version. This is the same
+   * state transition as an explicit "external" choice: the shared history is
+   * rebuilt from that baseline, so no undo step can resurrect the replaced tree.
+   */
+  private adoptExternalVersion(source: string, external: MindTreeDocument): void {
+    const session = this.sharedSession;
+    if (session) {
+      session.adoptExternalVersion(source, external);
+      return;
+    }
+    this.documentSession.load(source);
+    this.document = external;
+    this.sourceData = source;
+    this.data = source;
+    this.parseError = undefined;
+    this.render();
+    this.setStatus(t("status.saved"), "saved");
+  }
+
+  /**
+   * Whether replacing the session with the disk version would discard local
+   * work: unsaved edits, an unconfirmed title draft, unfinished filename side
+   * effects, or a title editor another leaf is still using.
+   */
+  private hasLocalWork(): boolean {
+    return this.hasUnsavedState() || this.pendingTitleFileOperation !== undefined
+      || this.sharedSession?.hasActiveEditor === true;
   }
 
   private async enterVersionPreview(): Promise<void> {

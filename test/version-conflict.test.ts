@@ -42,7 +42,10 @@ function fixture() {
   return { baseline, baseSource, local, remote, io, store, runtime, make, coordinator: make() };
 }
 
-test("clean sessions preview real remote data, never settings/prose/outline/identical results", () => {
+test("external machine-data changes are assessed apart from settings, prose, outline and identical results", () => {
+  // The assessment only classifies the disk version. Whether a clean session
+  // adopts it or asks the user is decided by decideExternalChange (see
+  // test/external-adopt.test.ts), not by this comparison.
   const f = fixture();
   assert.equal(assessExternalVersion(f.baseSource, f.baseline, f.runtime.disk).kind, "choose");
   const setting = cloneDocument(f.baseline);

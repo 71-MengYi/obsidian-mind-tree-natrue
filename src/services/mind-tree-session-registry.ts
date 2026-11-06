@@ -187,6 +187,9 @@ export class SharedMindTreeSession {
     return this.titleDraft ? { ...this.titleDraft } : undefined;
   }
 
+  /** Any leaf currently owns the single title editor. */
+  get hasActiveEditor(): boolean { return this.activeEditorId !== undefined; }
+
   releaseEditor(id: string): void {
     if (this.activeEditorId === id) {
       this.activeEditorId = undefined;
@@ -283,6 +286,11 @@ export class SharedMindTreeSession {
     this.resumedDraft = result.resumeDraft;
     this.resolvedTitleRenames = result.titleRenames;
     this.notify("source");
+  }
+
+  /** Disk wins for a session without local work; no preview or journal is created. */
+  adoptExternalVersion(source: string, document: MindTreeDocument): void {
+    this.acceptVersion({ choice: "external", source, document });
   }
 
   takeResolvedDraft(): VersionChoiceResult["draft"] {

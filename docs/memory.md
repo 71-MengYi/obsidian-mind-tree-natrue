@@ -635,6 +635,33 @@
 
 **留给下一任**：不要用 `getViewData()`/`lastSavedData` 去“恢复”基类短路——插件已经绕开基类保存逻辑，判断依据是 `DocumentSession.dirty`/`hasUnsavedState()` 与序列化字节比较。改 `performQueuedSave()` 时保持“`identical` 分支先返回、再发布写回执”的顺序：先 `beginWrite()` 会让其他视图把这次不存在的写入当成外部写入。
 
+## 2026-11-06 · 干净会话自动采用外部版本（`fix`）
+
+**需求（用户口径）**：思维树文件在磁盘上被外部修改（同步客户端、其他编辑器）时，如果当前打开的会话**没有未保存修改**，就直接按磁盘内容更新当前画布；只有存在本地修改时才提示冲突（原来的双栏选择）。这是 2026-10-15 条目里“留给下一任”第 1 条 `adopt-external` 的正式实现，也作废了 `docs/05` §11.2 与 `docs/06` 里“干净会话也要选择 / 更旧的同步版本也要选择”的旧口径。
+
+**落点**
+
+- `src/services/document-conflict.ts`：新增 `ExternalChangeDecision` + `decideExternalChange(assessment, hasLocalWork)` → `merge`（`unchanged`，仅设置/正文变化）/ `adopt`（`choose` 且无本地工作）/ `conflict`（其余，含身份/格式不安全）。决策带 assessment，视图不需要再手动窄化。
+- `src/services/mind-tree-session-registry.ts`：`SharedMindTreeSession.adoptExternalVersion(source, document)` 复用 `acceptVersion({ choice: "external" })`——重建文档、基线、设置状态与历史（清空旧撤销栈），与用户显式选择“外部版本”是同一条状态迁移；新增 `get hasActiveEditor`（别的标签仍占着标题编辑框时不能静默替换文档）。
+- `src/ui/mind-tree-view.ts`：`acceptExternalSource()` 改为 `decideExternalChange(assessment, this.hasLocalWork())` 分流；新增 `adoptExternalVersion()`（无共享会话时本地回退）与 `hasLocalWork()`（`hasUnsavedState()`、未完成的文件改名副作用、正在使用的标题编辑框）；`conflict` 才调用 `enterVersionPreview()`。
+- 文档：`docs/02` §6.1.1（标题改为「外部同步与版本选择」）、`docs/03` §7.6、`docs/05` §11.1/§11.2、`docs/06` §14 P0 第 10 条、`docs/requirements` 第 15 条、`AGENTS.md` §3.2/§5/§10/§12/页脚。
+
+**测试**：新增 `test/external-adopt.test.ts` 4 条（决策表、身份/格式安全永远 conflict、共享会话 adopt 重建基线历史、视图接线）；`test/version-conflict.test.ts` 首条测试名改为评估层分类并在注释指向新决策函数（断言未放宽）。**全量 1027/1027 pass / 0 fail**；`npm run check` 0 错误；受限沙箱用内置 esbuild 二进制按 `esbuild.config.mjs` 同参数打包验证通过（`.dsh-tmp/main-check.js` 4,755,618 B ≈ 4.54 MiB，未触碰 `main.js`，临时目录已删）。
+
+**环境坑（本会话）**
+
+- 本会话初始 pwsh 无法启动（`SetNamedSecurityInfoW failed (Win32 5): grantWrite(...)`），按 `diagnose-windows-sandbox-acl` 技能修复工作区根权限（备份/回滚记录在 `D:\Code\dsh-acl-recovery-mind-tree\`）；修复后 `workspace-write` 正常。
+- `npm test` 仍需一次 `danger-full-access`（esbuild spawn 子进程）。中途一次提权被用户拒绝，**不要换方案绕过拒绝**：用 `ask_user_question` 说明原因并等到明确批准后再跑。`git add/commit` 同样要写 `.git/index`，也需一次提权。
+- `npm install` 在受限沙箱会因生命周期脚本 `spawn EPERM` 与写 `package-lock.json` 失败；用 `npm install --ignore-scripts --package-lock=false --no-save`，`npm_config_cache`/`npm_config_logs_dir` 指向工作区内 `.dsh-tmp/`（收尾删除）。
+- `edit` 偶发 `ReplaceFileW EIO (Win32 1175)`，原样重试即成功（本会话命中 2 次）。
+
+**留给下一任**
+
+- 旧版插件创建的未决 `pending-conflicts` 记录仍按原流程恢复（迁移期兼容）；新流程下干净会话不会再创建这类记录。
+- 如果要给“更旧的同步版本”加保护（例如提示而非采用），只改 `decideExternalChange()` 一处并同步 `docs/05` §11.2 与 `test/external-adopt.test.ts`；不要在视图里另写分支。
+- 未在真实 Obsidian/同步环境人工验收：建议实测「打开未修改的树 → 另一设备修改并同步 → 画布原地刷新、无选择框、无写盘」与「有未保存修改时仍出现双栏选择」。
+
+
 
 
 

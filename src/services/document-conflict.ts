@@ -64,3 +64,26 @@ export function assessExternalVersion(baselineSource: string, localDocument: Min
   if (!document.documentId && external.documentId) document.documentId = external.documentId;
   return { kind: "unchanged", external, document, changedSettings };
 }
+
+/**
+ * What an open view does with one settled external read.
+ *
+ * `adopt` is the normal sync path: a session without local work follows the
+ * file, so an open tree refreshes in place instead of asking the user to compare
+ * two versions. `conflict` covers both local work (an unsaved document, an
+ * unconfirmed title draft, an editor still in use) and unsafe identity/format
+ * changes, which must keep the explicit choice. Settings-only changes merge.
+ */
+export type ExternalChangeDecision =
+  | { readonly kind: "merge"; readonly assessment: Extract<ExternalVersionAssessment, { kind: "unchanged" }> }
+  | { readonly kind: "adopt"; readonly assessment: Extract<ExternalVersionAssessment, { kind: "choose" }> }
+  | { readonly kind: "conflict" };
+
+export function decideExternalChange(
+  assessment: ExternalVersionAssessment,
+  hasLocalWork: boolean
+): ExternalChangeDecision {
+  if (assessment.kind === "unchanged") return { kind: "merge", assessment };
+  if (assessment.kind === "choose" && !hasLocalWork) return { kind: "adopt", assessment };
+  return { kind: "conflict" };
+}
