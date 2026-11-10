@@ -1,12 +1,17 @@
 import {
-  DEFAULT_MCP_READ_PORT,
-  DEFAULT_MCP_WRITE_PORT,
+  DEFAULT_MCP_PORT,
   MAX_MCP_PORT,
   MCP_PORT_FALLBACK_ATTEMPTS,
   normalizeMcpPort
 } from "../../settings-model";
 import { isMcpSupported } from "./availability";
-import { mcpServerRecordKey, mcpUrl, normalizeMcpServerRecord, type McpServerGroup, type McpServerRecord } from "./connection";
+import {
+  legacyMcpServerRecordKey,
+  mcpServerRecordKey,
+  mcpUrl,
+  normalizeMcpServerRecord,
+  type McpServerRecord
+} from "./connection";
 import { McpHttpTransport, type McpListenerFactory } from "./http-transport";
 import type { McpSettingsStatus } from "./settings-page-model";
 
@@ -19,8 +24,6 @@ export interface McpServerStorage {
 export interface McpServerControllerOptions {
   /** `manifest.id`; the record key is per plugin and never leaves the device. */
   pluginId: string;
-  /** Which of the two servers this controller owns. */
-  group: McpServerGroup;
   /** `!Platform.isMobile`, read at call time so a reload cannot stale it. */
   isDesktop(): boolean;
   storage: McpServerStorage;
@@ -31,11 +34,7 @@ export interface McpServerControllerOptions {
 }
 
 /**
- * Owns the lifetime of one local MCP endpoint.
- *
- * One instance per group, because the two servers are independent: separate
- * ports for separate client approval policies, and separate tokens so a read
- * configuration can never unlock writes.
+ * Owns the lifetime of the local MCP endpoint.
  *
  * The controller keeps three things apart on purpose: the *preference* (the port
  * the user asked for, from plugin settings), the *record* (this device's bound
@@ -44,6 +43,10 @@ export interface McpServerControllerOptions {
  * keeps an AI client's configuration working across restarts; re-reading
  * `isDesktop` on every start is what makes a platform gate impossible to bypass
  * by constructing the controller early.
+ *
+ * A configuration written while the plugin still ran two servers keeps working:
+ * the old read-only record's port and token are adopted on first read, because
+ * that is the entry users actually have installed.
  */
 export class McpServerController {
   private transport?: McpHttpTransport;
@@ -52,19 +55,17 @@ export class McpServerController {
   private memory?: McpServerRecord;
 
   constructor(private readonly options: McpServerControllerOptions) {
-    this.preferredPort = DEFAULT_PORT_BY_GROUP[options.group];
+    this.preferredPort = DEFAULT_MCP_PORT;
   }
 
-  /** A getter, not a field: `useDefineForClassFields` initializes fields before
-   * the constructor assigns the parameter property, so a field copy would read
-   * `undefined`. */
-  get group(): McpServerGroup {
-    return this.options.group;
-  }
-
-  /** The record key; per group and device-local, so never part of `data.json`. */
+  /** The record key; device-local, so it is never part of `data.json`. */
   get storageKey(): string {
-    return mcpServerRecordKey(this.options.pluginId, this.options.group);
+    return mcpServerRecordKey(this.options.pluginId);
+  }
+
+  /** The retired read-only record; read once to adopt an installed config. */
+  get legacyStorageKey(): string {
+    return legacyMcpServerRecordKey(this.options.pluginId);
   }
 
   /**
@@ -99,7 +100,7 @@ export class McpServerController {
 
   /** Binds, falling back to nearby ports, and reports what happened. */
   async start(preferredPort: number): Promise<McpSettingsStatus> {
-    this.preferredPort = normalizeMcpPort(preferredPort) ?? DEFAULT_PORT_BY_GROUP[this.options.group];
+    this.preferredPort = normalizeMcpPort(preferredPort) ?? DEFAULT_MCP_PORT;
     // Defence in depth: construct-time support is not evidence that the runtime
     // can still serve, and a half-started service is worse than an absent one.
     if (!isMcpSupported({ isDesktop: this.options.isDesktop() })) {
@@ -148,7 +149,16 @@ export class McpServerController {
   }
 
   private readRecord(): McpServerRecord | undefined {
-    return normalizeMcpServerRecord(this.options.storage.load(this.storageKey)) ?? this.memory;
+    const current = normalizeMcpServerRecord(this.options.storage.load(this.storageKey));
+    if (current) return current;
+    const legacy = normalizeMcpServerRecord(this.options.storage.load(this.legacyStorageKey));
+    if (legacy) {
+      // Adopt the retired read-only record instead of minting a new token: the
+      // port and token in an installed client configuration stay valid.
+      this.writeRecord(legacy);
+      return legacy;
+    }
+    return this.memory;
   }
 
   private writeRecord(record: McpServerRecord): void {
@@ -162,12 +172,6 @@ export class McpServerController {
     }
   }
 }
-
-/** The port each group prefers when settings supply none. */
-const DEFAULT_PORT_BY_GROUP: Record<McpServerGroup, number> = {
-  read: DEFAULT_MCP_READ_PORT,
-  write: DEFAULT_MCP_WRITE_PORT
-};
 
 function describeThrown(error: unknown): string {
   if (error !== null && typeof error === "object") {

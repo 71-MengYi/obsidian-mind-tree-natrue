@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { createServer, request as httpRequest } from "node:http";
 import {
+  legacyMcpServerRecordKey,
   MAX_MCP_REQUEST_BYTES,
   MCP_ENDPOINT_PATH,
   mcpServerRecordKey,
@@ -12,7 +13,7 @@ import {
 import { McpHttpTransport, type McpHttpRequest, type McpListenerFactory }
   from "../src/services/mcp/http-transport";
 import { McpServerController } from "../src/services/mcp/mcp-server";
-import { DEFAULT_MCP_READ_PORT, DEFAULT_MCP_WRITE_PORT } from "../src/settings-model";
+import { DEFAULT_MCP_PORT } from "../src/settings-model";
 
 const TOKEN = "0123456789abcdef0123456789abcdef";
 const SESSION = "session-0001";
@@ -337,10 +338,9 @@ function flakyListenerFactory(failures: number, bound: number[] = []) {
 test("the controller reuses one device token and records the bound port", async () => {
   const stored = new Map<string, unknown>();
   const { factory, bound } = flakyListenerFactory(0);
-  const recordKey = mcpServerRecordKey("mind-tree-nature", "read");
+  const recordKey = mcpServerRecordKey("mind-tree-nature");
   const controller = new McpServerController({
     pluginId: "mind-tree-nature",
-    group: "read",
     isDesktop: () => true,
     storage: {
       load: (key) => stored.get(key) ?? null,
@@ -351,22 +351,29 @@ test("the controller reuses one device token and records the bound port", async 
     createToken: () => "token-abcdefghijklmnop"
   });
 
-  assert.equal(controller.group, "read");
+  // One server, one device-local record: no read/write suffix remains, and the
+  // only legacy key is the retired read-only one (kept for adoption, below).
+  assert.equal(recordKey, "mind-tree-nature:mcp-server");
   assert.equal(controller.storageKey, recordKey);
+  assert.equal(controller.storageKey, "mind-tree-nature:mcp-server");
+  assert.equal(controller.legacyStorageKey, legacyMcpServerRecordKey("mind-tree-nature"));
+  assert.equal(controller.legacyStorageKey, "mind-tree-nature:mcp-server:read");
+  assert.equal(controller.port, DEFAULT_MCP_PORT);
+
   const tokenBeforeStart = controller.token();
   assert.equal(tokenBeforeStart, "token-abcdefghijklmnop");
   // The record exists before the server runs, so the configuration the settings
   // page shows is already the one the server will accept.
   assert.deepEqual(stored.get(recordKey), {
-    port: DEFAULT_MCP_READ_PORT, token: "token-abcdefghijklmnop"
+    port: DEFAULT_MCP_PORT, token: "token-abcdefghijklmnop"
   });
 
-  const status = await controller.start(DEFAULT_MCP_READ_PORT);
+  const status = await controller.start(DEFAULT_MCP_PORT);
   assert.equal(status.kind, "running");
-  assert.deepEqual(status, { kind: "running", url: mcpUrl(DEFAULT_MCP_READ_PORT) });
-  assert.deepEqual(bound, [DEFAULT_MCP_READ_PORT]);
+  assert.deepEqual(status, { kind: "running", url: mcpUrl(DEFAULT_MCP_PORT) });
+  assert.deepEqual(bound, [DEFAULT_MCP_PORT]);
   assert.deepEqual(stored.get(recordKey), {
-    port: DEFAULT_MCP_READ_PORT, token: "token-abcdefghijklmnop"
+    port: DEFAULT_MCP_PORT, token: "token-abcdefghijklmnop"
   });
   assert.equal(controller.token(), tokenBeforeStart);
 
@@ -374,64 +381,53 @@ test("the controller reuses one device token and records the bound port", async 
   assert.deepEqual(controller.status(), { kind: "stopped" });
   // The record survives a stop: copying the client configuration must keep working.
   assert.deepEqual(normalizeMcpServerRecord(stored.get(recordKey)), {
-    port: DEFAULT_MCP_READ_PORT, token: "token-abcdefghijklmnop"
+    port: DEFAULT_MCP_PORT, token: "token-abcdefghijklmnop"
   } as McpServerRecord);
 });
 
-test("the two servers keep separate record keys, ports and tokens", async () => {
+test("the retired read-only record is adopted, port and token included", async () => {
   const stored = new Map<string, unknown>();
-  const storage = {
-    load: (key: string) => stored.get(key) ?? null,
-    save: (key: string, value: unknown) => { stored.set(key, value); }
-  };
-  const controllerOf = (group: "read" | "write", token: string) => new McpServerController({
+  const legacyKey = legacyMcpServerRecordKey("mind-tree-nature");
+  assert.equal(legacyKey, "mind-tree-nature:mcp-server:read");
+  const legacy: McpServerRecord = { port: 31415, token: "legacy-token-abcdefgh" };
+  stored.set(legacyKey, legacy);
+
+  let minted = 0;
+  const { factory, bound } = flakyListenerFactory(0);
+  const controller = new McpServerController({
     pluginId: "mind-tree-nature",
-    group,
     isDesktop: () => true,
-    storage,
+    storage: {
+      load: (key) => stored.get(key) ?? null,
+      save: (key, value) => { stored.set(key, value); }
+    },
     handleMessage: echo,
-    createListener: flakyListenerFactory(0).factory,
-    createToken: () => token
+    createListener: factory,
+    createToken: () => { minted += 1; return "fresh-token-abcdefgh"; }
   });
-  const read = controllerOf("read", "read-token-abcdefghij");
-  const write = controllerOf("write", "write-token-abcdefghij");
 
-  assert.equal(read.group, "read");
-  assert.equal(write.group, "write");
-  // Distinct keys are what let the two devices-local records coexist: one
-  // record cannot overwrite the other's port or token.
-  assert.equal(read.storageKey, mcpServerRecordKey("mind-tree-nature", "read"));
-  assert.equal(write.storageKey, mcpServerRecordKey("mind-tree-nature", "write"));
-  assert.notEqual(read.storageKey, write.storageKey);
-  assert.equal(read.storageKey, "mind-tree-nature:mcp-server:read");
-  assert.equal(write.storageKey, "mind-tree-nature:mcp-server:write");
+  // The installed client configuration already carries the retired read-only
+  // record's port and token; adopting them keeps that client working instead of
+  // invalidating it, and the merged record is written under the new key.
+  assert.equal(controller.token(), legacy.token);
+  assert.equal(controller.port, legacy.port);
+  assert.equal(minted, 0, "an adopted record must not mint a new token");
+  const newKey = mcpServerRecordKey("mind-tree-nature");
+  assert.equal(newKey, "mind-tree-nature:mcp-server");
+  assert.deepEqual(normalizeMcpServerRecord(stored.get(newKey)), legacy);
+  // Adoption is a copy, not a destructive migration: the legacy record is left
+  // in place for a downgrade or a second read.
+  assert.deepEqual(stored.get(legacyKey), legacy);
 
-  // Minting happens before start, so the settings page can show a usable token.
-  const readToken = read.token();
-  const writeToken = write.token();
-  assert.equal(readToken, "read-token-abcdefghij");
-  assert.equal(writeToken, "write-token-abcdefghij");
-  // The security boundary in one assertion: a token that unlocked writes must
-  // never be the token the read-only configuration carries.
-  assert.notEqual(readToken, writeToken);
+  const status = await controller.start(legacy.port);
+  assert.deepEqual(status, { kind: "running", url: mcpUrl(legacy.port) });
+  assert.deepEqual(bound, [legacy.port]);
+  assert.equal(controller.token(), legacy.token);
+  assert.deepEqual(stored.get(newKey), legacy);
 
-  assert.deepEqual(normalizeMcpServerRecord(stored.get(read.storageKey)), {
-    port: DEFAULT_MCP_READ_PORT, token: readToken
-  } as McpServerRecord);
-  assert.deepEqual(normalizeMcpServerRecord(stored.get(write.storageKey)), {
-    port: DEFAULT_MCP_WRITE_PORT, token: writeToken
-  } as McpServerRecord);
-
-  assert.deepEqual(await read.start(DEFAULT_MCP_READ_PORT), {
-    kind: "running", url: mcpUrl(DEFAULT_MCP_READ_PORT)
-  });
-  assert.deepEqual(await write.start(DEFAULT_MCP_WRITE_PORT), {
-    kind: "running", url: mcpUrl(DEFAULT_MCP_WRITE_PORT)
-  });
-  assert.equal(read.boundPort, DEFAULT_MCP_READ_PORT);
-  assert.equal(write.boundPort, DEFAULT_MCP_WRITE_PORT);
-  await read.stop();
-  await write.stop();
+  await controller.stop();
+  // Stopping preserves the adopted connection: the copied configuration stays valid.
+  assert.deepEqual(normalizeMcpServerRecord(stored.get(newKey)), legacy);
 });
 
 test("the controller falls back to nearby ports and reports a total failure", async () => {
@@ -439,21 +435,19 @@ test("the controller falls back to nearby ports and reports a total failure", as
   const { factory, bound } = flakyListenerFactory(3);
   const controller = new McpServerController({
     pluginId: "mind-tree-nature",
-    group: "read",
     isDesktop: () => true,
     storage: { load: (key) => stored.get(key) ?? null, save: (key, value) => { stored.set(key, value); } },
     handleMessage: echo,
     createListener: factory,
     createToken: () => "token-abcdefghijklmnop"
   });
-  const status = await controller.start(27321);
-  assert.deepEqual(status, { kind: "running", url: mcpUrl(27324) });
-  assert.deepEqual(bound, [27324]);
+  const status = await controller.start(DEFAULT_MCP_PORT);
+  assert.deepEqual(status, { kind: "running", url: mcpUrl(DEFAULT_MCP_PORT + 3) });
+  assert.deepEqual(bound, [DEFAULT_MCP_PORT + 3]);
   await controller.stop();
 
   const alwaysBusy = new McpServerController({
     pluginId: "mind-tree-nature",
-    group: "write",
     isDesktop: () => true,
     storage: { load: () => null, save: () => undefined },
     handleMessage: echo,
@@ -473,7 +467,6 @@ test("an unsupported platform never binds, even when start is called directly", 
   let listened = 0;
   const controller = new McpServerController({
     pluginId: "mind-tree-nature",
-    group: "read",
     isDesktop: () => false,
     storage: { load: () => null, save: () => undefined },
     handleMessage: echo,
@@ -483,6 +476,6 @@ test("an unsupported platform never binds, even when start is called directly", 
     createToken: () => "token-abcdefghijklmnop"
   });
   assert.deepEqual(controller.status(), { kind: "unsupported" });
-  assert.deepEqual(await controller.start(27321), { kind: "unsupported" });
+  assert.deepEqual(await controller.start(DEFAULT_MCP_PORT), { kind: "unsupported" });
   assert.equal(listened, 0);
 });

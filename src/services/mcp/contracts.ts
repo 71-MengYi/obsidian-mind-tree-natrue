@@ -11,7 +11,6 @@
  * through the shared document session so they share history, undo and the
  * per-file write lane with the canvas.
  */
-import type { McpServerGroup } from "./connection";
 import type { MindTreeNode, NodeId, ResourceRef } from "../../types";
 
 /** One node rendered for tool output; never a whole document. */
@@ -134,14 +133,12 @@ export interface McpHostEnvironment {
   /** Only a supported platform may construct or start a transport. */
   isSupported(): boolean;
   /**
-   * Live configuration of one server, for one-click client setup.
+   * Live configuration of the local server, for one-click client setup.
    *
-   * Per group because each server has its own port and its own token: a token
-   * that unlocked writes must never be the token the read-only entry carries.
-   * There is deliberately no per-tool permission here — the read and write
-   * catalogs are the boundary, and approval lives in the client.
+   * One port and one token, because there is one server. Approval lives in the
+   * client and applies to its single entry.
    */
-  connection(group: McpServerGroup): { port: number; token: string };
+  connection(): { port: number; token: string };
   /**
    * Release version reported in the `initialize` handshake.
    *

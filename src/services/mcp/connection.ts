@@ -8,31 +8,37 @@ export const LOOPBACK_HOSTS = ["localhost", "127.0.0.1", "[::1]", "::1"] as cons
 export const MCP_ENDPOINT_PATH = "/mcp";
 
 /**
- * The two servers, split by whether a tool can change a file.
+ * The one local MCP server.
  *
- * A client's tool-approval policy is attached to an MCP *server*, not to a tool,
- * so the only way to let reads run unattended while writes require approval is
- * to offer them as two servers. This is therefore the security boundary: the
- * read catalog must never contain a tool that writes, and each server gets its
- * own port and its own token so a client cannot confuse them.
+ * The plugin used to expose two servers (`read` / `write`) so a client could
+ * attach a different approval policy to each. The product now offers a single
+ * server carrying every tool, so the client applies one policy to reading and
+ * editing alike. The name is both `serverInfo.name` and the `mcpServers` key in
+ * the copied configuration, so it must stay stable across releases.
  */
-export type McpServerGroup = "read" | "write";
+export const MCP_SERVER_NAME = "mind-tree-nature";
 
-export const MCP_SERVER_GROUPS: readonly McpServerGroup[] = ["read", "write"];
-
-/** How a group is named in a client's `mcpServers` map. */
-export function mcpServerName(group: McpServerGroup): string {
-  return `mind-tree-nature-${group}`;
+/**
+ * The device-local record key of that server.
+ *
+ * The record holds the bound port and the access token; it is per machine and
+ * never part of `data.json`, because a synced token would unlock another
+ * device's endpoint.
+ */
+export function mcpServerRecordKey(pluginId: string): string {
+  return `${pluginId}:mcp-server`;
 }
 
 /**
- * The device-local record key for one group.
+ * The record key of the retired read-only server.
  *
- * Per group, so the two servers cannot share a port or a token: a token that
- * unlocked writes must not be the token the read-only configuration carries.
+ * Readable so the merge can adopt the port and token an installed client
+ * configuration already carries instead of invalidating it. Deliberately not
+ * the write record: only the read server was guaranteed to be listening, and
+ * its configuration is the one users actually have today.
  */
-export function mcpServerRecordKey(pluginId: string, group: McpServerGroup): string {
-  return `${pluginId}:mcp-server:${group}`;
+export function legacyMcpServerRecordKey(pluginId: string): string {
+  return `${pluginId}:mcp-server:read`;
 }
 
 /** MCP protocol revisions this server understands, newest first. */

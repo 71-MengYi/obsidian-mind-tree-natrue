@@ -22,13 +22,7 @@ import { handleMcpMessage } from "./services/mcp/mcp-core";
 import { McpServerController, type McpServerStorage } from "./services/mcp/mcp-server";
 import { ObsidianToolHost } from "./services/mcp/obsidian-tool-host";
 import { MindTreeSessionWriter } from "./services/mcp/session-writer";
-import {
-  parseMcpPortInput,
-  type McpEndpointState,
-  type McpPageState,
-  type McpSettingsStatus
-} from "./services/mcp/settings-page-model";
-import type { McpServerGroup } from "./services/mcp/connection";
+import { parseMcpPortInput, type McpPageState } from "./services/mcp/settings-page-model";
 import { McpToolError } from "./services/mcp/tool-error";
 import { MindTreePathLocator } from "./services/mcp/tree-locator";
 import { MindTreeReader } from "./services/mcp/tree-reader";
@@ -87,7 +81,7 @@ export default class MindTreeNaturePlugin extends Plugin {
    * The MCP subsystem. Absent on a platform that cannot serve it, which is what
    * makes "unsupported" a fact about the object graph rather than a flag.
    */
-  private mcpServers: Partial<Record<McpServerGroup, McpServerController>> = {};
+  private mcpServer?: McpServerController;
   private mcpReader?: MindTreeReader;
 
 
@@ -377,8 +371,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     if (this.cacheSaveTimer !== undefined) window.clearTimeout(this.cacheSaveTimer);
     if (this.conflictMaintenance !== undefined) this.conflictMaintenance.cancel();
     // Stop accepting new tool calls before the services they depend on go away.
-    void this.mcpServers.read?.stop();
-    void this.mcpServers.write?.stop();
+    void this.mcpServer?.stop();
     // Only a disposable local cache is flushed at unload, never old user settings.
     this.resourceCache?.save(this.resources?.entries() ?? []);
     this.settingsPersistence?.destroy();
@@ -1005,9 +998,9 @@ export default class MindTreeNaturePlugin extends Plugin {
       locator,
       environment: {
         isSupported: () => isMcpSupported({ isDesktop: !Platform.isMobile }),
-        connection: (group) => ({
-          port: this.mcpServers[group]?.port ?? (group === "read" ? this.settings.mcpReadPort : this.settings.mcpWritePort),
-          token: this.mcpServers[group]?.token() ?? ""
+        connection: () => ({
+          port: this.mcpServer?.port ?? this.settings.mcpPort,
+          token: this.mcpServer?.token() ?? ""
         }),
         version: () => this.manifest.version,
         logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
@@ -1019,84 +1012,59 @@ export default class MindTreeNaturePlugin extends Plugin {
       load: (key) => this.app.loadLocalStorage(key),
       save: (key, value) => this.app.saveLocalStorage(key, value)
     };
-    // Two controllers, one per server: separate ports so an MCP client can key
-    // its approval policy on the server, and separate tokens so the read-only
-    // configuration can never carry write authority.
-    this.mcpServers = {
-      read: new McpServerController({
-        pluginId: this.manifest.id,
-        group: "read",
-        isDesktop: () => !Platform.isMobile,
-        storage,
-        handleMessage: (raw) => handleMcpMessage(raw, host, "read"),
-        logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
-      }),
-      write: new McpServerController({
-        pluginId: this.manifest.id,
-        group: "write",
-        isDesktop: () => !Platform.isMobile,
-        storage,
-        handleMessage: (raw) => handleMcpMessage(raw, host, "write"),
-        logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
-      })
-    };
+    // One server for one endpoint: every tool is served here, and the client's
+    // approval policy applies to the whole catalog.
+    this.mcpServer = new McpServerController({
+      pluginId: this.manifest.id,
+      isDesktop: () => !Platform.isMobile,
+      storage,
+      handleMessage: (raw) => handleMcpMessage(raw, host),
+      logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
+    });
     if (this.settings.mcpEnabled) {
       void this.applyMcpServers().catch((error: unknown) => {
         // A busy port range is a normal outcome; the operator has the AI tab.
-        console.error("Mind Tree Nature: MCP servers could not start", error);
+        console.error("Mind Tree Nature: MCP server could not start", error);
       });
     }
   }
 
   /**
-   * Reconcile both listeners with the settings.
+   * Reconcile the listener with the settings.
    *
-   * One function for every transition (master switch, write switch, port change)
-   * so no path can leave a server running that the settings say is off, and the
-   * result is reported per server rather than as a single status.
+   * One function for every transition (master switch, port change) so no path
+   * can leave a server running that the settings say is off.
    */
   private async applyMcpServers(): Promise<McpPageState> {
-    await this.stopMcpServer("write");
-    await this.stopMcpServer("read");
-    if (this.settings.mcpEnabled && this.settings.mcpWriteEnabled) {
-      await this.startMcpServer("write", this.settings.mcpWritePort);
-    }
+    await this.mcpServer?.stop();
     if (this.settings.mcpEnabled) {
-      await this.startMcpServer("read", this.settings.mcpReadPort);
+      await this.mcpServer?.start(this.settings.mcpPort);
     }
     return this.mcpState();
   }
 
-  private async startMcpServer(group: McpServerGroup, port: number): Promise<McpSettingsStatus> {
-    const controller = this.mcpServers[group];
-    if (!controller) return { kind: "unsupported" };
-    return controller.start(port);
-  }
-
-  private async stopMcpServer(group: McpServerGroup): Promise<void> {
-    await this.mcpServers[group]?.stop();
-  }
-
-  /** The resolved state the AI page renders; one shape for both servers. */
+  /** The resolved state the AI page renders. */
   private mcpState(): McpPageState {
-    const endpoint = (group: McpServerGroup, port: number): McpEndpointState => {
-      const controller = this.mcpServers[group];
-      if (!controller) return { port, status: { kind: "unsupported" }, token: "" };
+    const controller = this.mcpServer;
+    const port = this.settings.mcpPort;
+    if (!controller) {
+      // A platform without the listener reports unsupported regardless of the
+      // stored preference, so the page only ever renders resolved facts.
       return {
+        supported: false,
+        enabled: this.settings.mcpEnabled,
+        server: { port, status: { kind: "unsupported" }, token: "" }
+      };
+    }
+    return {
+      supported: true,
+      enabled: this.settings.mcpEnabled,
+      server: {
         port,
         ...(controller.boundPort !== undefined ? { boundPort: controller.boundPort } : {}),
         status: controller.status(),
         token: controller.token()
-      };
-    };
-    return {
-      // A platform without the servers reports unsupported regardless of the
-      // stored preferences, so the page only ever renders resolved facts.
-      supported: Boolean(this.mcpServers.read),
-      enabled: this.settings.mcpEnabled,
-      read: endpoint("read", this.settings.mcpReadPort),
-      writeEnabled: this.settings.mcpWriteEnabled,
-      write: endpoint("write", this.settings.mcpWritePort)
+      }
     };
   }
 
@@ -1108,7 +1076,7 @@ export default class MindTreeNaturePlugin extends Plugin {
    * also what keeps the settings pane from having to know about platforms.
    */
   mcpSettings(): McpSettingsPagePort {
-    if (!this.mcpServers.read) return unsupportedMcpSettingsPort();
+    if (!this.mcpServer) return unsupportedMcpSettingsPort();
     return {
       state: () => this.mcpState(),
       setEnabled: async (enabled) => {
@@ -1117,29 +1085,20 @@ export default class MindTreeNaturePlugin extends Plugin {
         await this.saveSettings();
         await this.applyMcpServers();
       },
-      setWriteEnabled: async (writeEnabled) => {
-        if (this.settings.mcpWriteEnabled === writeEnabled) return;
-        this.settings.mcpWriteEnabled = writeEnabled;
-        await this.saveSettings();
-        await this.applyMcpServers();
-      },
-      setPort: async (group, port) => {
+      setPort: async (port) => {
         const normalized = normalizeMcpPort(port);
-        if (normalized === undefined) return;
-        const key = group === "read" ? "mcpReadPort" : "mcpWritePort";
-        if (this.settings[key] === normalized) return;
-        this.settings[key] = normalized;
+        if (normalized === undefined || this.settings.mcpPort === normalized) return;
+        this.settings.mcpPort = normalized;
         await this.saveSettings();
         // A bound port cannot be changed in place; the reconciliation restarts
-        // only the servers whose settings actually changed.
+        // the listener on the new preference.
         await this.applyMcpServers();
       },
-      applyPortInput: async (group, raw) => {
+      applyPortInput: async (raw) => {
         const port = parseMcpPortInput(raw);
         if (port === undefined) return false;
-        const key = group === "read" ? "mcpReadPort" : "mcpWritePort";
-        if (this.settings[key] !== port) {
-          this.settings[key] = port;
+        if (this.settings.mcpPort !== port) {
+          this.settings.mcpPort = port;
           await this.saveSettings();
           await this.applyMcpServers();
         }
@@ -1150,8 +1109,7 @@ export default class MindTreeNaturePlugin extends Plugin {
         await this.applyMcpServers();
       },
       stop: async () => {
-        await this.stopMcpServer("write");
-        await this.stopMcpServer("read");
+        await this.mcpServer?.stop();
       },
       copyText: (text) => copyToClipboard(text)
     };

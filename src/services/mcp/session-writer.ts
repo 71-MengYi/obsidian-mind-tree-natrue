@@ -183,9 +183,9 @@ export class MindTreeSessionWriter {
   /**
    * Creates a new tree through the one shared creation path, without focus.
    *
-   * No permission check here: this class is only ever reachable through the
-   * write server, which is not listening unless the user enabled it. The
-   * boundary is the server split, not a per-tool switch.
+   * No permission check here: the single server only listens while the user
+   * enabled it, and whether a call is approved is the MCP client's policy for
+   * that endpoint — not a per-tool switch inside the plugin.
    */
   async createTree(input: { title: string; folder?: string; children?: readonly string[] }): Promise<McpCreatedTree> {
     const created = await this.ports.creation.create({

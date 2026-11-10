@@ -46,33 +46,24 @@ export interface MindTreeSettings {
   connectionStyle: MindTreeConnectionStyle;
   nodeShape: MindTreeNodeShape;
   /**
-   * Master switch for the two local MCP servers. Off by default because they
-   * accept inbound connections; desktop-only, and the access tokens never live
-   * here (they are device-local, see `services/mcp/connection.ts`).
+   * Master switch for the local MCP server. Off by default because it accepts
+   * inbound connections; desktop-only, and the access token never lives here
+   * (it is device-local, see `services/mcp/connection.ts`).
    */
   mcpEnabled: boolean;
-  /** Preferred port of the read-only server; a busy port falls back to nearby ones. */
-  mcpReadPort: number;
   /**
-   * Whether the second server (node edits plus whole-tree creation) listens.
+   * Preferred port of the local server; a busy port falls back to nearby ones.
    *
-   * The two servers are separate so an MCP client can attach different approval
-   * policies to them: the read server holds nothing that changes a file, while
-   * this one holds every tool that does. There is deliberately no per-tool
-   * switch — approval lives in the client, keyed on the server.
+   * The server carries both reading and editing tools, so this is the only port.
    */
-  mcpWriteEnabled: boolean;
-  /** Preferred port of the write server; a busy port falls back to nearby ones. */
-  mcpWritePort: number;
+  mcpPort: number;
 }
 
 /** Above 1024 the port needs no privileges; the upper bound is the TCP limit. */
 export const MIN_MCP_PORT = 1024;
 export const MAX_MCP_PORT = 65535;
-/** The read server keeps the original single-endpoint port. */
-export const DEFAULT_MCP_READ_PORT = 27321;
-/** The write server sits on the next port so clients key on distinct host:port. */
-export const DEFAULT_MCP_WRITE_PORT = 27322;
+/** The original single-endpoint port, kept so installed client configs persist. */
+export const DEFAULT_MCP_PORT = 27321;
 /** Busy ports are retried upward from the preferred one, with one bound. */
 export const MCP_PORT_FALLBACK_ATTEMPTS = 10;
 
@@ -99,12 +90,7 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   connectionStyle: "theme",
   nodeShape: "rounded",
   mcpEnabled: false,
-  mcpReadPort: DEFAULT_MCP_READ_PORT,
-  // Off on upgrade as well as on a fresh install: turning a whole new inbound
-  // server on because an older version had granted write tools would silently
-  // widen what is exposed. The user re-opts in explicitly.
-  mcpWriteEnabled: false,
-  mcpWritePort: DEFAULT_MCP_WRITE_PORT
+  mcpPort: DEFAULT_MCP_PORT
 };
 
 /** Clamp a user-supplied port into the usable range; `undefined` means "not a port". */

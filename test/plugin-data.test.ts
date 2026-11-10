@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { normalizePluginData } from "../src/plugin-data";
-import { DEFAULT_MCP_READ_PORT, DEFAULT_MCP_WRITE_PORT, DEFAULT_SETTINGS } from "../src/settings-model";
+import { DEFAULT_MCP_PORT, DEFAULT_SETTINGS } from "../src/settings-model";
 
 test("damaged settings fall back field-by-field without blocking plugin load", () => {
   const normalized = normalizePluginData({
@@ -68,83 +68,107 @@ test("normalized custom markers are an independent array that cannot mutate plug
   assert.deepEqual(DEFAULT_SETTINGS.customMarkers, []);
 });
 
-test("an absent MCP configuration stays off, read-only and on the two default ports", () => {
+// ─── MCP: one merged server (mcpEnabled + mcpPort) ──────────────────────────
+
+test("an absent MCP configuration stays off on the single default port", () => {
   const normalized = normalizePluginData({ settings: {} });
   assert.equal(normalized.settings.mcpEnabled, false);
-  assert.equal(normalized.settings.mcpWriteEnabled, false);
-  assert.equal(normalized.settings.mcpReadPort, DEFAULT_SETTINGS.mcpReadPort);
-  assert.equal(normalized.settings.mcpWritePort, DEFAULT_SETTINGS.mcpWritePort);
-  assert.equal(DEFAULT_SETTINGS.mcpEnabled, false);
-  assert.equal(DEFAULT_SETTINGS.mcpWriteEnabled, false);
-  assert.equal(DEFAULT_SETTINGS.mcpReadPort, DEFAULT_MCP_READ_PORT);
-  assert.equal(DEFAULT_SETTINGS.mcpWritePort, DEFAULT_MCP_WRITE_PORT);
-  assert.notEqual(DEFAULT_MCP_READ_PORT, DEFAULT_MCP_WRITE_PORT);
+  assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
+  assert.equal(DEFAULT_SETTINGS.mcpPort, DEFAULT_MCP_PORT);
+  assert.equal(DEFAULT_MCP_PORT, 27321);
+  // The read/write split is gone from the persistent model itself.
+  for (const key of ["mcpReadPort", "mcpWritePort", "mcpWriteEnabled"]) {
+    assert.equal(Object.hasOwn(normalized.settings, key), false, key);
+    assert.equal(Object.hasOwn(DEFAULT_SETTINGS, key), false, key);
+  }
 });
 
 test("a damaged MCP configuration is repaired field by field", () => {
   const normalized = normalizePluginData({
-    settings: {
-      mcpEnabled: "yes",
-      mcpWriteEnabled: 1,
-      mcpReadPort: "27321",
-      mcpWritePort: "not-a-port"
-    }
+    settings: { mcpEnabled: "yes", mcpPort: "27321", mcpWriteEnabled: 1 }
   });
   assert.equal(normalized.settings.mcpEnabled, false);
-  assert.equal(normalized.settings.mcpWriteEnabled, false);
-  assert.equal(normalized.settings.mcpReadPort, DEFAULT_SETTINGS.mcpReadPort);
-  assert.equal(normalized.settings.mcpWritePort, DEFAULT_SETTINGS.mcpWritePort);
+  assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
+  // The retired write switch is not part of the merged settings object.
+  assert.equal(Object.hasOwn(normalized.settings, "mcpWriteEnabled"), false);
 });
 
-test("a configuration written before the two-server split keeps its port for reads only", () => {
-  // An upgrade must never widen what is exposed: the old single server becomes
-  // the read-only one (so an existing client configuration keeps working), and a
-  // previously granted write permission is deliberately NOT carried over.
-  const normalized = normalizePluginData({
-    settings: { mcpEnabled: true, mcpPort: 30_000, mcpAllowWrites: true, mcpAllowTreeCreation: true }
-  });
-  assert.equal(normalized.settings.mcpEnabled, true);
-  assert.equal(normalized.settings.mcpReadPort, 30_000);
-  assert.equal(normalized.settings.mcpWriteEnabled, false);
-  assert.equal(normalized.settings.mcpWritePort, DEFAULT_SETTINGS.mcpWritePort);
+test("mcpPort wins over both legacy two-server ports", () => {
+  const settings = normalizePluginData({
+    settings: { mcpPort: 30_000, mcpReadPort: 30_001, mcpWritePort: 30_002 }
+  }).settings;
+  assert.equal(settings.mcpPort, 30_000);
 });
 
-test("an out-of-range MCP port falls back instead of clamping into the privileged range", () => {
-  // Silently binding to 1024 because someone typed 80 would be surprising, so a
-  // non-port value is discarded rather than clamped. Both servers are checked,
-  // because a write server on a privileged port would be a privilege escalation.
-  for (const port of [80, 0, -1, 65_536, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
-    const settings = normalizePluginData({ settings: { mcpReadPort: port, mcpWritePort: port } }).settings;
-    assert.equal(settings.mcpReadPort, DEFAULT_SETTINGS.mcpReadPort, `read port ${String(port)}`);
-    assert.equal(settings.mcpWritePort, DEFAULT_SETTINGS.mcpWritePort, `write port ${String(port)}`);
-  }
-  for (const port of [30_000, 65_535, 1_024]) {
-    const settings = normalizePluginData({ settings: { mcpReadPort: port, mcpWritePort: port } }).settings;
-    assert.equal(settings.mcpReadPort, port, `read port ${String(port)}`);
-    assert.equal(settings.mcpWritePort, port, `write port ${String(port)}`);
-  }
-  // The legacy single port is subject to the same rule when it is migrated.
+test("the legacy read port is carried over for installed client configurations", () => {
+  // In the two-server era only the read server was guaranteed to be listening,
+  // so its configuration is the one users actually have today.
+  assert.equal(normalizePluginData({ settings: { mcpReadPort: 29_000 } }).settings.mcpPort, 29_000);
   assert.equal(
-    normalizePluginData({ settings: { mcpPort: 80 } }).settings.mcpReadPort,
-    DEFAULT_SETTINGS.mcpReadPort
+    normalizePluginData({ settings: { mcpReadPort: 29_000, mcpWritePort: 29_010 } }).settings.mcpPort,
+    29_000
   );
 });
 
-test("the MCP switches survive a valid configuration and never leak elsewhere", () => {
+test("the old write port is only a fallback when neither newer key carries a usable port", () => {
+  assert.equal(normalizePluginData({ settings: { mcpWritePort: 29_010 } }).settings.mcpPort, 29_010);
+  // An invalid mcpPort/mcpReadPort does not clamp into the bindable range; the
+  // next legacy key is considered instead.
+  assert.equal(
+    normalizePluginData({ settings: { mcpPort: 80, mcpReadPort: 80, mcpWritePort: 29_010 } }).settings.mcpPort,
+    29_010
+  );
+  assert.equal(
+    normalizePluginData({ settings: { mcpWritePort: 29_010, mcpReadPort: 29_000 } }).settings.mcpPort,
+    29_000
+  );
+});
+
+test("an out-of-range or non-numeric MCP port falls back instead of clamping", () => {
+  // Silently binding to 1024 because someone typed 80 would be surprising, so a
+  // non-port value is discarded rather than clamped.
+  for (const port of [80, 0, -1, 65_536, 1.5, Number.NaN, Number.POSITIVE_INFINITY, "27321", null]) {
+    const settings = normalizePluginData({ settings: { mcpPort: port } }).settings;
+    assert.equal(settings.mcpPort, DEFAULT_SETTINGS.mcpPort, `port ${String(port)}`);
+  }
+  for (const port of [30_000, 65_535, 1_024]) {
+    assert.equal(normalizePluginData({ settings: { mcpPort: port } }).settings.mcpPort, port);
+  }
+});
+
+test("the merged switch and port survive a valid configuration and nothing legacy leaks", () => {
   const normalized = normalizePluginData({
-    settings: { mcpEnabled: true, mcpWriteEnabled: true, mcpReadPort: 29_000, mcpWritePort: 29_010 }
+    settings: {
+      mcpEnabled: true,
+      mcpPort: 29_000,
+      mcpWriteEnabled: true,
+      mcpReadPort: 29_005,
+      mcpWritePort: 29_010,
+      mcpAllowWrites: true,
+      mcpAllowTreeCreation: true,
+      mcpToken: "Bearer leaked"
+    }
   });
   assert.equal(normalized.settings.mcpEnabled, true);
-  assert.equal(normalized.settings.mcpWriteEnabled, true);
-  assert.equal(normalized.settings.mcpReadPort, 29_000);
-  assert.equal(normalized.settings.mcpWritePort, 29_010);
-  // Per-tool switches are gone: the read/write split of the catalogs is the
-  // boundary, so plugin data must not grow a permission key again.
-  assert.equal(Object.hasOwn(normalized.settings, "mcpAllowWrites"), false);
-  assert.equal(Object.hasOwn(normalized.settings, "mcpAllowTreeCreation"), false);
-  // The legacy single port is migrated into mcpReadPort, not carried alongside it.
-  assert.equal(Object.hasOwn(normalized.settings, "mcpPort"), false);
-  // The access token is device-local and must never be part of plugin data.
-  assert.equal(Object.hasOwn(normalized.settings, "mcpToken"), false);
+  assert.equal(normalized.settings.mcpPort, 29_000);
+  // The normalized object is exactly the merged model: no retired key survives,
+  // and the device-local token is never part of plugin data.
+  assert.deepEqual(Object.keys(normalized.settings).sort(), Object.keys(DEFAULT_SETTINGS).sort());
+  for (const key of [
+    "mcpReadPort",
+    "mcpWritePort",
+    "mcpWriteEnabled",
+    "mcpAllowWrites",
+    "mcpAllowTreeCreation",
+    "mcpToken"
+  ]) {
+    assert.equal(Object.hasOwn(normalized.settings, key), false, key);
+  }
   assert.equal(JSON.stringify(normalized).includes("Bearer"), false);
+});
+
+test("the merged switch survives independently of a damaged port", () => {
+  const normalized = normalizePluginData({ settings: { mcpEnabled: true, mcpPort: 80 } });
+  assert.equal(normalized.settings.mcpEnabled, true);
+  assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
 });

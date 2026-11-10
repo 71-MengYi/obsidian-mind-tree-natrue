@@ -2,7 +2,6 @@ import type { MindTreeSettings } from "../../settings-model";
 import type { ResourceIndexProgress, ResourceIndexReport } from "../../services/resource-catalog";
 import type { UpdateState } from "../../services/updates/update-coordinator";
 import type { McpEndpointState, McpPageState } from "../../services/mcp/settings-page-model";
-import type { McpServerGroup } from "../../services/mcp/connection";
 
 /** Settings pages mutate only the supplied model and named persistence ports. */
 export interface SettingsPagePort {
@@ -28,12 +27,10 @@ export interface SettingsPagePort {
 export interface McpSettingsPagePort {
   state(): McpPageState;
   setEnabled(enabled: boolean): Promise<void>;
-  /** Starts or stops the write server; the read server is unaffected. */
-  setWriteEnabled(enabled: boolean): Promise<void>;
-  setPort(server: McpServerGroup, port: number): Promise<void>;
-  /** Applies one server's port text as typed; false when it is not a valid port. */
-  applyPortInput(server: McpServerGroup, raw: string): Promise<boolean>;
-  /** Reconciles both listeners with the stored settings. */
+  setPort(port: number): Promise<void>;
+  /** Applies the port text as typed; false when it is not a valid port. */
+  applyPortInput(raw: string): Promise<boolean>;
+  /** Reconciles the listener with the stored settings. */
   start(): Promise<void>;
   stop(): Promise<void>;
   /** Writes to the system clipboard; false means the caller must show the text. */
@@ -53,12 +50,9 @@ export function unsupportedMcpSettingsPort(): McpSettingsPagePort {
     state: () => ({
       supported: false,
       enabled: false,
-      read: endpoint(),
-      writeEnabled: false,
-      write: endpoint()
+      server: endpoint()
     }),
     setEnabled: async () => undefined,
-    setWriteEnabled: async () => undefined,
     setPort: async () => undefined,
     applyPortInput: async () => false,
     start: async () => undefined,

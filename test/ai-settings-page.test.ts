@@ -10,13 +10,8 @@ import {
   MIN_MCP_PORT,
   type MindTreeSettings
 } from "../src/settings-model";
-import {
-  DEFAULT_MCP_HOST,
-  MCP_ENDPOINT_PATH,
-  mcpServerName,
-  type McpServerGroup
-} from "../src/services/mcp/connection";
-import type { McpPageState } from "../src/services/mcp/settings-page-model";
+import { MCP_SERVER_NAME, mcpUrl } from "../src/services/mcp/connection";
+import type { McpPageState, McpSettingsStatus } from "../src/services/mcp/settings-page-model";
 import type { SettingsPagePort } from "../src/ui/settings-pages/ports";
 
 // Exercise the real AI settings page with only the Obsidian helpers it uses
@@ -162,12 +157,6 @@ class TestText {
   setDisabled(value: boolean): this { this.inputEl.disabled = value; return this; }
 }
 
-class TestTextArea {
-  readonly inputEl: TestElement;
-  constructor(parent: TestElement) { this.inputEl = parent.createEl("textarea", {}); }
-  setValue(value: string): this { this.inputEl.value = value; return this; }
-}
-
 class TestButton {
   readonly buttonEl: TestElement;
   constructor(parent: TestElement) { this.buttonEl = parent.createEl("button", { attr: { type: "button" } }); }
@@ -183,7 +172,6 @@ class TestSetting {
   readonly controlEl: TestElement;
   readonly toggles: TestToggle[] = [];
   readonly texts: TestText[] = [];
-  readonly textAreas: TestTextArea[] = [];
   readonly buttons: TestButton[] = [];
 
   constructor(containerEl: TestElement) {
@@ -204,12 +192,6 @@ class TestSetting {
   addText(configure: (component: TestText) => unknown): this {
     const component = new TestText(this.controlEl);
     this.texts.push(component);
-    configure(component);
-    return this;
-  }
-  addTextArea(configure: (component: TestTextArea) => unknown): this {
-    const component = new TestTextArea(this.controlEl);
-    this.textAreas.push(component);
     configure(component);
     return this;
   }
@@ -271,20 +253,14 @@ function evaluate(): Sandbox {
 
 interface HarnessOptions {
   readonly supported?: boolean;
-  /** The master switch. */
+  /** The master switch; it is also the only switch. */
   readonly enabled?: boolean;
-  /** The write server's own switch; there is no per-tool switch any more. */
-  readonly writeEnabled?: boolean;
-  readonly readPort?: number;
-  readonly writePort?: number;
-  readonly readToken?: string;
-  readonly writeToken?: string;
+  readonly port?: number;
+  readonly token?: string;
   /** `false` makes the clipboard write fail, which the page must handle. */
   readonly copySucceeds?: boolean;
   /** `true` makes the master transition reject, as a busy port would. */
   readonly failEnable?: boolean;
-  /** `true` makes the write-server transition reject. */
-  readonly failWrite?: boolean;
   /** `true` makes the port transition reject outright. */
   readonly failPort?: boolean;
   /** Port text this page would parse but the host still refuses. */
@@ -300,13 +276,12 @@ interface Harness {
   readonly state: McpPageState;
   page: PageInstance;
   enableToggle(): TestElement;
-  writeToggle(): TestElement;
-  serverBlock(server: McpServerGroup): TestElement;
-  serverHeading(server: McpServerGroup): TestElement;
-  serverScope(server: McpServerGroup): TestElement;
-  statusLine(server: McpServerGroup): TestElement;
-  portField(server: McpServerGroup): TestElement;
-  portError(server: McpServerGroup): TestElement;
+  serverBlock(): TestElement;
+  serverHeading(): TestElement;
+  serverScope(): TestElement;
+  statusLine(): TestElement;
+  portField(): TestElement;
+  portError(): TestElement;
   configSection(): TestElement;
   copyButton(): TestElement;
   copyFeedback(): TestElement;
@@ -314,18 +289,16 @@ interface Harness {
   notice(): TestElement;
   byClass(name: string): TestElement[];
   indexOf(element: TestElement): number;
-  typePort(server: McpServerGroup, value: string): void;
-  pressEnter(server: McpServerGroup, value: string): void;
+  typePort(value: string): void;
+  pressEnter(value: string): void;
   copy(): void;
   runTimers(): void;
 }
 
-const READ_TOKEN = "read-token-0123456789";
-const WRITE_TOKEN = "write-token-0123456789";
+const SERVER_TOKEN = "device-token-0123456789";
 
-/** One advertised server, so the page's copy is checked against the model. */
+/** The one advertised server, so the page's copy is checked against the model. */
 interface Connection {
-  readonly group: McpServerGroup;
   readonly port: number;
   readonly token: string;
 }
@@ -333,14 +306,14 @@ interface Connection {
 /**
  * The client JSON the model documents, restated so the page's copy is checked.
  *
- * Both servers are separate `mcpServers` entries — that split is the whole point
- * of the redesign, because a client attaches approval to a server.
+ * There is exactly one entry: the merged server carries every tool, and a client
+ * attaches one approval policy to it.
  */
 const expectedConfig = (connections: readonly Connection[]): string => {
   const mcpServers: Record<string, unknown> = {};
   for (const connection of connections) {
-    mcpServers[mcpServerName(connection.group)] = {
-      url: `http://${DEFAULT_MCP_HOST}:${connection.port}${MCP_ENDPOINT_PATH}`,
+    mcpServers[MCP_SERVER_NAME] = {
+      url: mcpUrl(connection.port),
       headers: { Authorization: `Bearer ${connection.token}` }
     };
   }
@@ -355,40 +328,31 @@ function fixture(options: HarnessOptions = {}): Harness {
   const copied: string[] = [];
   const supported = options.supported ?? true;
   const enabled = options.enabled ?? false;
-  const writeEnabled = options.writeEnabled ?? false;
-  const readPort = options.readPort ?? DEFAULT_SETTINGS.mcpReadPort;
-  const writePort = options.writePort ?? DEFAULT_SETTINGS.mcpWritePort;
-  const readToken = options.readToken ?? READ_TOKEN;
-  const writeToken = options.writeToken ?? WRITE_TOKEN;
-  const running = (port: number): McpPageState["read"]["status"] => ({
-    kind: "running",
-    url: `http://${DEFAULT_MCP_HOST}:${port}${MCP_ENDPOINT_PATH}`
-  });
+  const preferredPort = options.port ?? DEFAULT_SETTINGS.mcpPort;
+  const token = options.token ?? SERVER_TOKEN;
+  const running = (port: number): McpSettingsStatus => ({ kind: "running", url: mcpUrl(port) });
 
   /**
-   * What a host does after every transition: each listener reports its own
+   * What a host does after every transition: the one listener reports its
    * resolved state, so the page only ever renders what actually happened.
    */
   const settleStatus = (): void => {
-    state.read.status = !supported ? { kind: "unsupported" } : state.enabled ? running(state.read.port) : { kind: "stopped" };
-    state.write.status = !supported
+    state.server.status = !supported
       ? { kind: "unsupported" }
-      : state.enabled && state.writeEnabled ? running(state.write.port) : { kind: "stopped" };
+      : state.enabled
+        ? running(state.server.port)
+        : { kind: "stopped" };
   };
 
   const state: McpPageState = {
     supported,
     enabled,
-    read: {
-      port: readPort,
-      status: supported ? (enabled ? running(readPort) : { kind: "stopped" }) : { kind: "unsupported" },
-      token: readToken
-    },
-    writeEnabled,
-    write: {
-      port: writePort,
-      status: supported ? (enabled && writeEnabled ? running(writePort) : { kind: "stopped" }) : { kind: "unsupported" },
-      token: writeToken
+    server: {
+      port: preferredPort,
+      status: supported
+        ? (enabled ? running(preferredPort) : { kind: "stopped" })
+        : { kind: "unsupported" },
+      token
     }
   };
 
@@ -410,24 +374,20 @@ function fixture(options: HarnessOptions = {}): Harness {
         state.enabled = value;
         settleStatus();
       },
-      setWriteEnabled: async (value) => {
-        calls.push(`setWriteEnabled:${value}`);
-        if (options.failWrite) throw new Error("address already in use");
-        state.writeEnabled = value;
+      setPort: async (value) => {
+        calls.push(`setPort:${value}`);
+        state.server.port = value;
         settleStatus();
       },
-      setPort: async (server, value) => {
-        calls.push(`setPort:${server}:${value}`);
-        state[server].port = value;
-      },
-      applyPortInput: async (server, raw) => {
-        calls.push(`applyPortInput:${server}:${raw}`);
+      applyPortInput: async (raw) => {
+        calls.push(`applyPortInput:${raw}`);
         if (options.failPort) throw new Error("address already in use");
         if ((options.refusePortInput ?? []).includes(raw)) return false;
         if (!/^\d{1,5}$/.test(raw)) return false;
         const value = Number(raw);
         if (value < MIN_MCP_PORT || value > MAX_MCP_PORT) return false;
-        state[server].port = value;
+        state.server.port = value;
+        settleStatus();
         return true;
       },
       start: async () => {
@@ -437,7 +397,6 @@ function fixture(options: HarnessOptions = {}): Harness {
       stop: async () => {
         calls.push("stop");
         state.enabled = false;
-        state.writeEnabled = false;
         settleStatus();
       },
       copyText: async (text) => {
@@ -457,18 +416,19 @@ function fixture(options: HarnessOptions = {}): Harness {
     assert.equal(found.length, 1, `expected exactly one .${name}`);
     return found[0]!;
   };
-  const serverBlock = (server: McpServerGroup): TestElement => {
-    const found = byClass("mtn-settings-ai-server")
-      .filter((element) => element.getAttribute("data-server") === server);
-    assert.equal(found.length, 1, `expected exactly one ${server} server block`);
+  const serverBlock = (): TestElement => {
+    const found = byClass("mtn-settings-ai-server");
+    assert.equal(found.length, 1, "the merged page must render exactly one server block");
+    assert.equal(found[0]!.getAttribute("data-server"), "local", "the one server is the local endpoint");
     return found[0]!;
   };
-  const serverPart = (server: McpServerGroup, name: string): TestElement => {
-    const found = serverBlock(server).all().filter((element) => element.hasClass(name));
-    assert.equal(found.length, 1, `expected exactly one .${name} in the ${server} block`);
+  const serverPart = (name: string): TestElement => {
+    const found = serverBlock().all().filter((element) => element.hasClass(name));
+    assert.equal(found.length, 1, `expected exactly one .${name} in the server block`);
     return found[0]!;
   };
-  const portField = (server: McpServerGroup): TestElement => serverPart(server, "mtn-settings-ai-port-input");
+  const portField = (): TestElement => serverPart("mtn-settings-ai-port-input");
+  const configSetting = (): TestSetting => at(sandbox.settings, 2, "config Setting");
 
   return {
     root,
@@ -481,29 +441,28 @@ function fixture(options: HarnessOptions = {}): Harness {
     byClass,
     serverBlock,
     indexOf: (element) => root.all().indexOf(element),
-    serverHeading: (server) => serverPart(server, "mtn-settings-ai-server-heading"),
-    serverScope: (server) => serverPart(server, "mtn-settings-ai-server-scope"),
-    statusLine: (server) => serverPart(server, "mtn-settings-ai-status"),
+    serverHeading: () => serverPart("mtn-settings-ai-server-heading"),
+    serverScope: () => serverPart("mtn-settings-ai-server-scope"),
+    statusLine: () => serverPart("mtn-settings-ai-status"),
     portField,
-    portError: (server) => serverPart(server, "mtn-settings-ai-port-error"),
-    enableToggle: () => at(at(sandbox.settings, 0, "enable Setting").toggles, 0, "enable toggle").toggleEl,
-    writeToggle: () => at(at(sandbox.settings, 2, "write enable Setting").toggles, 0, "write toggle").toggleEl,
+    portError: () => serverPart("mtn-settings-ai-port-error"),
+    enableToggle: () => at(at(sandbox.settings, 0, "master Setting").toggles, 0, "master toggle").toggleEl,
     configSection: () => only("mtn-settings-ai-config"),
-    copyButton: () => at(at(sandbox.settings, 4, "config Setting").buttons, 0, "copy button").buttonEl,
+    copyButton: () => at(configSetting().buttons, 0, "copy button").buttonEl,
     copyFeedback: () => only("mtn-settings-ai-copy-feedback"),
     secretWarning: () => only("mtn-settings-ai-secret-warning"),
     notice: () => only("mtn-settings-ai-notice"),
-    typePort: (server, value) => {
-      const input = portField(server);
+    typePort: (value) => {
+      const input = portField();
       input.value = value;
       input.fire("blur");
     },
-    pressEnter: (server, value) => {
-      const input = portField(server);
+    pressEnter: (value) => {
+      const input = portField();
       input.value = value;
       input.fire("keydown", { key: "Enter" });
     },
-    copy: () => { at(at(sandbox.settings, 4, "config Setting").buttons, 0, "copy button").buttonEl.fire("click"); },
+    copy: () => { at(configSetting().buttons, 0, "copy button").buttonEl.fire("click"); },
     runTimers: () => {
       const pending = [...sandbox.timers.values()];
       sandbox.timers.clear();
@@ -531,7 +490,7 @@ const portInvalid = (): string => translate("settings.ai.mcp.port.invalid", "en"
   max: MAX_MCP_PORT
 });
 
-test("renders the AI tab heading, the model's section heading and one port row per server", () => {
+test("renders the AI tab heading, the merged section heading and its three rows", () => {
   const h = fixture();
 
   assert.equal(at(h.root.children, 0, "page heading").tag, "h3");
@@ -543,19 +502,14 @@ test("renders the AI tab heading, the model's section heading and one port row p
   assert.equal(description.hasClass("setting-item-description"), true);
   assert.equal(description.text, translate("settings.ai.mcp.desc", "en"));
 
-  // The rows are the master switch, the read port, the write switch, the write
-  // port and the client config, in the order the panel documents.
+  // One master switch, one port and the client config block, in that order.
   assert.deepEqual(h.settings.map((setting) => setting.nameEl.text), [
     translate("settings.ai.mcp.enable", "en"),
-    translate("settings.ai.mcp.port", "en"),
-    translate("settings.ai.mcp.write.enable", "en"),
     translate("settings.ai.mcp.port", "en"),
     ""
   ]);
   assert.deepEqual(h.settings.map((setting) => setting.descEl.text), [
     translate("settings.ai.mcp.enable.desc", "en"),
-    portDesc(),
-    "",
     portDesc(),
     translate("settings.ai.mcp.config.desc", "en", { clients: translate("settings.ai.mcp.config.clients", "en") })
   ]);
@@ -566,81 +520,53 @@ test("renders the AI tab heading, the model's section heading and one port row p
   }
 });
 
-test("lays the section out as master, read, write, config and token warning, in that order", () => {
+test("lays the section out as master switch, one local server, config and notice, in that order", () => {
   const h = fixture();
 
   const masterRow = at(h.settings, 0, "master Setting").settingEl;
-  const readBlock = h.serverBlock("read");
-  const writeBlock = h.serverBlock("write");
+  const server = h.serverBlock();
   const config = h.configSection();
-  const warning = h.secretWarning();
+  const notice = h.notice();
 
-  assert.ok(h.indexOf(masterRow) < h.indexOf(readBlock), "the master switch comes before the read server");
-  assert.ok(h.indexOf(readBlock) < h.indexOf(writeBlock), "the read server comes before the write server");
-  assert.ok(h.indexOf(writeBlock) < h.indexOf(config), "the servers come before the client config");
-  assert.ok(h.indexOf(config) < h.indexOf(warning), "the client config comes before the token warning");
-  // The block is a heading, the feedback line and the button that copies — there
-  // is deliberately no field rendering the credentials back to the user.
+  assert.ok(h.indexOf(masterRow) < h.indexOf(server), "the master switch comes before the server");
+  assert.ok(h.indexOf(server) < h.indexOf(config), "the server comes before the client config");
+  assert.ok(h.indexOf(config) < h.indexOf(notice), "the client config comes before the notice");
+
+  // Inside the block: heading, scope, port, rejection line, status.
+  assert.ok(h.indexOf(h.serverHeading()) < h.indexOf(h.serverScope()));
+  assert.ok(h.indexOf(h.serverScope()) < h.indexOf(h.portField()));
+  assert.ok(h.indexOf(h.portField()) < h.indexOf(h.portError()));
+  assert.ok(h.indexOf(h.portError()) < h.indexOf(h.statusLine()));
+  assert.equal(h.serverHeading().text, translate("settings.ai.mcp.server.heading", "en"));
+  assert.equal(h.serverScope().text, translate("settings.ai.mcp.server.scope", "en"));
+
+  // The config block is a heading, the feedback line and the copy button, plus
+  // the token warning below the button it belongs to.
   assert.ok(h.indexOf(h.copyFeedback()) < h.indexOf(h.copyButton()), "the feedback sits above the button it reports on");
-
-  // Inside the read block: heading, scope, port, status.
-  assert.ok(h.indexOf(h.serverHeading("read")) < h.indexOf(h.serverScope("read")));
-  assert.ok(h.indexOf(h.serverScope("read")) < h.indexOf(h.portField("read")));
-  assert.ok(h.indexOf(h.portField("read")) < h.indexOf(h.statusLine("read")));
-  // Inside the write block: heading, scope, its own switch, port, status.
-  assert.ok(h.indexOf(h.serverHeading("write")) < h.indexOf(h.serverScope("write")));
-  assert.ok(h.indexOf(h.serverScope("write")) < h.indexOf(h.writeToggle()));
-  assert.ok(h.indexOf(h.writeToggle()) < h.indexOf(h.portField("write")));
-  assert.ok(h.indexOf(h.portField("write")) < h.indexOf(h.statusLine("write")));
-  // The rejection sits with the field it is about, between port and status.
-  assert.ok(h.indexOf(h.portField("read")) < h.indexOf(h.portError("read")));
-  assert.ok(h.indexOf(h.portError("read")) < h.indexOf(h.statusLine("read")));
-
-  assert.equal(h.serverHeading("read").text, translate("settings.ai.mcp.read.heading", "en"));
-  assert.equal(h.serverScope("read").text, translate("settings.ai.mcp.read.scope", "en"));
-  assert.equal(h.serverHeading("write").text, translate("settings.ai.mcp.write.heading", "en"));
-  assert.equal(h.serverScope("write").text, translate("settings.ai.mcp.write.scope", "en"));
+  assert.ok(h.indexOf(h.copyButton()) < h.indexOf(h.secretWarning()));
+  assert.ok(config.contains(h.secretWarning()), "the warning belongs to the config block");
   assert.equal(h.secretWarning().text, translate("settings.ai.mcp.config.secretWarning", "en"));
 });
 
-test("both servers' ports and the write switch are inert while the master switch is off", () => {
+test("the one switch and the port are inert while the server is off, active once it is on", () => {
   const off = fixture({ enabled: false });
   assert.equal(off.enableToggle().checked, false);
   assert.equal(off.enableToggle().disabled, false);
-  assert.equal(off.writeToggle().checked, false);
-  assert.equal(off.writeToggle().disabled, true, "a second listener is meaningless while nothing listens");
-  assert.equal(off.portField("read").disabled, true, "no port is bindable while nothing listens");
-  assert.equal(off.portField("write").disabled, true);
+  assert.equal(off.portField().disabled, true, "no port is bindable while nothing listens");
+  assert.equal(off.statusLine().dataset["status"], "stopped");
+  assert.equal(off.statusLine().text, translate("settings.ai.mcp.status.stopped", "en"));
 
-  const on = fixture({ enabled: true, writeEnabled: false });
+  const on = fixture({ enabled: true });
   assert.equal(on.enableToggle().checked, true);
   assert.equal(on.enableToggle().disabled, false);
-  assert.equal(on.writeToggle().disabled, false, "the write switch is the user's to flip once the master switch is on");
-  assert.equal(on.portField("read").disabled, false);
-  assert.equal(on.portField("write").disabled, true, "a server that is switched off cannot bind a port");
+  assert.equal(on.portField().disabled, false);
+  assert.equal(on.portField().value, String(DEFAULT_SETTINGS.mcpPort));
+  assert.equal(on.statusLine().dataset["status"], "running");
 });
 
-test("the write switch never disables the read server", async () => {
-  const h = fixture({ enabled: true, writeEnabled: false });
-  assert.equal(h.portField("read").disabled, false);
-  assert.equal(h.statusLine("read").dataset["status"], "running");
-
-  h.writeToggle().checked = true;
-  h.writeToggle().fire("change");
-  await settle();
-
-  assert.deepEqual(h.calls, ["setWriteEnabled:true"]);
-  assert.equal(h.state.writeEnabled, true);
-  assert.equal(h.portField("read").disabled, false, "the read server follows the master switch only");
-  assert.equal(h.portField("write").disabled, false);
-  assert.equal(h.statusLine("read").dataset["status"], "running");
-  assert.equal(h.statusLine("write").dataset["status"], "running");
-});
-
-test("flipping the master switch runs setEnabled and re-reads both servers' state", async () => {
+test("flipping the master switch runs setEnabled and re-reads the resolved state", async () => {
   const h = fixture({ enabled: false });
-  assert.equal(h.statusLine("read").dataset["status"], "stopped");
-  assert.equal(h.statusLine("read").text, translate("settings.ai.mcp.status.stopped", "en"));
+  assert.equal(h.statusLine().dataset["status"], "stopped");
 
   h.enableToggle().checked = true;
   h.enableToggle().fire("change");
@@ -648,28 +574,11 @@ test("flipping the master switch runs setEnabled and re-reads both servers' stat
 
   assert.deepEqual(h.calls, ["setEnabled:true"]);
   assert.equal(h.state.enabled, true);
-  assert.equal(h.statusLine("read").dataset["status"], "running");
-  assert.equal(h.statusLine("read").text, translate("settings.ai.mcp.status.running", "en", {
-    url: `http://${DEFAULT_MCP_HOST}:${h.state.read.port}${MCP_ENDPOINT_PATH}`
+  assert.equal(h.statusLine().dataset["status"], "running");
+  assert.equal(h.statusLine().text, translate("settings.ai.mcp.status.running", "en", {
+    url: mcpUrl(h.state.server.port)
   }));
-  assert.equal(h.writeToggle().disabled, false, "the write switch follows the new state");
-  assert.equal(h.statusLine("write").dataset["status"], "stopped", "the write server was never switched on");
-});
-
-test("flipping the write switch starts that server only", async () => {
-  const h = fixture({ enabled: true, writeEnabled: false });
-
-  h.writeToggle().checked = true;
-  h.writeToggle().fire("change");
-  await settle();
-
-  assert.deepEqual(h.calls, ["setWriteEnabled:true"]);
-  assert.equal(h.state.writeEnabled, true);
-  assert.equal(h.statusLine("write").dataset["status"], "running");
-  assert.equal(h.statusLine("write").text, translate("settings.ai.mcp.status.running", "en", {
-    url: `http://${DEFAULT_MCP_HOST}:${h.state.write.port}${MCP_ENDPOINT_PATH}`
-  }));
-  assert.equal(h.statusLine("read").dataset["status"], "running", "the read server keeps its own state");
+  assert.equal(h.portField().disabled, false, "the port follows the new state");
 });
 
 test("a rejected master transition explains itself without a false state", async () => {
@@ -680,37 +589,22 @@ test("a rejected master transition explains itself without a false state", async
   h.enableToggle().fire("change");
   await settle();
 
-  assert.equal(h.statusLine("read").dataset["status"], "failed");
-  assert.equal(h.statusLine("read").text,
+  assert.equal(h.statusLine().dataset["status"], "failed");
+  assert.equal(h.statusLine().text,
     translate("settings.ai.mcp.status.failed", "en", { message: "address already in use" }));
   assert.equal(h.state.enabled, false, "a rejected transition must not look applied");
   assert.equal(h.enableToggle().checked, false, "the switch snaps back to the stored value");
+  assert.equal(h.portField().disabled, true);
 });
 
-test("a rejected write transition explains itself on the write status line only", async () => {
-  const h = fixture({ enabled: true, failWrite: true });
-  h.writeToggle().checked = true;
-  h.writeToggle().fire("change");
-  await settle();
-
-  assert.equal(h.statusLine("write").dataset["status"], "failed");
-  assert.equal(h.statusLine("write").text,
-    translate("settings.ai.mcp.status.failed", "en", { message: "address already in use" }));
-  assert.equal(h.statusLine("read").dataset["status"], "running", "the read server keeps its own state");
-  assert.equal(h.writeToggle().checked, false);
-});
-
-test("a platform without MCP support disables every control, hides the config and shows the notice", () => {
+test("a platform without MCP support disables everything, hides the config and shows the notice", () => {
   const h = fixture({ supported: false });
 
   assert.equal(h.enableToggle().disabled, true);
   assert.equal(h.enableToggle().checked, false);
-  assert.equal(h.writeToggle().disabled, true);
-  assert.equal(h.portField("read").disabled, true);
-  assert.equal(h.portField("write").disabled, true);
-  assert.equal(h.statusLine("read").dataset["status"], "unsupported");
-  assert.equal(h.statusLine("read").text, translate("settings.ai.mcp.status.desktopOnly", "en"));
-  assert.equal(h.statusLine("write").dataset["status"], "unsupported");
+  assert.equal(h.portField().disabled, true);
+  assert.equal(h.statusLine().dataset["status"], "unsupported");
+  assert.equal(h.statusLine().text, translate("settings.ai.mcp.status.desktopOnly", "en"));
   assert.equal(h.configSection().hidden, true, "no token is handed out where nothing can serve it");
   assert.equal(h.secretWarning().text, translate("settings.ai.mcp.config.secretWarning", "en"));
   assert.equal(h.notice().hidden, false);
@@ -722,65 +616,57 @@ test("a platform without MCP support disables every control, hides the config an
 });
 
 test("the client config block offers only a copy button, never the credentials", () => {
-  const h = fixture({
-    enabled: true, writeEnabled: true,
-    readPort: 27321, writePort: 27322, readToken: READ_TOKEN, writeToken: WRITE_TOKEN
-  });
+  const h = fixture({ enabled: true, port: 27321 });
 
   // The credentials exist only as what the button hands to the clipboard. A
   // readonly textarea used to sit here, but Obsidian's settings control column
   // squeezed it to a sliver, so the block no longer renders the tokens at all.
   assert.equal(h.configSection().querySelectorAll("textarea").length, 0,
     "the block must not render the credentials");
-  const rendered = h.configSection().text;
-  assert.doesNotMatch(rendered, /mind-tree-nature-(read|write)/, "no server key may be shown");
+  const rendered = h.configSection().all().map((element) => `${element.text} ${element.value}`).join(" ");
+  assert.doesNotMatch(rendered, new RegExp(SERVER_TOKEN), "the token must not be rendered");
   assert.doesNotMatch(rendered, /Bearer/, "no authorization header may be shown");
-  assert.equal(rendered.includes(READ_TOKEN), false, "the read token must not be rendered");
-  assert.equal(rendered.includes(WRITE_TOKEN), false, "the write token must not be rendered");
+  assert.doesNotMatch(rendered, /mind-tree-nature/, "no server key may be shown");
   assert.equal(h.copyButton().text, translate("settings.ai.mcp.config.copy", "en"));
 });
 
-test("what the button copies is the model's two-server JSON", async () => {
-  const h = fixture({
-    enabled: true, writeEnabled: true,
-    readPort: 27321, writePort: 27322, readToken: READ_TOKEN, writeToken: WRITE_TOKEN
-  });
+test("what the button copies is the model's single-server JSON", async () => {
+  const h = fixture({ enabled: true, port: 27321 });
   h.copy();
   await settle();
 
-  assert.deepEqual(h.copied, [expectedConfig([
-    { group: "read", port: 27321, token: READ_TOKEN },
-    { group: "write", port: 27322, token: WRITE_TOKEN }
-  ])]);
-  assert.match(h.copied[0] ?? "", /"mind-tree-nature-read"/);
-  assert.match(h.copied[0] ?? "", /"mind-tree-nature-write"/);
+  assert.deepEqual(h.copied, [expectedConfig([{ port: 27321, token: SERVER_TOKEN }])]);
+  const parsed = JSON.parse(h.copied[0] ?? "") as {
+    mcpServers: Record<string, { url: string; headers: { Authorization: string } }>;
+  };
+  assert.deepEqual(Object.keys(parsed.mcpServers), [MCP_SERVER_NAME]);
+  assert.equal(parsed.mcpServers[MCP_SERVER_NAME]?.url, mcpUrl(27321));
+  assert.equal(parsed.mcpServers[MCP_SERVER_NAME]?.headers.Authorization, `Bearer ${SERVER_TOKEN}`);
+  // The retired read/write entries must never come back.
+  assert.doesNotMatch(h.copied[0] ?? "", /mind-tree-nature-(?:read|write)/);
 });
 
-test("the copied configuration only advertises a server that is meant to listen", async () => {
-  const readOnly = fixture({ enabled: true, writeEnabled: false });
-  readOnly.copy();
-  await settle();
-  assert.deepEqual(readOnly.copied, [expectedConfig([
-    { group: "read", port: DEFAULT_SETTINGS.mcpReadPort, token: READ_TOKEN }
-  ])]);
-
-  const stopped = fixture({ enabled: false, writeEnabled: true });
+test("the copied configuration advertises nothing while the server is off or unsupported", async () => {
+  const stopped = fixture({ enabled: false });
   stopped.copy();
   await settle();
   assert.deepEqual(JSON.parse(stopped.copied[0] ?? ""), { mcpServers: {} },
     "a plugin that is switched off advertises nothing");
+
+  const unsupported = fixture({ supported: false, enabled: true });
+  unsupported.copy();
+  await settle();
+  assert.deepEqual(JSON.parse(unsupported.copied[0] ?? ""), { mcpServers: {} },
+    "a platform that cannot serve a token advertises nothing");
 });
 
 test("copying sends the model JSON and confirms once the clipboard accepted it", async () => {
-  const h = fixture({ enabled: true, writeEnabled: true, readPort: 27321, writePort: 27322 });
+  const h = fixture({ enabled: true });
   h.copy();
   await settle();
 
   assert.deepEqual(h.calls, ["copyText"]);
-  assert.deepEqual(h.copied, [expectedConfig([
-    { group: "read", port: 27321, token: READ_TOKEN },
-    { group: "write", port: 27322, token: WRITE_TOKEN }
-  ])]);
+  assert.deepEqual(h.copied, [expectedConfig([{ port: DEFAULT_SETTINGS.mcpPort, token: SERVER_TOKEN }])]);
   assert.equal(h.copyFeedback().text, translate("settings.ai.mcp.config.copied", "en"));
   assert.equal(h.copyFeedback().getAttribute("aria-live"), "polite");
   // The confirmation is transient and its timer belongs to the page.
@@ -812,61 +698,50 @@ test("destroy clears the pending copy timer", async () => {
   assert.equal(h.timers.size, 0, "no timer may outlive the page");
 });
 
-test("each server's port commits on blur through that server's named transition", async () => {
-  const h = fixture({ enabled: true, writeEnabled: true });
-  h.typePort("read", "1025");
+test("the port commits on blur through the named transition", async () => {
+  const h = fixture({ enabled: true });
+  h.typePort("1025");
   await settle();
 
-  assert.deepEqual(h.calls, ["applyPortInput:read:1025"]);
-  assert.equal(h.state.read.port, 1025);
-  assert.equal(h.state.write.port, DEFAULT_SETTINGS.mcpWritePort, "the other server keeps its port");
-  assert.equal(h.portField("read").value, "1025");
-  assert.equal(h.portError("read").hidden, true);
-  assert.equal(h.portError("read").text, "");
-
-  h.typePort("write", "1030");
-  await settle();
-
-  assert.deepEqual(h.calls, ["applyPortInput:read:1025", "applyPortInput:write:1030"]);
-  assert.equal(h.state.write.port, 1030);
-  assert.equal(h.portField("write").value, "1030");
-  assert.equal(h.portField("read").value, "1025", "committing one server must not rewrite the other's field");
+  assert.deepEqual(h.calls, ["applyPortInput:1025"]);
+  assert.equal(h.state.server.port, 1025);
+  assert.equal(h.portField().value, "1025");
+  assert.equal(h.portError().hidden, true);
+  assert.equal(h.portError().text, "");
+  // A committed port restarts the one listener, so the status line follows it.
+  assert.equal(h.statusLine().dataset["status"], "running");
+  assert.equal(h.statusLine().text, translate("settings.ai.mcp.status.running", "en", { url: mcpUrl(1025) }));
 });
 
 test("Enter commits a port the same way leaving the field does", async () => {
   const h = fixture({ enabled: true });
-  h.pressEnter("read", "1200");
+  h.pressEnter("1200");
   await settle();
 
-  assert.deepEqual(h.calls, ["applyPortInput:read:1200"]);
-  assert.equal(h.state.read.port, 1200);
-  assert.equal(h.portField("read").value, "1200");
+  assert.deepEqual(h.calls, ["applyPortInput:1200"]);
+  assert.equal(h.state.server.port, 1200);
+  assert.equal(h.portField().value, "1200");
 });
 
-test("non-numeric and out-of-range text is rejected, named and rolled back per server", async () => {
+test("non-numeric and out-of-range text is rejected, named and rolled back", async () => {
   const cases = ["", "abc", "1.5", "12 34", "-1", String(MIN_MCP_PORT - 1), String(MAX_MCP_PORT + 1), "999999"];
-  for (const server of ["read", "write"] as const) {
-    const stored = server === "read" ? 27321 : 27322;
-    const other: McpServerGroup = server === "read" ? "write" : "read";
-    for (const raw of cases) {
-      const h = fixture({ enabled: true, writeEnabled: true, readPort: 27321, writePort: 27322 });
-      h.typePort(server, raw);
-      await settle();
+  for (const raw of cases) {
+    const h = fixture({ enabled: true, port: 27321 });
+    h.typePort(raw);
+    await settle();
 
-      assert.deepEqual(h.calls, [], `"${raw}" must be refused before it reaches the port`);
-      assert.equal(h.state[server].port, stored, `"${raw}" must not change the ${server} port`);
-      assert.equal(h.portError(server).hidden, false, `"${raw}" must be reported`);
-      assert.equal(h.portError(server).text, portInvalid());
-      assert.doesNotMatch(h.portError(server).text, /\{\w+\}/);
-      assert.equal(h.portField(server).value, String(stored), `"${raw}" must not look stored`);
-      assert.equal(h.portError(other).hidden, true, "the other server's rejection line stays quiet");
-    }
+    assert.deepEqual(h.calls, [], `"${raw}" must be refused before it reaches the port`);
+    assert.equal(h.state.server.port, 27321, `"${raw}" must not change the port`);
+    assert.equal(h.portError().hidden, false, `"${raw}" must be reported`);
+    assert.equal(h.portError().text, portInvalid());
+    assert.doesNotMatch(h.portError().text, /\{\w+\}/);
+    assert.equal(h.portField().value, String(27321), `"${raw}" must not look stored`);
   }
 });
 
 test("the port is not validated while the user is still typing", async () => {
   const h = fixture({ enabled: true });
-  const input = h.portField("read");
+  const input = h.portField();
   input.value = "1";
   input.fire("input");
   input.value = "10";
@@ -874,7 +749,7 @@ test("the port is not validated while the user is still typing", async () => {
   await settle();
 
   assert.deepEqual(h.calls, [], "a half-typed port must not be committed");
-  assert.equal(h.portError("read").hidden, true);
+  assert.equal(h.portError().hidden, true);
   assert.equal(input.value, "10", "the field keeps what the user typed");
 });
 
@@ -882,24 +757,24 @@ test("a port the page parsed but the host refused is reported and rolled back", 
   // applyPortInput is the only authority, so an in-range value the host still
   // refuses must be reported and must not look stored.
   const h = fixture({ enabled: true, refusePortInput: ["1500"] });
-  h.typePort("read", "1500");
+  h.typePort("1500");
   await settle();
 
-  assert.deepEqual(h.calls, ["applyPortInput:read:1500"]);
-  assert.equal(h.state.read.port, DEFAULT_SETTINGS.mcpReadPort, "the host's refusal wins");
-  assert.equal(h.portError("read").hidden, false);
-  assert.equal(h.portError("read").text, portInvalid());
-  assert.equal(h.portField("read").value, String(DEFAULT_SETTINGS.mcpReadPort));
+  assert.deepEqual(h.calls, ["applyPortInput:1500"]);
+  assert.equal(h.state.server.port, DEFAULT_SETTINGS.mcpPort, "the host's refusal wins");
+  assert.equal(h.portError().hidden, false);
+  assert.equal(h.portError().text, portInvalid());
+  assert.equal(h.portField().value, String(DEFAULT_SETTINGS.mcpPort));
 });
 
 test("a port transition that fails outright reports the failure and restores the field", async () => {
   const h = fixture({ enabled: true, failPort: true });
-  h.typePort("read", "1500");
+  h.typePort("1500");
   await settle();
 
-  assert.equal(h.statusLine("read").dataset["status"], "failed");
-  assert.equal(h.statusLine("read").text,
+  assert.equal(h.statusLine().dataset["status"], "failed");
+  assert.equal(h.statusLine().text,
     translate("settings.ai.mcp.status.failed", "en", { message: "address already in use" }));
-  assert.equal(h.portField("read").value, String(DEFAULT_SETTINGS.mcpReadPort));
-  assert.equal(h.portError("read").hidden, true, "a host failure is not a port-format problem");
+  assert.equal(h.portField().value, String(DEFAULT_SETTINGS.mcpPort));
+  assert.equal(h.portError().hidden, true, "a host failure is not a port-format problem");
 });

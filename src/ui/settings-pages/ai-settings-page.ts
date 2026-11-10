@@ -1,6 +1,5 @@
 import { Setting } from "obsidian";
 import { t } from "../../i18n";
-import type { McpServerGroup } from "../../services/mcp/connection";
 import {
   buildMcpPageModel,
   describeMcpStatus,
@@ -17,7 +16,7 @@ import type { SettingsPageObject, SettingsPagePort } from "./ports";
 /**
  * The slice of Obsidian's toggle component this page keeps a reference to.
  *
- * Refresh writes the model back onto the switches, and a structural type keeps
+ * Refresh writes the model back onto the switch, and a structural type keeps
  * the page from needing any Obsidian type import beyond `Setting`.
  */
 interface ToggleLike {
@@ -25,7 +24,7 @@ interface ToggleLike {
   setDisabled(value: boolean): unknown;
 }
 
-/** One server's mutable elements, replaced from a single resolved snapshot. */
+/** The server's mutable elements, replaced from a single resolved snapshot. */
 interface ServerControls {
   input?: HTMLInputElement;
   readonly status: HTMLElement;
@@ -36,12 +35,11 @@ interface ServerControls {
 const COPY_FEEDBACK_MS = 4_000;
 
 /**
- * "AI" tab: the two local MCP servers an external client connects to.
+ * "AI" tab: the local MCP server an external client connects to.
  *
- * Two servers rather than one with permission switches, because an MCP client
- * attaches its tool-approval policy to a *server*: `read` holds nothing that
- * changes a file, so it can run unattended, while `write` holds every tool that
- * does, so the client can require approval for it alone.
+ * One server carrying every tool. An MCP client attaches its tool-approval
+ * policy to a *server*, so reading and editing share one client-side policy;
+ * the plugin deliberately offers no per-tool permission switch.
  *
  * The page is deliberately thin. Every rule a user can observe — which control
  * is disabled, what each status sentence says, the client JSON, whether the
@@ -57,8 +55,7 @@ export class AiSettingsPage implements SettingsPageObject {
   readonly element: HTMLElement;
 
   private enableToggle?: ToggleLike;
-  private writeToggle?: ToggleLike;
-  private readonly servers: Record<McpServerGroup, ServerControls>;
+  private readonly server: ServerControls;
   private readonly configSection: HTMLElement;
   private readonly copyFeedback: HTMLElement;
   private readonly notice: HTMLElement;
@@ -78,27 +75,13 @@ export class AiSettingsPage implements SettingsPageObject {
       .addToggle((toggle) => {
         this.enableToggle = toggle;
         toggle.onChange((value) => {
-          // The master switch's primary listener is the read server, so its
-          // status line is where a rejected start explains itself.
-          void this.transition("read", () => this.port.mcp.setEnabled(value));
+          // The master switch's listener is also the server's only switch, so
+          // its status line is where a rejected start explains itself.
+          void this.transition(() => this.port.mcp.setEnabled(value));
         });
       });
 
-    // Both servers are always rendered, read first: it is the one that runs
-    // unattended, and the write server is the one that asks for approval.
-    this.servers = {
-      read: this.createServerBlock(parent, "read", model.read),
-      write: this.createServerBlock(parent, "write", model.write, (block) => {
-        new Setting(block)
-          .setName(t("settings.ai.mcp.write.enable"))
-          .addToggle((toggle) => {
-            this.writeToggle = toggle;
-            toggle.onChange((value) => {
-              void this.transition("write", () => this.port.mcp.setWriteEnabled(value));
-            });
-          });
-      })
-    };
+    this.server = this.createServerBlock(parent, model.server);
 
     this.configSection = parent.createDiv({ cls: "mtn-settings-ai-config" });
     this.configSection.createEl("h4", { text: t("settings.ai.mcp.config.heading") });
@@ -134,7 +117,7 @@ export class AiSettingsPage implements SettingsPageObject {
 
     this.notice = parent.createDiv({
       cls: "mtn-settings-ai-notice",
-      // The same resolved sentence the status lines use for an unsupported
+      // The same resolved sentence the status line uses for an unsupported
       // platform, repeated as a standing notice at the end of the section.
       text: describeMcpStatus({ kind: "unsupported" })
     });
@@ -157,26 +140,15 @@ export class AiSettingsPage implements SettingsPageObject {
     return buildMcpPageModel(this.port.mcp.state());
   }
 
-  /**
-   * One server's block: sub-heading, scope, optional switch, port and status.
-   *
-   * The write block's switch is passed in as `addToggle` so it lands between the
-   * scope and the port, which keeps both servers one shape with one deviation.
-   */
-  private createServerBlock(
-    parent: HTMLElement,
-    group: McpServerGroup,
-    server: McpServerModel,
-    addToggle?: (block: HTMLElement) => void
-  ): ServerControls {
+  /** The server's block: sub-heading, scope, port and status. */
+  private createServerBlock(parent: HTMLElement, server: McpServerModel): ServerControls {
     const block = parent.createDiv({ cls: "mtn-settings-ai-server" });
-    block.setAttribute("data-server", group);
+    block.setAttribute("data-server", "local");
     block.createEl("h5", { cls: "mtn-settings-ai-server-heading", text: server.heading });
     block.createEl("p", {
       cls: "setting-item-description mtn-settings-ai-server-scope",
       text: server.scope
     });
-    addToggle?.(block);
 
     const holder: { input?: HTMLInputElement } = {};
     new Setting(block)
@@ -198,12 +170,12 @@ export class AiSettingsPage implements SettingsPageObject {
         // character would reject "1" while the user is still typing "10273" and
         // pull the field back to the stored port mid-word.
         input.addEventListener("blur", () => {
-          void this.commitPort(group, input.value);
+          void this.commitPort(input.value);
         });
         input.addEventListener("keydown", (event) => {
           if (event.key !== "Enter") return;
           event.preventDefault();
-          void this.commitPort(group, input.value);
+          void this.commitPort(input.value);
         });
       });
 
@@ -211,12 +183,12 @@ export class AiSettingsPage implements SettingsPageObject {
     // listener behind that field.
     const error = block.createDiv({
       cls: "mtn-settings-ai-port-error",
-      attr: { "data-server": group, role: "status", "aria-live": "polite" }
+      attr: { "data-server": "local", role: "status", "aria-live": "polite" }
     });
     error.hidden = true;
     const status = block.createDiv({
       cls: "mtn-settings-ai-status",
-      attr: { "data-server": group, role: "status", "aria-live": "polite" }
+      attr: { "data-server": "local", role: "status", "aria-live": "polite" }
     });
     return holder.input === undefined ? { error, status } : { input: holder.input, error, status };
   }
@@ -225,28 +197,23 @@ export class AiSettingsPage implements SettingsPageObject {
   private applyModel(model: McpPageModel): void {
     this.enableToggle?.setValue(model.enable.value);
     this.enableToggle?.setDisabled(model.enable.disabled);
-    this.writeToggle?.setValue(model.write.value);
-    // The model decides when a server's controls are inert; the page only applies it.
-    this.writeToggle?.setDisabled(model.write.disabled);
-    this.applyPort("read", model.read.port);
-    this.applyPort("write", model.write.port);
-    this.setStatus("read", model.read.status.text, model.read.status.kind);
-    this.setStatus("write", model.write.status.text, model.write.status.kind);
+    this.applyPort(model.server.port);
+    this.setStatus(model.server.status.text, model.server.status.kind);
     // A state the host cannot serve has no token to hand out, so the whole
     // client-config block is withdrawn rather than shown with a dead button.
     this.configSection.hidden = !model.config.visible;
     this.notice.hidden = model.supported;
   }
 
-  private applyPort(server: McpServerGroup, port: McpServerModel["port"]): void {
-    const input = this.servers[server].input;
+  private applyPort(port: McpServerModel["port"]): void {
+    const input = this.server.input;
     if (!input) return;
     input.value = String(port.value);
     input.disabled = port.disabled;
   }
 
-  private setStatus(server: McpServerGroup, text: string, kind: McpSettingsStatus["kind"]): void {
-    const status = this.servers[server].status;
+  private setStatus(text: string, kind: McpSettingsStatus["kind"]): void {
+    const status = this.server.status;
     status.setText(text);
     status.dataset["status"] = kind;
   }
@@ -255,10 +222,9 @@ export class AiSettingsPage implements SettingsPageObject {
    * Run one named transition and re-read the port's resolved state afterwards.
    *
    * A rejected transition still has to explain why the switch stayed where it
-   * was, so its message replaces the touched server's status until the next
-   * refresh.
+   * was, so its message replaces the server status until the next refresh.
    */
-  private async transition(server: McpServerGroup, run: () => Promise<void>): Promise<void> {
+  private async transition(run: () => Promise<void>): Promise<void> {
     let failure: string | undefined;
     try {
       await run();
@@ -267,47 +233,47 @@ export class AiSettingsPage implements SettingsPageObject {
     }
     this.applyModel(this.readModel());
     if (failure !== undefined) {
-      this.setStatus(server, describeMcpStatus({ kind: "failed", message: failure }), "failed");
+      this.setStatus(describeMcpStatus({ kind: "failed", message: failure }), "failed");
     }
   }
 
-  private async commitPort(server: McpServerGroup, raw: string): Promise<void> {
+  private async commitPort(raw: string): Promise<void> {
     if (parseMcpPortInput(raw) === undefined) {
-      this.rejectPort(server);
+      this.rejectPort();
       return;
     }
     let applied: boolean;
     try {
-      applied = await this.port.mcp.applyPortInput(server, raw);
+      applied = await this.port.mcp.applyPortInput(raw);
     } catch (error) {
-      this.setStatus(server, describeMcpStatus({ kind: "failed", message: describeError(error) }), "failed");
-      this.restorePortValue(server);
+      this.setStatus(describeMcpStatus({ kind: "failed", message: describeError(error) }), "failed");
+      this.restorePortValue();
       return;
     }
     if (!applied) {
       // The host may still refuse text this page parsed, so its answer decides.
-      this.rejectPort(server);
+      this.rejectPort();
       return;
     }
-    this.hidePortError(server);
+    this.hidePortError();
     this.applyModel(this.readModel());
   }
 
-  private rejectPort(server: McpServerGroup): void {
-    const error = this.servers[server].error;
+  private rejectPort(): void {
+    const error = this.server.error;
     error.setText(t("settings.ai.mcp.port.invalid", { min: MIN_MCP_PORT, max: MAX_MCP_PORT }));
     error.hidden = false;
-    this.restorePortValue(server);
+    this.restorePortValue();
   }
 
   /** Rejected text must not look stored: show what the port still holds. */
-  private restorePortValue(server: McpServerGroup): void {
-    const input = this.servers[server].input;
-    if (input) input.value = String(this.port.mcp.state()[server].port);
+  private restorePortValue(): void {
+    const input = this.server.input;
+    if (input) input.value = String(this.port.mcp.state().server.port);
   }
 
-  private hidePortError(server: McpServerGroup): void {
-    const error = this.servers[server].error;
+  private hidePortError(): void {
+    const error = this.server.error;
     error.setText("");
     error.hidden = true;
   }

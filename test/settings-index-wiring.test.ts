@@ -120,15 +120,20 @@ test("the AI page delegates every decision to the pure settings-page model", () 
   assert.doesNotMatch(page, /port\s*[<>]=?\s*(?:MIN|MAX)_MCP_PORT|(?:MIN|MAX)_MCP_PORT\s*[<>]=?\s*port/);
 });
 
-test("the AI page mutates the servers only through named transitions", () => {
+test("the AI page mutates the one server only through named transitions", () => {
   const page = source("ui/settings-pages/ai-settings-page.ts");
   assert.match(page, /this\.port\.mcp\.setEnabled\(value\)/);
-  // The write server has its own switch; there are no per-tool permission
-  // switches any more, because approval lives in the client per server.
-  assert.match(page, /this\.port\.mcp\.setWriteEnabled\(value\)/);
-  // Ports are per server, so the transition carries which one is being edited.
-  assert.match(page, /this\.port\.mcp\.applyPortInput\(server, raw\)/);
+  // One server carries every tool: there is no second switch and no per-tool
+  // permission switch, because approval lives in the client per server.
+  assert.doesNotMatch(page, /setWriteEnabled/);
+  // The merged server has a single port, so the transition carries only the text.
+  assert.match(page, /this\.port\.mcp\.applyPortInput\(raw\)/);
   assert.match(page, /this\.port\.mcp\.copyText\(text\)/);
+  // Exactly one server block, and it is the local endpoint. The read/write pair
+  // would be a second endpoint the merged model no longer has.
+  assert.match(page, /setAttribute\("data-server", "local"\)/);
+  assert.doesNotMatch(page, /settings\.ai\.mcp\.(?:read|write)\./);
+  assert.doesNotMatch(page, /"data-server":\s*"(?:read|write)"/);
   // MCP preferences live in the device-local record, so this page must not
   // claim a `data.json` write or touch the shared settings object.
   assert.doesNotMatch(page, /port\.save\(/);

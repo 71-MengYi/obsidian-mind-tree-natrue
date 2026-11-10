@@ -8,9 +8,9 @@
  * prose, and lets the wording change without breaking a client.
  *
  * There is deliberately no code for "the plugin refused this on permission
- * grounds": the two-server split is the boundary, so a tool that does not belong
- * to the server being called is reported as `invalid-arguments` (an unknown tool
- * there) rather than as a denied-but-known tool.
+ * grounds": the plugin does not gate tools. Approval is the MCP client's policy
+ * for this one server, and an unknown name is reported as `invalid-arguments`
+ * rather than as a denied-but-known tool.
  */
 export type McpToolErrorCode =
   | "service-unavailable"
