@@ -7,3 +7,4 @@ data.json
 pending-conflicts
 .audit
 .mtn-test-run.log
+.mtn-test-build/

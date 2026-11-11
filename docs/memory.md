@@ -1,5 +1,54 @@
 # memory
 
+## 2026-11-12 · 视图右下角小地图（`feat`，团队协作）
+
+**需求（用户口径）**：在导图视图右下角加一个整棵树的小地图，标出当前可见区域，便于在大型导图中快速定位；尺寸按显示分辨率取 12%，小画布上再收缩；配色跟随当前树主题；可在「基础设置」关闭，默认开启。
+
+**落点**
+
+- 设置模型与持久化：`src/settings-model.ts`（`MindTreeSettings.minimapEnabled: boolean`，跨树偏好，`DEFAULT_SETTINGS.minimapEnabled = true`）；`src/plugin-data.ts` 用 `safeBoolean` 规范化——缺省为 `true`，只有布尔值保留，其余回落默认；不标脏、不回写。
+- 设置页：`src/ui/settings-pages/basic-settings-page.ts` 在「基础设置」标题下、自动保存延迟之后加 `Setting` 开关；onChange 先 `port.settings.minimapEnabled = value`，`await port.save()`，再 `port.refreshOpenLayouts()`。保存失败时已打开视图不会先于 `data.json` 改变。
+- 纯投影：`src/render/minimap.ts`（`computeMinimapSize`、`visibleWorldRect`、`unionWorldRects`、`createMinimapProjection`、`projectMinimapPoint` / `projectMinimapRect` / `unprojectMinimapPoint`、`minimapProjectionForScene`）。
+- SVG 组件：`src/ui/components/mind-tree-minimap.ts`（`role="img"` + `minimap.aria`、点击/拖动、拖动期间冻结投影）；视图接线 `src/ui/mind-tree-view.ts` 在 `render` / `applyViewport` / `resize` 更新；`src/render/viewport.ts` 新增 `centerViewportOnPoint`（只改平移、缩放不变）；样式在 `styles.css` 的 `.mtn-minimap` 块。
+- i18n（Lead 已加，本任务未改 catalog）：`settings.minimap.name`、`settings.minimap.desc`、`minimap.aria`（EN/ZH）。
+- 测试：`test/plugin-data.test.ts` 新增 3 条（缺省 true、显式布尔保留、非布尔修复）；新增 `test/minimap-setting.test.ts` 3 条静态断言（设置模型/默认值存在、基础设置页渲染开关且按「赋值 → save → refreshOpenLayouts」顺序生效、双语 key 存在）。静态断言用 `process.cwd()` 读源码，因此能在编译回退目录里运行。
+- 文档：`docs/02` §5.1（主视图信息架构第 8 项 + 行为口径）、`docs/05` §9.3（纯投影与性能口径）与 §10（全局设置表行）、`docs/06` P0 验收第 22 条、`README.md` / `README.en.md` 快速上手第 2 节各加一段。
+
+**尺寸与指示框公式**
+
+- 目标尺寸：`width = clamp(round(screenWidth * 0.12), 150, 320)`，`height = clamp(round(screenHeight * 0.12), 110, 240)`；再与画布上限取小：`width = min(width, floor(canvasWidth * 0.55), floor(canvasWidth - 24))`、`height = min(height, floor(canvasHeight * 0.45), floor(canvasHeight - 88))`；宽 `< 96` 或高 `< 72` 时整块隐藏（画布太小，缩略图已不可读）。内容绘制四周留 `6 px` 边距。即只在画布太小时缩小，**永不放大超过分辨率比例目标**。
+- 内容包围盒 = 布局宽高的世界矩形，再与当前可见世界矩形（`visibleWorldRect`）并集（`unionWorldRects`）得到场景域；投影在场景域内等比缩放并居中。指示框 = 可见世界矩形经同一投影：整棵树大于画布时，树越大或放大越多指示框越小；整棵树完全小于画布时可见域即场景域，指示框接近铺满。并集保证指示框永远不会被裁到小地图边缘之外。
+- 点击/拖动：`unprojectMinimapPoint(小地图坐标)` 得到世界坐标，`centerViewportOnPoint` 只改平移、缩放不变。
+
+**拖动冻结投影的原因**：拖动时若按最新视口重算包围盒与缩放，缩略内容会在指针下方重新缩放（尤其拖到边缘时），指示框与指针互相追逐、产生抖动。冻结世界→缩略图投影后，拖动只移动画布中心，松手再按最终视口重算；代价是拖动期间缩略内容的缩放暂时不随视口变化，但树本身没变，符合「在同一张缩略图上移动指示框」的直觉。
+
+**显隐**：设置关闭、解析失败、版本对比（根节点隐藏、画布不呈现整棵树）、缩略尺寸不可用（画布过小）时整块不渲染。小地图只持久化开关，视口（平移/缩放）仍是会话状态，绝不写盘。
+
+**沙箱环境（与 2026-10-11 条目一致）**
+
+- `npm test` / `tsx` 仍因 esbuild `spawn EPERM` 无法运行，不能用来判定本任务。
+- 编译回退（2026-11-12 验证阶段实测）：
+  1. `npx tsc -p tsconfig.json --noEmit false --outDir .mtn-test-build`（0 错误）；
+  2. `.mtn-test-build/package.json` = `{"type":"module"}`；`.mtn-test-build/loader.mjs` = ESM resolve hook，把无扩展名的相对说明符先重试 `.js`，再重试 `/index.js`（目录 barrel，如 `../i18n`，否则 `ERR_MODULE_NOT_FOUND`）；`.mtn-test-build/register.mjs` = `import { register } from "node:module"; register("./loader.mjs", import.meta.url);`；
+  3. `node --import ./.mtn-test-build/register.mjs --test-isolation=none --test .mtn-test-build/test/minimap.test.js …`（可一次传多个文件）。
+- 有些测试用 `import.meta.url` 读 `styles.css` / `src/**.ts`：把 `styles.css` 和全部 `src/**.ts` **原样复制**到 `.mtn-test-build`（例如 `Copy-Item styles.css .mtn-test-build/`、`robocopy src .mtn-test-build/src *.ts /S`），读到的仍是仓库原文；只复制，不修改测试。
+- `.mtn-test-build/` 已在 `.gitignore`；验证后必须整体删除，不要提交。
+
+**验证（2026-11-12 独立验证阶段，实测结果）**
+
+- `npm run check` = **0 错误**。
+- `npm run build` = **失败，但与代码无关**：受限沙箱下 esbuild 需要 spawn，报 `Error: spawn EPERM`（`esbuild.config.mjs:6`）；根目录 `main.js` 未被改写（时间戳仍是 2026-11-11 00:07:48）。正式构建仍由 CI / 正常桌面环境负责。
+- 生产 bundle 替代验证（绕开 Node esbuild API，直接执行打包好的二进制，参数与 `esbuild.config.mjs` 生产配置一致）→ EXIT=0，`main-verify.js` **4,769,387 B ≈ 4.55 MiB**（< 10 MiB 上限），与 Lead 的结果一致。
+- 编译回退单测（`.mtn-test-build`）——本次验收要求的 10 个文件 **92 / 92 通过 / 0 失败**：
+  - minimap 10/10、minimap-ui 9/9、minimap-wiring 4/4、minimap-setting 3/3、viewport 8/8、plugin-data 15/15、i18n 6/6、styles 16/16、settings-index-wiring 10/10、ui-modules 11/11；10 个文件同进程再跑一遍仍是 92/92（`--test-isolation=none`）。
+- 补充证据：编译目录下全部 99 个测试文件一起跑 = **885 tests / 874 pass / 11 fail**；11 个失败全部是回退运行器/沙箱限制，与本次改动无关：
+  - 7 个已知 `esbuild buildSync → spawn EPERM`：adaptive-tooltip、ai-settings-page、custom-markers-settings-page、marker-popover-custom、node-renderer、plugin-update-modal、top-toolbar；
+  - 4 个测试自带的 `obsidian` resolve stub 只匹配 `parentURL.endsWith("*.ts")`，编译后父模块是 `.js` 导致 stub 不生效：mcp-session-writer、mcp-settings-page-model、mcp-tools、search-panel。
+  - AGENTS 里的 1053−885 = 168 条即这 11 个文件在模块加载期失败而未注册的用例，属环境限制，不能算通过或失败结论。
+- 契约核对（独立读 diff + 源码 + 纯数据测试）：右下角悬浮层、基础设置开关（保存成功后才 refresh 已打开视图）、主题沿用 `data-mtn-theme` 的 CSS 变量、12% 分辨率目标与画布/可读尺寸双重夹紧、节点增多自动缩放、指示框=可见区域投影、点击与拖动都只改平移（缩放不变）、无视口持久化、无硬编码 UI 文案（`minimap.aria` 与 settings keys 走 i18n）、`ui/components` 无 view/main 反向导入、解析失败/设置关闭/版本对比（`rootEl.hidden`）隐藏——**全部符合契约**。
+- 尚未做：真实 Obsidian 内人工验收（开关后已打开视图立即显隐、主题切换后的实际配色、拖动跟手与点击/拖拽判定、窄分栏与移动端位置、版本对比时不可见）。自动化不覆盖这些。
+- 补充观察（非缺陷）：指示框「放大变小」在整棵树大于画布时严格成立；整棵树完全小于画布时可见域即场景域，指示框接近铺满，文档已按此精确化。
+
 ## 2026-10-11 · 行内公式与二元运算符重叠（`fix`）
 
 **问题**：节点标题写 `$abccccc+a$` 这类含运算符的公式会错位——`+` 压住第一个 `a`，末尾 `a` 叠在 `c` 上并被放大。

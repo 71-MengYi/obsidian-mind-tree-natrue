@@ -54,6 +54,7 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
       resourceOpenMode: settings?.["resourceOpenMode"] === "split-right" ? "split-right" : "tab",
       newNoteOpenMode: normalizeNewNoteOpenMode(settings?.["newNoteOpenMode"]),
       autosaveDelayMs: normalizeInteger(settings?.["autosaveDelayMs"], 250, 2_000, DEFAULT_SETTINGS.autosaveDelayMs),
+      minimapEnabled: safeBoolean(settings?.["minimapEnabled"], DEFAULT_SETTINGS.minimapEnabled),
       pngScale: settings?.["pngScale"] === 1 || settings?.["pngScale"] === 2 || settings?.["pngScale"] === 3
         ? settings["pngScale"]
         : DEFAULT_SETTINGS.pngScale,

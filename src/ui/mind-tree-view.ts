@@ -136,6 +136,7 @@ import {
 import { openMarkerPopover, type MarkerPopoverHandle } from "./marker-popover";
 import { shouldHandleMindTreePaste } from "./paste-routing";
 import { createBottomStatusBarState, MindTreeViewShell, type StatusMessageState } from "./components";
+import { MindTreeMinimap } from "./components/mind-tree-minimap";
 import {
   createSearchController,
   type SearchController
@@ -180,6 +181,7 @@ import {
 } from "./menus";
 import {
   DEFAULT_VIEWPORT,
+  centerViewportOnPoint,
   centerViewportOnRect,
   panViewportByWheel,
   pinchViewport,
@@ -317,6 +319,12 @@ export class MindTreeView extends TextFileView {
   private initialRootCenterPending = true;
   /** Fixed chrome and layered canvas; view logic only supplies state/actions. */
   private shell?: MindTreeViewShell;
+  /**
+   * Optional bottom-right navigation aid. It renders the current layout and
+   * viewport only; like the viewport itself it is session state and never
+   * reaches the document model, history or save path.
+   */
+  private minimap?: MindTreeMinimap;
 
   constructor(leaf: WorkspaceLeaf, readonly plugin: MindTreeNaturePlugin) {
     super(leaf);
@@ -440,6 +448,8 @@ export class MindTreeView extends TextFileView {
     this.canvasInteractionController = undefined;
     this.searchController?.destroy();
     this.searchController = undefined;
+    this.minimap?.destroy();
+    this.minimap = undefined;
     this.shell?.destroy();
     this.shell = undefined;
     await super.onClose();
@@ -460,6 +470,9 @@ export class MindTreeView extends TextFileView {
     this.displayFilePath = file.path;
     this.initialRootCenterPending = true;
     this.rootEl?.addClass("is-initializing-viewport");
+    // The minimap lives outside the hidden world layer; hide the previous
+    // file's thumbnail too until the new document has rendered.
+    this.minimap?.setEnabled(false);
     this.selectedIds.clear();
     this.primarySelectedId = undefined;
     this.refreshTopToolbar();
@@ -1203,6 +1216,7 @@ export class MindTreeView extends TextFileView {
     this.scannedFilePath = undefined;
     this.saveState = "saved";
     if (this.nodeLayerEl) this.nodeLayerEl.empty();
+    this.minimap?.setEnabled(false);
     this.refreshTopToolbar();
   }
 
@@ -1254,6 +1268,9 @@ export class MindTreeView extends TextFileView {
 
   /** Recalculate the view after a global appearance preference changes. */
   refreshLayoutFromSettings(): void {
+    // A minimap visibility toggle must reach the canvas even while a title
+    // editor holds a draft; only the reflow below is forbidden in that state.
+    this.updateMinimap();
     // Recreating a live textarea would disrupt its caret/IME and could blur-
     // commit the draft. Confirmation/cancellation already renders latest state.
     if (this.editingNodeId) return;
@@ -1456,6 +1473,8 @@ export class MindTreeView extends TextFileView {
     this.resourceBadgeMeasurer = undefined;
     this.searchController?.destroy();
     this.searchController = undefined;
+    this.minimap?.destroy();
+    this.minimap = undefined;
     this.shell?.destroy();
     this.shell = new MindTreeViewShell(this.contentEl, {
       menu: { settings: t("view.settings"), keyboardHelp: t("shortcut.help") },
@@ -1525,6 +1544,9 @@ export class MindTreeView extends TextFileView {
         },
         resize: () => {
           if (this.tryApplyInitialRootCenter()) this.applyViewport();
+          // The minimap's pixel size is derived from the canvas, so a split or
+          // window resize must re-fit it even when the world does not move.
+          else this.updateMinimap();
         }
       }
     });
@@ -1565,6 +1587,9 @@ export class MindTreeView extends TextFileView {
     this.connectionRenderer = new ConnectionRenderer(this.connectionsEl);
     this.nodeLayerEl = this.shell.canvas.nodeLayer;
     this.nodeRenderer = new NodeRenderer(this.nodeLayerEl);
+    this.minimap = new MindTreeMinimap(this.rootEl, { ariaLabel: t("minimap.aria") }, {
+      centerOnWorldPoint: (worldX, worldY) => this.centerCanvasOnWorldPoint(worldX, worldY)
+    });
     this.textMeasurer = new BrowserNodeTextMeasurer(this.rootEl, () => this.onTextMetricsInvalidated());
     this.resourceBadgeMeasurer = new BrowserResourceBadgeMeasurer(this.rootEl);
     this.imageNodePresentation = new BrowserImageNodePresentation(
@@ -1914,6 +1939,7 @@ export class MindTreeView extends TextFileView {
     if (this.parseError) {
       this.nodeLayerEl.empty();
       this.connectionsEl.empty();
+      this.minimap?.setEnabled(false);
       // While the settled file is being re-read, say so instead of reporting
       // corruption: a single read can lose a race with another writer.
       this.shell?.status.update(this.parseRecheckPending
@@ -3893,7 +3919,10 @@ export class MindTreeView extends TextFileView {
   }
 
   private applyViewport(): void {
-    if (!this.document) return;
+    if (!this.document) {
+      this.minimap?.setEnabled(false);
+      return;
+    }
     const presentation = viewportToCssPresentation(this.viewport, this.ownerWindow().devicePixelRatio);
     this.panLayerEl.style.left = presentation.panLeft;
     this.panLayerEl.style.top = presentation.panTop;
@@ -3909,6 +3938,39 @@ export class MindTreeView extends TextFileView {
       this.worldEl.style.transform = `scale(${this.viewport.zoom})`;
     }
     this.refreshTopToolbar();
+    this.updateMinimap();
+  }
+
+  /**
+   * Keep the optional minimap aligned with the latest layout, pan/zoom and
+   * canvas size. The component caches the rendered content itself, so viewport
+   * only changes stay cheap even with thousands of nodes.
+   */
+  private updateMinimap(): void {
+    const minimap = this.minimap;
+    if (!minimap) return;
+    const layout = this.currentLayout;
+    const enabled = this.plugin.settings.minimapEnabled
+      && Boolean(this.document) && Boolean(layout) && !this.parseError;
+    minimap.setEnabled(enabled);
+    if (!enabled || !layout) return;
+    minimap.update({
+      layout,
+      branchColorSlots: this.branchColorSlotByNodeId,
+      viewport: this.viewport,
+      canvasWidth: this.canvasEl?.clientWidth ?? 0,
+      canvasHeight: this.canvasEl?.clientHeight ?? 0
+    });
+  }
+
+  /** A minimap click/drag puts one world point at the canvas center at the same zoom. */
+  private centerCanvasOnWorldPoint(worldX: number, worldY: number): void {
+    const width = this.canvasEl?.clientWidth ?? 0;
+    const height = this.canvasEl?.clientHeight ?? 0;
+    if (!Number.isFinite(worldX) || !Number.isFinite(worldY) || width <= 0 || height <= 0) return;
+    this.keyboardAvoidanceController?.userNavigated();
+    this.viewport = centerViewportOnPoint(width, height, { x: worldX, y: worldY }, this.viewport.zoom);
+    this.applyViewport();
   }
 
   /** Coalesce touch samples without delaying the authoritative view-only position. */

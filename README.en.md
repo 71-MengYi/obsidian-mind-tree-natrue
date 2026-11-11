@@ -96,6 +96,8 @@ On macOS, use `Cmd` instead of `Ctrl`. The round question-mark button at the vie
 
 `Ctrl/Cmd + F` or the toolbar's **Search** button opens the search window on the right of the view: the window stays open and **does not close when it loses focus** — close it with the `×` in its top-right corner or with `Esc`. A live hit count sits to the right of the input, and cards below list matches from node names, file names and the content of **linked Markdown files** (mind-tree `.mtn.md` files are not content-searched; each search caps how many files and how much text it reads, so a few hits may be missed without ever blocking the UI). Multiple hits inside one card are separated by rules, each hit stays on one line, is ellipsized at both ends and has its keyword highlighted. Click a card title to jump to that node and center it in the view; click a content row to open the file with the cursor at that line.
 
+A **minimap** sits in the bottom-right corner of the view: it renders the whole tree scaled down and marks the currently visible part of the canvas with an indicator window — the bigger the tree, the smaller that window; and once the tree is larger than the view, zooming in shrinks it further. Click or drag inside the minimap to jump the canvas to that position without changing zoom; its colors follow the current theme. The minimap is on by default and can be turned off under **Settings → Mind Tree Nature → Basic settings → Minimap**; maps that are already open update immediately when you toggle it.
+
 ### 3. Attach notes to the tree
 
 - `Ctrl/Cmd + E`: create a Markdown note for an unlinked node and link it automatically. New notes can open in a right split, a new tab, the current tab, or a new window — your choice in settings.

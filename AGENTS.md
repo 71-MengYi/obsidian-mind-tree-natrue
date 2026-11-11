@@ -59,7 +59,7 @@
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
 ├── src/                        源码（169 个 .ts，唯一的开发区域）
-├── test/                       单元测试（95 个 *.test.ts + test/helpers/）
+├── test/                       单元测试（99 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -99,10 +99,10 @@ src/
 ├── domain/      (9)  纯领域，零 Obsidian 依赖：tree.ts、tree-index.ts、markers.ts、runtime-node.ts、clipboard-payload.ts、custom-markers.ts、url.ts、node-link.ts（单向节点关联）、branch-reference.ts（跨文件分支引用）
 ├── format/      (9)  .mtn.md 格式：document.ts、outline.ts、mermaid.ts（分支 → Mermaid mindmap 代码块）、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts、regions.ts（数据区/大纲区定位，内容索引、与行号无关）、yaml-patch.ts（只补丁插件拥有的 YAML 键，注释与键序逐字节保留）
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
-├── render/      (9)  ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、color、inline-math
+├── render/      (10) ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、minimap(纯投影)、color、inline-math
 ├── services/   (26)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）/保存计划（`save-plan.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线
 └── ui/         (21)  视图与全部 DOM/SVG：
-    ├── components/     (14) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、笔记内嵌分支视图、ui-object 基类
+    ├── components/     (15) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、笔记内嵌分支视图、小地图、ui-object 基类
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
     ├── renderers/       (4) node-renderer、connection-renderer、node-render-model
     ├── menus/           (8) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览、复制/导出菜单描述、嵌套菜单能力探测
@@ -142,7 +142,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
 | `MindTreeNaturePlugin` | `src/main.ts` | 注册视图/命令/设置页/文件事件，持有各服务，编排冲突清理与更新流程 |
-| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（4045 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
+| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（4104 行）：把文档会话映射为界面状态、派发命名操作。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
 | `MindTreeViewShell` / `CanvasShell` / `ViewMenuBar` / `TopToolbar` / `BottomStatusBar` / `StatusIndicator` | `src/ui/components/*` | 视图外壳、画布宿主、左上菜单栏、顶部工具栏、左下状态栏、状态提示层 |
 | `DisposableUiObject` / `DisposerBag` | `src/ui/components/ui-object.ts` | 所有 UI 对象的幂等销毁基类；新增 UI 模块必须接入 |
 | `MindTreeReferenceEmbed` / `MindTreeReferenceRenderChild` | `src/ui/components/mind-tree-reference-embed.ts` | 笔记内嵌只读分支视图（`mind-tree-ref` 代码块）：复用 `ReadOnlyTreePreview`，只增加分支起点、宽度适配与自适应高度、悬浮打开原树按钮与失效文案；只通过注入端口访问仓库，禁止反向导入视图或插件主类 |
@@ -174,6 +174,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `BrowserResourceBadgeMeasurer` | `ui/resource-badges.ts` | 隐藏 probe 实测徽标宽高（DOM 适配器） |
 | `MindTreeThemePreset` / `getBranchColorSlots` | `render/theme-presets.ts` / `render/presentation.ts` | 十套主题、十二色分支色槽 |
 | `ViewportState` 工具集 | `render/viewport.ts` | 缩放/平移（**会话状态，绝不写盘**） |
+| `computeMinimapSize` / `visibleWorldRect` / `createMinimapProjection` / `minimapProjectionForScene` | `render/minimap.ts` | 小地图纯投影：分辨率比例尺寸、世界矩形并集、等比缩放与反投影（零 DOM） |
+| `MindTreeMinimap` | `ui/components/mind-tree-minimap.ts` | 右下角小地图 SVG 覆盖层：缓存缩略内容、更新可见区域指示框、点击/拖动跳转（拖动期间冻结投影）；只读快照，不碰文档 |
 | `BrowserImageNodePresentation` | `ui/image-nodes.ts` | 图片节点呈现（纯尺寸计算在 `render/image-nodes.ts`） |
 | `applyMindTreeThemeDataset` | `ui/theme-dataset.ts` | 主题 dataset 的唯一赋值点（画布与只读预览共用） |
 | `ReadOnlyTreePreview` | `ui/components/read-only-tree-preview.ts` | 只读树预览（版本对比双栏、主题悬浮预览、笔记内嵌分支视图共用）：平移/缩放/临时折叠；默认 `readOnly` 禁用资源打开与关联标志，分支视图通过选项开启资源打开、宽度适配与布局回调 |
@@ -262,7 +264,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `docs/03-document-format.md` | 7 | `.mtn.md` 文件头、示例、版本迁移、压缩序列化与校验、文档数据模型、大纲与外部编辑、保存与未决暂存 | 改文件格式、解析、序列化 |
 | `docs/04-resource-index.md` | 8 | 稳定资源 ID、文件内表示、引用解析顺序、文件事件、手动重建、设置同步、批量关联结果 | 改资源索引与文件关联 |
 | `docs/05-technical-design.md` | 9–12 | 模块划分、状态流、渲染与性能策略、版本迁移约束、设置设计、异常处理与数据安全、跨平台/可访问性/安全 | 改架构、性能、设置、冲突处理 |
-| `docs/06-quality-roadmap.md` | 13–15 | 测试策略（单元/集成/视觉手工）、**21 条 P0 验收标准**、里程碑 M1–M4 | 判断"做完没有"、补测试 |
+| `docs/06-quality-roadmap.md` | 13–15 | 测试策略（单元/集成/视觉手工）、**22 条 P0 验收标准**、里程碑 M1–M4 | 判断"做完没有"、补测试 |
 | `docs/memory.md` | — | **Agent 跨会话记忆位**（不是产品文档）：按日期记录结论、落点、未完成事项与环境坑。已有 2026-10-09「未决冲突孤儿清理」、沙箱测试替代命令与 2026-10-13「分支引用 / 笔记内嵌只读分支视图」等条目 | 任务开始前扫一眼、收尾时追加 |
 
 > 文档与代码不一致时：**以 `docs/` 为实现基线**，改代码对齐；若确认需求变更，先改 `docs/` 再改代码。
@@ -271,7 +273,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，95 个文件，1023 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
+- 位置：`test/*.test.ts`（**平铺**，99 个文件，1053 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -293,6 +295,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `test/mermaid.test.ts` | 分支 → Mermaid mindmap 的围栏、2 空格缩进、标签纯文本化与转义（含 `"` 的圆括号回退、括号与引号并存时的替换）、悬空/环状 childIds 不挂死、缺失起点返回空串 |
 | `test/save-persistence.test.ts` | 未修改的导图不写盘：干净会话 `save()` 不请求写入；序列化字节与磁盘一致时 `Vault.process` 不产生写入（`identical` 在发布写回执之前返回）；外部机器数据变化仍走 `deferred`，只改文档设置仍会 `write` |
 | `test/external-adopt.test.ts` | 外部版本处理：干净会话 `adopt`（文档、基线、历史重建，不弹选择）；有未保存修改`conflict`；仅设置变化 `merge`；身份/格式不安全永远 `conflict`；并钉住视图接线（决策先于预览、`adoptExternalVersion` 走共享会话） |
+| `test/minimap.test.ts` / `test/minimap-ui.test.ts` / `test/minimap-wiring.test.ts` / `test/minimap-setting.test.ts` | 小地图：分辨率比例尺寸与画布收缩、世界矩形并集与等比投影、节点增多时指示框变小、点击反投影居中；组件结构/角色/拖动冻结/主题变量；视图创建、销毁、`applyViewport`/`resize` 接线与设置读取；基础设置开关“赋值 → save → refreshOpenLayouts”顺序 |
 
 约定：**新增行为必须带测试**；不允许为了让测试变绿而删除或放宽既有断言（除非需求本身变化，并在 `docs/` 里写明）。
 
@@ -398,6 +401,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改布局/节点尺寸 | `src/render/layout.ts`、`src/render/text-measurer.ts`（Canvas 适配在 `src/ui/text-measurer.ts`） | `docs/05-technical-design.md` §9.3 | `test/layout.test.ts`、`test/performance.test.ts` |
 | 改节点渲染/徽标/样式 | `src/ui/renderers/*`、`src/render/resource-badges.ts`（DOM 适配在 `src/ui/resource-badges.ts`）、`styles.css` | `docs/02-interface-interactions.md` §5.5 | `test/styles.test.ts`、`test/resource-badges.test.ts`、`test/ui-modules.test.ts` |
 | 改画布交互/手势/拖拽 | `src/ui/controllers/*`、`src/render/viewport.ts`、`src/ui/drop-placement.ts` | `docs/02-interface-interactions.md` §6.3、`docs/05-technical-design.md` §12.1 | `test/pointer-operations.test.ts`、`test/touch-gesture.test.ts`、`test/touch-routing.test.ts`、`test/drop-placement.test.ts` |
+| 改小地图（尺寸/投影/显隐/跳转） | `src/render/minimap.ts`、`src/ui/components/mind-tree-minimap.ts`、`src/ui/mind-tree-view.ts`（`updateMinimap` / `centerCanvasOnWorldPoint`）、`src/render/viewport.ts`（`centerViewportOnPoint`）、`styles.css` | `docs/02-interface-interactions.md` §5.1、`docs/05-technical-design.md` §9.3、§10 | `test/minimap.test.ts`、`test/minimap-ui.test.ts`、`test/minimap-wiring.test.ts`、`test/minimap-setting.test.ts` |
 | 改文件关联/索引/缓存 | `src/services/resource-index.ts`、`resource-catalog.ts`、`resource-identity.ts`、`local-resource-cache.ts`、`linked-resource-sync.ts` | `docs/04-resource-index.md` 全篇 | `test/resource-index-service.test.ts`、`test/resource-catalog.test.ts`、`test/resource-identity.test.ts`、`test/local-resource-cache.test.ts` |
 | 改冲突/未决版本/保存 | `src/services/version-conflict-coordinator.ts`、`pending-conflict-store.ts`、`document-conflict.ts`、`document-session.ts`、`save-plan.ts`、`mind-tree-session-registry.ts`、`src/ui/mind-tree-view.ts`（`save` / `performQueuedSave` / `acceptExternalSource`） | `docs/03-document-format.md` §7.6、`docs/05-technical-design.md` §11 | `test/external-adopt.test.ts`、`test/save-persistence.test.ts`、`test/version-conflict.test.ts`、`test/pending-conflict-store.test.ts`、`test/safety.test.ts`、`test/document-session.test.ts` |
 | 改模板文件流程 | `src/services/template-files.ts` | `docs/05-technical-design.md` §9.1 | `test/template-files.test.ts` |
@@ -446,4 +450,4 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ---
 
-*最后核对：2026-11-06 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*
+*最后核对：2026-11-12 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*

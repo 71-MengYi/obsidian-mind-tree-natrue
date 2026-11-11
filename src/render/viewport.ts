@@ -92,6 +92,26 @@ export function centerViewportOnRect(
 }
 
 /**
+ * Place one world-space point at the exact center of the visible canvas.
+ *
+ * Used when a minimap jump names a position rather than a node box: the caller
+ * keeps its current zoom and only changes pan. Math is shared with
+ * centerViewportOnRect so both centering paths cannot drift apart.
+ */
+export function centerViewportOnPoint(
+  canvasWidth: number,
+  canvasHeight: number,
+  point: Readonly<ViewportPoint>,
+  zoom = 1
+): ViewportState {
+  return {
+    zoom,
+    x: canvasWidth / 2 - point.x * zoom,
+    y: canvasHeight / 2 - point.y * zoom
+  };
+}
+
+/**
  * Compensate for a layout reflow without producing a visible canvas jump.
  *
  * Tree layouts normalize their output bounds, so expanding a branch can change

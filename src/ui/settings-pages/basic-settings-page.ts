@@ -25,6 +25,18 @@ export class BasicSettingsPage implements SettingsPageObject {
           port.settings.autosaveDelayMs = value;
           await port.save();
         }));
+    new Setting(parent)
+      .setName(t("settings.minimap.name"))
+      .setDesc(t("settings.minimap.desc"))
+      .addToggle((toggle) => toggle
+        .setValue(port.settings.minimapEnabled)
+        .onChange(async (value) => {
+          port.settings.minimapEnabled = value;
+          // Persist first, then let open views apply the new value; a failed
+          // save leaves the views unchanged instead of diverging from data.json.
+          await port.save();
+          port.refreshOpenLayouts();
+        }));
 
     parent.createEl("h3", { text: t("settings.fileBadges.heading") });
     parent.createEl("p", { cls: "setting-item-description", text: t("settings.fileBadges.desc") });

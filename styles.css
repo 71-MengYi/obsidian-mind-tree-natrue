@@ -2621,3 +2621,39 @@
   color: var(--text-muted);
   font-size: var(--font-ui-small);
 }
+
+/* ─── Minimap: a quiet bottom-right overview of the whole tree. It inherits the
+   document theme through the CSS variables of its `.mtn-view[data-mtn-theme]`
+   ancestor, so no palette can be duplicated here. */
+.mtn-minimap {
+  position: absolute;
+  z-index: 39;
+  right: 12px;
+  bottom: 12px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--mtn-canvas-base) 88%, transparent);
+  box-shadow: 0 6px 18px rgb(0 0 0 / 10%);
+  overflow: hidden;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.mtn-minimap[hidden] { display: none !important; }
+.mtn-minimap.is-dragging { cursor: grabbing; }
+.mtn-minimap-surface { display: block; width: 100%; height: 100%; }
+.mtn-minimap-content { pointer-events: none; }
+.mtn-minimap-node { opacity: .78; }
+.mtn-minimap-node.is-root { opacity: 1; }
+.mtn-minimap-connection { stroke-width: .75; opacity: .5; }
+.mtn-minimap-viewport {
+  fill: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
+  stroke: var(--interactive-accent);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+/* Small panes put the map above the bottom status bar instead of on top of it. */
+@media (max-width: 620px) {
+  .mtn-minimap { right: 8px; bottom: 56px; }
+}

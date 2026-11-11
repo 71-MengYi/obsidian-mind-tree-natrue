@@ -37,6 +37,11 @@ export interface MindTreeSettings {
   resourceOpenMode: "tab" | "split-right";
   newNoteOpenMode: "split-right" | "tab" | "current" | "window";
   autosaveDelayMs: number;
+  /**
+   * Cross-tree preference for the view overlay; on by default. The viewport it
+   * summarizes stays session state, so this flag is the only thing persisted.
+   */
+  minimapEnabled: boolean;
   pngScale: 1 | 2 | 3;
   nodeWrapWidth: number;
   nodeAlignment: MindTreeNodeAlignment;
@@ -81,6 +86,7 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   resourceOpenMode: "tab",
   newNoteOpenMode: "split-right",
   autosaveDelayMs: 500,
+  minimapEnabled: true,
   pngScale: 2,
   nodeWrapWidth: DEFAULT_NODE_WRAP_WIDTH,
   nodeAlignment: "level",

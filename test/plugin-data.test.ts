@@ -22,6 +22,28 @@ test("damaged settings fall back field-by-field without blocking plugin load", (
   assert.deepEqual(Object.keys(normalized.settings.fileExtensionBadgeAliases), []);
 });
 
+// ─── Minimap: a global display preference only ──────────────────────────────
+
+test("an absent minimap preference defaults to on", () => {
+  assert.equal(DEFAULT_SETTINGS.minimapEnabled, true);
+  assert.equal(normalizePluginData({ settings: {} }).settings.minimapEnabled, true);
+});
+
+test("the minimap preference preserves explicit booleans", () => {
+  assert.equal(normalizePluginData({ settings: { minimapEnabled: false } }).settings.minimapEnabled, false);
+  assert.equal(normalizePluginData({ settings: { minimapEnabled: true } }).settings.minimapEnabled, true);
+});
+
+test("a damaged minimap preference is repaired to the default", () => {
+  for (const value of ["false", "yes", 1, 0, null, {}, []]) {
+    assert.equal(
+      normalizePluginData({ settings: { minimapEnabled: value } }).settings.minimapEnabled,
+      DEFAULT_SETTINGS.minimapEnabled,
+      String(value)
+    );
+  }
+});
+
 test("file badge settings normalize case, deduplicate entries, and discard unsafe values", () => {
   const normalized = normalizePluginData({
     settings: {

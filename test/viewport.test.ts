@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   MAX_ZOOM,
   MIN_ZOOM,
+  centerViewportOnPoint,
   centerViewportOnRect,
   panViewportByWheel,
   preserveViewportPointAfterLayout,
@@ -66,6 +67,23 @@ test("centering a viewport aligns the node center with the canvas center", () =>
   assert.deepEqual(
     centerViewportOnRect(1_000, 600, { x: 100, y: 50, width: 200, height: 40 }, 1.5),
     { x: 200, y: 195, zoom: 1.5 }
+  );
+});
+
+test("centering a viewport on one point aligns it with the canvas center", () => {
+  assert.deepEqual(
+    centerViewportOnPoint(1_000, 600, { x: 300, y: 120 }),
+    { x: 200, y: 180, zoom: 1 }
+  );
+  const zoomed = centerViewportOnPoint(800, 600, { x: 100, y: 40 }, 1.5);
+  assert.deepEqual(zoomed, { x: 250, y: 240, zoom: 1.5 });
+  // Screen position = pan + world * zoom, which must be the exact canvas center.
+  assert.equal(zoomed.x + 100 * zoomed.zoom, 400);
+  assert.equal(zoomed.y + 40 * zoomed.zoom, 300);
+  // It agrees with the rectangle center for a zero-sized rectangle.
+  assert.deepEqual(
+    centerViewportOnPoint(1_000, 600, { x: 300, y: 120 }, 1.5),
+    centerViewportOnRect(1_000, 600, { x: 300, y: 120, width: 0, height: 0 }, 1.5)
   );
 });
 
