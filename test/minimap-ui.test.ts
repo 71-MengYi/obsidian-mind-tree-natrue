@@ -37,7 +37,9 @@ test("the minimap is an accessible image overlay that is hidden until enabled", 
   assert.match(component, /setAttribute\("aria-hidden", "true"\)/);
   assert.match(component, /createElementNS\(SVG_NAMESPACE, "g"\)/);
   assert.match(component, /createElementNS\(SVG_NAMESPACE, "rect"\)/);
-  assert.match(component, /createElementNS\(SVG_NAMESPACE, "line"\)/);
+  // The thumbnail is a node overview only: connector lines add noise at this
+  // scale, so no SVG line elements are created at all.
+  assert.doesNotMatch(component, /createElementNS\(SVG_NAMESPACE, "line"\)/);
 });
 
 test("content is appended before the viewport indicator so the indicator paints above", () => {
@@ -78,9 +80,8 @@ test("setEnabled hides and clears the gesture while update stores state when dis
   assert.match(component, /setEnabled\(enabled: boolean\): void \{[\s\S]*?this\.enabled = enabled;/);
   assert.match(component, /if \(!enabled\) \{[\s\S]*?this\.clearDrag\(\);[\s\S]*?this\.element\.hidden = true;/);
   assert.match(component, /update\(state: Readonly<MindTreeMinimapState>\): void \{[\s\S]*?this\.state = state;[\s\S]*?if \(!this\.enabled\) return;/);
-  // Content cache keys: layout identity, branch colours and map pixel size only.
+  // Content cache keys: layout identity and map pixel size only.
   assert.match(component, /this\.renderedLayout !== state\.layout/);
-  assert.match(component, /this\.renderedSlots !== state\.branchColorSlots/);
   assert.match(component, /this\.renderedWidth !== size\.width/);
   assert.match(component, /this\.renderedHeight !== size\.height/);
   // A viewport-only change must not rebuild nodes: the live scene projection is
@@ -89,11 +90,13 @@ test("setEnabled hides and clears the gesture while update stores state when dis
   assert.match(component, /sceneProjection\.scale \/ contentProjection\.scale/);
 });
 
-test("minimap colours come from theme cues instead of literals", () => {
-  assert.match(component, /line\.style\.stroke = branchColorCss/);
-  assert.match(component, /rect\.style\.fill = branchColorCss/);
-  assert.match(component, /branchColorCss\(state\.branchColorSlots\.get\(connection\.from\)\)/);
-  assert.match(component, /branchColorCss\(state\.branchColorSlots\.get\(node\.id\)\)/);
+test("minimap nodes use one theme colour instead of the branch rainbow", () => {
+  // No branch palette, no per-node inline paint: the stylesheet owns the one
+  // neutral colour so the overview cannot turn into a rainbow.
+  assert.doesNotMatch(component, /branchColorCss|branchColorSlots/);
+  assert.doesNotMatch(component, /\.style\.fill|\.style\.stroke/);
+  assert.doesNotMatch(component, /createElementNS\(SVG_NAMESPACE, "line"\)/);
+  assert.match(cssRule(".mtn-minimap-node"), /fill:\s*var\(--mtn-node-text\);/);
   // No embedded palette: the canvas theme variables are the only colour source.
   assert.doesNotMatch(component, /#[0-9a-f]{3,8}\b/i);
   assert.doesNotMatch(component, /\brgba?\(|\bhsla?\(/i);
@@ -133,11 +136,12 @@ test("minimap layer CSS keeps the native scale and a quiet hierarchy", () => {
   assert.match(cssRule(".mtn-minimap-surface"), /width:\s*100%;/);
   assert.match(cssRule(".mtn-minimap-surface"), /height:\s*100%;/);
   assert.match(cssRule(".mtn-minimap-content"), /pointer-events:\s*none;/);
+  assert.match(cssRule(".mtn-minimap-node"), /fill:\s*var\(--mtn-node-text\);/);
   assert.match(cssRule(".mtn-minimap-node"), /opacity:\s*\.78;/);
   const rootRule = css.match(/\.mtn-minimap-node\.is-root\s*\{([\s\S]*?)\}/)?.[1] ?? "";
   assert.match(rootRule, /opacity:\s*1;/);
-  assert.match(cssRule(".mtn-minimap-connection"), /stroke-width:\s*\.75;/);
-  assert.match(cssRule(".mtn-minimap-connection"), /opacity:\s*\.5;/);
+  // Connectors are intentionally absent from the thumbnail.
+  assert.doesNotMatch(css, /\.mtn-minimap-connection/);
 
   const viewportRule = cssRule(".mtn-minimap-viewport");
   assert.match(viewportRule, /fill:\s*color-mix\(in srgb, var\(--interactive-accent\) 12%, transparent\);/);

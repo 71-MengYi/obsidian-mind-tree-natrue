@@ -10,7 +10,6 @@ import {
   type MinimapProjection,
   type MinimapSize
 } from "../../render/minimap";
-import { branchColorCss } from "../../render/presentation";
 import type { ViewportPoint, ViewportRect, ViewportState } from "../../render/viewport";
 import type { NodeId } from "../../types";
 import { DisposableUiObject } from "./ui-object";
@@ -28,7 +27,6 @@ export interface MindTreeMinimapActions {
 /** Everything the thumbnail draws, supplied by the view on every refresh. */
 export interface MindTreeMinimapState {
   readonly layout: TreeLayout;
-  readonly branchColorSlots: ReadonlyMap<NodeId, number>;
   readonly viewport: Readonly<ViewportState>;
   readonly canvasWidth: number;
   readonly canvasHeight: number;
@@ -68,7 +66,6 @@ export class MindTreeMinimap extends DisposableUiObject {
   private dragProjection?: MinimapProjection;
   private dragPointerId?: number;
   private renderedLayout?: TreeLayout;
-  private renderedSlots?: ReadonlyMap<NodeId, number>;
   private renderedWidth = 0;
   private renderedHeight = 0;
 
@@ -177,38 +174,20 @@ export class MindTreeMinimap extends DisposableUiObject {
 
   private needsContentRebuild(state: Readonly<MindTreeMinimapState>, size: Readonly<MinimapSize>): boolean {
     return this.renderedLayout !== state.layout
-      || this.renderedSlots !== state.branchColorSlots
       || this.renderedWidth !== size.width
       || this.renderedHeight !== size.height;
   }
 
   /**
    * Build the whole thumbnail in one fragment so the live SVG is swapped in a
-   * single DOM operation. Connections are drawn before nodes to keep lines
-   * below the node rectangles regardless of node order.
+   * single DOM operation. Only node boxes are drawn: at thumbnail scale the
+   * connectors become visual noise and the branch palette turns the overview
+   * into a rainbow that hides the structure the minimap is meant to show.
    */
   private rebuildContent(state: Readonly<MindTreeMinimapState>, projection: Readonly<MinimapProjection>): void {
     const ownerDocument = this.element.ownerDocument;
-    const nodeById = new Map(state.layout.nodes.map((node) => [node.id, node] as const));
     const rootId = resolveRootId(state.layout);
     const fragment = ownerDocument.createDocumentFragment();
-
-    for (const connection of state.layout.connections) {
-      const from = nodeById.get(connection.from);
-      const to = nodeById.get(connection.to);
-      if (!from || !to) continue;
-      const start = projectMinimapPoint(projection, from.x + from.width / 2, from.y + from.height / 2);
-      const end = projectMinimapPoint(projection, to.x + to.width / 2, to.y + to.height / 2);
-      const line = ownerDocument.createElementNS(SVG_NAMESPACE, "line");
-      line.classList.add("mtn-minimap-connection");
-      line.setAttribute("x1", formatCoordinate(start.x));
-      line.setAttribute("y1", formatCoordinate(start.y));
-      line.setAttribute("x2", formatCoordinate(end.x));
-      line.setAttribute("y2", formatCoordinate(end.y));
-      // Connection colour follows its parent branch, like the canvas connector.
-      line.style.stroke = branchColorCss(state.branchColorSlots.get(connection.from));
-      fragment.appendChild(line);
-    }
 
     for (const node of state.layout.nodes) {
       const point = projectMinimapPoint(projection, node.x, node.y);
@@ -221,13 +200,11 @@ export class MindTreeMinimap extends DisposableUiObject {
       rect.setAttribute("width", formatCoordinate(Math.max(1, node.width * projection.scale)));
       rect.setAttribute("height", formatCoordinate(Math.max(1, node.height * projection.scale)));
       rect.setAttribute("rx", "1.5");
-      rect.style.fill = branchColorCss(state.branchColorSlots.get(node.id));
       fragment.appendChild(rect);
     }
 
     this.content.replaceChildren(fragment);
     this.renderedLayout = state.layout;
-    this.renderedSlots = state.branchColorSlots;
     this.renderedWidth = this.size.width;
     this.renderedHeight = this.size.height;
   }

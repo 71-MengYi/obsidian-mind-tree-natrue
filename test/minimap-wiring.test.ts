@@ -20,7 +20,12 @@ test("the view mounts one minimap on the canvas root and disposes it with the sh
 test("minimap state follows the persisted setting, layout, pan/zoom and resize", () => {
   assert.match(view, /private updateMinimap\(\): void \{[\s\S]*?this\.plugin\.settings\.minimapEnabled/);
   assert.match(view, /minimap\.setEnabled\(enabled\);/);
-  assert.match(view, /minimap\.update\(\{[\s\S]*?layout,[\s\S]*?branchColorSlots: this\.branchColorSlotByNodeId,[\s\S]*?viewport: this\.viewport,/);
+  // The thumbnail is a neutral node overview: no branch palette reaches it.
+  const updateStart = view.indexOf("minimap.update({");
+  const updateCall = updateStart >= 0 ? view.slice(updateStart, view.indexOf("});", updateStart) + 3) : "";
+  assert.match(updateCall, /layout,/);
+  assert.match(updateCall, /viewport: this\.viewport,/);
+  assert.doesNotMatch(updateCall, /branchColorSlots/);
   // applyViewport is the single pan/zoom path, so the indicator is refreshed there.
   assert.match(view, /private applyViewport\(\): void \{[\s\S]*?this\.updateMinimap\(\);/);
   // A canvas resize re-fits the display-ratio-derived minimap size.
@@ -43,7 +48,8 @@ test("the minimap component stays a UI-only, theme-driven render surface", () =>
   assert.match(component, /role=?"img"|"role", "img"/);
   assert.match(component, /setPointerCapture/);
   assert.match(component, /unprojectMinimapPoint/);
-  assert.match(component, /branchColorCss/);
+  // The overview is neutral: no branch palette, one theme colour in CSS.
+  assert.doesNotMatch(component, /branchColorCss|branchColorSlots/);
   // Colour literals are forbidden here: the minimap inherits the live tree theme.
   assert.doesNotMatch(component, /#[0-9a-f]{3,8}\b/i);
 });

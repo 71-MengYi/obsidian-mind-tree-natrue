@@ -2643,9 +2643,10 @@
 .mtn-minimap.is-dragging { cursor: grabbing; }
 .mtn-minimap-surface { display: block; width: 100%; height: 100%; }
 .mtn-minimap-content { pointer-events: none; }
-.mtn-minimap-node { opacity: .78; }
+/* One neutral tree colour instead of the branch palette: the minimap is a
+   structural overview, and twelve branch colours turn it into visual noise. */
+.mtn-minimap-node { fill: var(--mtn-node-text); opacity: .78; }
 .mtn-minimap-node.is-root { opacity: 1; }
-.mtn-minimap-connection { stroke-width: .75; opacity: .5; }
 .mtn-minimap-viewport {
   fill: color-mix(in srgb, var(--interactive-accent) 12%, transparent);
   stroke: var(--interactive-accent);

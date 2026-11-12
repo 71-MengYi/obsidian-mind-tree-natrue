@@ -3956,7 +3956,6 @@ export class MindTreeView extends TextFileView {
     if (!enabled || !layout) return;
     minimap.update({
       layout,
-      branchColorSlots: this.branchColorSlotByNodeId,
       viewport: this.viewport,
       canvasWidth: this.canvasEl?.clientWidth ?? 0,
       canvasHeight: this.canvasEl?.clientHeight ?? 0
