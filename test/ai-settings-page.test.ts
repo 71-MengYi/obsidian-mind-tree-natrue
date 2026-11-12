@@ -538,6 +538,10 @@ test("lays the section out as master switch, one local server, config and notice
   assert.ok(h.indexOf(h.portField()) < h.indexOf(h.portError()));
   assert.ok(h.indexOf(h.portError()) < h.indexOf(h.statusLine()));
   assert.equal(h.serverHeading().text, translate("settings.ai.mcp.server.heading", "en"));
+  // The heading must stay an `h4` like the other section headings: Obsidian's
+  // settings stylesheet only pads `.vertical-tab-content h1..h4`, so an `h5`
+  // would sit left of "MCP server" and "Client configuration".
+  assert.equal(h.serverHeading().tag, "h4", "the local server heading aligns with the other section headings");
   assert.equal(h.serverScope().text, translate("settings.ai.mcp.server.scope", "en"));
 
   // The config block is a heading, the feedback line and the copy button, plus

@@ -140,11 +140,15 @@ export class AiSettingsPage implements SettingsPageObject {
     return buildMcpPageModel(this.port.mcp.state());
   }
 
-  /** The server's block: sub-heading, scope, port and status. */
+  /** The server's block: heading, scope, port and status. */
   private createServerBlock(parent: HTMLElement, server: McpServerModel): ServerControls {
     const block = parent.createDiv({ cls: "mtn-settings-ai-server" });
     block.setAttribute("data-server", "local");
-    block.createEl("h5", { cls: "mtn-settings-ai-server-heading", text: server.heading });
+    // An `h4`, like every other section heading on this page: Obsidian's
+    // `.vertical-tab-content h4` rule supplies the horizontal padding that
+    // setting-group headings use, which `h5` never receives. A sub-heading that
+    // skips it sits left of "MCP server" and "Client configuration".
+    block.createEl("h4", { cls: "mtn-settings-ai-server-heading", text: server.heading });
     block.createEl("p", {
       cls: "setting-item-description mtn-settings-ai-server-scope",
       text: server.scope
