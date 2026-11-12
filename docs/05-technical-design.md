@@ -31,7 +31,7 @@ UI 采用命令式 DOM 组件但保持单向数据流。`MindTreeView` 只负责
 - `ui/renderers`：节点与连线渲染；只读取渲染状态，不持有视图、插件或仓库。
 - `ui/controllers`：框选、平移、缩放、键盘、节点拖动、文件拖入与剪贴板状态机；窗口级监听器必须绑定到视图所属窗口并统一释放。
 - `ui/menus` 与 `ui/modals`：右键菜单、单树设置、工具栏菜单和独立对话框对象。单树设置的主题二级菜单在鼠标悬浮某一行时，通过视图注入的回调显示只读预览；菜单模块只负责探测悬浮行与主题值，不接触预览 DOM 与插件设置。节点右键菜单与工具栏“复制 / 导出”共用同一份菜单描述（`ui/menus/copy-export-menu.ts`）：行序、图标与命令只有一处定义，两个入口不可能漂移；嵌套菜单通过 `MenuItem.setSubmenu()`（未公开 API，`ui/menus/menu-groups.ts` 内做能力探测）渲染，宿主不支持时同一批命令平铺进父菜单。
-- `ui/settings-pages`：基础设置、思维导图、主题笔记、管理标记与 AI 五个页面对象。AI 页承载 MCP 服务分区与模型提供商分区；MCP 分区行为判定来自 `services/mcp/settings-page-model.ts`，模型提供商分区的展示规则来自 `services/ai/` 的纯模块与 `ai-providers-view.ts`，页面自身只做 DOM 组合与命名端口调用。
+- `ui/settings-pages`：基础设置、思维导图、主题笔记、管理标记与 AI 五个页面对象。AI 页承载 MCP 服务分区与模型提供商分区；MCP 分区行为判定来自 `services/mcp/settings-page-model.ts`，模型提供商分区的展示规则来自 `services/ai/` 的纯模块与 `ai-providers-view.ts`，模型目录发现来自 `services/ai/model-catalog.ts`；页面自身只做 DOM 组合与命名端口调用。
 
 组件不得反向导入 `MindTreeView` 或插件主类。界面事件先转换为命名操作，由领域命令产生新文档状态，随后视图重新计算状态并调用组件 `update()`；本阶段仍使用完整布局和重绘，不引入虚拟 DOM。
 
@@ -41,7 +41,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 
 读取工具经由 `tree-reader.ts` 直接解析文件，**不要求打开视图**；写入工具经由 `session-writer.ts` 复用 `SharedMindTreeSession` 的历史与文件级串行写队列，因此与画布操作共用撤销栈和保存基线，磁盘基线不一致时宁可拒绝也不覆盖。思维树的创建路径被抽到 `services/tree-creation.ts`，界面命令与 MCP 工具共用同一实现。参见 [MCP Streamable HTTP 传输规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。
 
-模型提供商按“纯配置 / 宿主接线”两半放在 `services/ai/`：`contracts.ts` 冻结设置模型、校验码、页面端口与体积上限；`presets.ts` 保存供应商预设（品牌、分类、默认 API 类型与 Base URL、可用 API 类型、是否需要 API Key/Base URL、是否支持嵌入、OAuth 类型、额外请求项、申请 Key 的链接）；`normalize.ts` 负责 `data.json` 的不可信输入规范化、表单校验、默认地址解析与请求预览；三者零 Obsidian 依赖，可被 `node:test` 直接覆盖。`oauth.ts` 是 OAuth 流程与设备本地凭据管理的编排层（ChatGPT 设备码/浏览器 PKCE、Gemini 浏览器 PKCE、GitHub Copilot 设备码、Claude 手动令牌），`connectivity.ts` 是模型行“测试”按钮的最小请求编排（OpenAI-compatible/Responses、Anthropic、Gemini）；两者都只通过注入端口访问 HTTP、本地存储、外部打开与平台事实，不直接导入 Obsidian。真正接触 Obsidian 的宿主接线只有 `src/main.ts` 的 `aiSettings()`：它把 `requestUrl`、`app.loadLocalStorage/saveLocalStorage`、`Platform.isMobile` 与设置保存接到纯模块上，并让页面只看到一份已解析快照。OAuth 凭据键为 `${manifest.id}:ai-oauth:<providerId>`，只走设备本地存储；供应商（含 API Key）与聊天/嵌入模型随 `settings.aiProviders` / `aiChatModels` / `aiEmbeddingModels` 进入 `data.json`。页面侧 `ui/settings-pages/ai-providers-view.ts` 把一份 `AiSettingsState` 解析为分区文案、供应商卡片、模型行、picker 与表单选项，`ai-providers-section.ts` 与三个 modal 只把结果写到 DOM 并通过端口执行命名操作。AI 页仍由 `settings.ts` 的 `availability: "desktop"` 限定为桌面端专属。
+模型提供商按“纯配置 / 宿主接线”两半放在 `services/ai/`：`contracts.ts` 冻结设置模型、校验码、页面端口与体积上限；`presets.ts` 保存供应商预设（品牌、分类、默认 API 类型与 Base URL、可用 API 类型、是否需要 API Key/Base URL、是否支持嵌入、OAuth 类型、额外请求项、申请 Key 的链接）；`normalize.ts` 负责 `data.json` 的不可信输入规范化、表单校验、默认地址解析与请求预览；三者零 Obsidian 依赖，可被 `node:test` 直接覆盖。`oauth.ts` 是 OAuth 流程与设备本地凭据管理的编排层（ChatGPT 设备码/浏览器 PKCE、Gemini 浏览器 PKCE、GitHub Copilot 设备码、Claude 手动令牌），`connectivity.ts` 是模型行“测试”按钮的最小请求编排（OpenAI-compatible/Responses、Anthropic、Gemini），`model-catalog.ts` 是“拉取模型目录”的只读发现层（OpenAI-compatible/Responses 的 `/models`、Anthropic 的 `/v1/models`、Gemini 的 `/v1beta/models`、OAuth 会话的令牌目录与内置回退列表）；它们都只通过注入端口访问 HTTP、本地存储、外部打开与平台事实，不直接导入 Obsidian。真正接触 Obsidian 的宿主接线只有 `src/main.ts` 的 `aiSettings()`：它把 `requestUrl`、`app.loadLocalStorage/saveLocalStorage`、`Platform.isMobile` 与设置保存接到纯模块上，并让页面只看到一份已解析快照。OAuth 凭据键为 `${manifest.id}:ai-oauth:<providerId>`，只走设备本地存储；供应商（含 API Key）与聊天/嵌入模型随 `settings.aiProviders` / `aiChatModels` / `aiEmbeddingModels` 进入 `data.json`。页面侧 `ui/settings-pages/ai-providers-view.ts` 把一份 `AiSettingsState` 解析为分区文案、供应商卡片、模型行、picker 与表单选项，`ai-providers-section.ts` 与四个 modal（供应商选择、供应商表单、模型表单、模型目录）只把结果写到 DOM 并通过端口执行命名操作。AI 页由 `settings.ts` 的 `availability: "all"` 在所有平台渲染；MCP 分区的不可用性由 `services/mcp/settings-page-model.ts` 的 `supported` 与页面红字 notice 表达，不靠隐藏整个 tab。
 
 核心树操作必须与 UI 框架解耦，并通过纯数据单元测试验证。所有文件变更统一经过 `ResourceService`，避免菜单、命令和拖拽各自实现一套规则。
 
@@ -109,7 +109,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 
 ## 10. 设置设计
 
-设置分为文档设置和插件全局设置。文档设置包含“布局模式”“主题”“连线样式”“节点形状”“文件收集策略”和“递归扫描子目录”，从视图左上角圆形菜单进入，并分别保存为该 `.mtn.md` 的顶层 `layoutMode`、`theme`、`connectionStyle`、`nodeShape`、`collectionMode`、`recursiveScan` YAML 属性。全局“默认布局”“默认配色主题”“默认连线样式”“默认节点形状”和“默认文件收集策略”不再复制进新建导图，而是作为尚未显式设置该项的导图的运行时默认值（含新建导图）；其余设置仍放在“基础设置 / 思维导图 / 主题笔记 / 管理标记 / AI”五个全局设置页中。其中“AI”页只在桌面端渲染，移动端不显示该 tab。
+设置分为文档设置和插件全局设置。文档设置包含“布局模式”“主题”“连线样式”“节点形状”“文件收集策略”和“递归扫描子目录”，从视图左上角圆形菜单进入，并分别保存为该 `.mtn.md` 的顶层 `layoutMode`、`theme`、`connectionStyle`、`nodeShape`、`collectionMode`、`recursiveScan` YAML 属性。全局“默认布局”“默认配色主题”“默认连线样式”“默认节点形状”和“默认文件收集策略”不再复制进新建导图，而是作为尚未显式设置该项的导图的运行时默认值（含新建导图）；其余设置仍放在“基础设置 / 思维导图 / 主题笔记 / 管理标记 / AI”五个全局设置页中。“AI”页在所有平台渲染（`availability: "all"`）：移动端 MCP 分区以红字说明不可用且不启动服务，模型提供商分区与手动令牌仍可用，OAuth 登录按钮禁用。
 
 | 设置项 | 默认值 | 说明 |
 | --- | --- | --- |
@@ -140,7 +140,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 | 节点文字换行宽度 | 240 px | 只限制标题文字区域；标记、文件按钮与节点边距追加到节点总宽度。 |
 | 自定义标记（Emoji） | 空 | 全局“管理标记”页；有序的 `{ id, kind: "emoji", value }` 列表，最多 64 项，每项必须是**单个 Emoji 字形**；取值只能来自 `src/ui/emoji-data.ts` 的离线目录（由 `scripts/generate-emoji-data.mjs` 生成），检索走 `src/ui/emoji-search.ts` 的本地匹配，决定标记面板中 Emoji 组的顺序与节点尾部 Emoji 的显示。 |
 | 自定义标记（文字标记） | 空 | 全局“管理标记”页；有序的 `{ id, kind: "tag", value }` 列表，最多 64 项、每项 24 字符，决定标记面板中文字标记组的顺序与节点尾部文字标签的显示。 |
-| MCP 服务开关 | 关闭 | 全局“AI”页；仅桌面端。开启后在本机 `127.0.0.1` 上启动唯一的 MCP 服务器，承载全部 18 个工具。默认关闭，因此默认不监听、不加载 HTTP 模块。 |
+| MCP 服务开关 | 关闭 | 全局“AI”页的 MCP 分区；仅桌面端可用（移动端显示红字说明，控件禁用）。开启后在本机 `127.0.0.1` 上启动唯一的 MCP 服务器，承载全部 18 个工具。默认关闭，因此默认不监听、不加载 HTTP 模块。 |
 | MCP 服务端口 | 27321 | 全局“AI”页，取值 `1024–65535`；占用时按顺序尝试其后最多 10 个端口，实际生效值写入设备本地存储并在状态行显示。字段为 `mcpPort`，升级时兼容旧双服务器配置的端口（优先 `mcpReadPort`），都没有时回落 27321。 |
 | MCP 访问令牌 | 每台设备一个 | **不属于全局设置**：保存在设备本地存储（键 `${manifest.id}:mcp-server`），随仓库隔离并跟随本机，不写 `data.json`，因此不会被同步复制到其他设备。升级时沿用旧只读记录（`:mcp-server:read`）的令牌，已安装的客户端配置继续可用；该令牌同时拥有读与写权限。 |
 | 模型提供商 | 空 | 全局“AI”页“模型提供商”分区；有序的供应商列表，最多 `64` 项。字段为 `id`、`preset`、`apiType`、`baseUrl?`、`apiKey?`、`additionalSettings?`、`customHeaders?`；OAuth 预设不需要 API Key，自定义提供商与 Azure OpenAI 必须提供 Base URL。删除供应商同时移除其名下模型与设备上的 OAuth 凭据；修改供应商 ID 时其模型一起改挂并断开旧 ID 的凭据。 |
@@ -150,7 +150,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 
 表中“布局模式”“主题”“连线样式”“节点形状”“文件收集策略”和“递归扫描子目录”是文档设置；六者以可读 YAML 保存，不能复制进底部压缩 JSON。表中的“默认布局”“默认配色主题”“默认连线样式”“默认节点形状”和“默认文件收集策略”是插件全局设置，为所有尚未显式设置该项的导图（含新建导图）提供运行时默认值。文档设置变化进入当前视图的撤销栈并触发自动保存；文件收集策略或递归扫描变化还会使当前目录扫描缓存失效。
 
-插件设置和可重建文件索引分开存储。MCP 的启用状态与首选端口随插件设置进入 `data.json`（它们是跨设备可迁移的偏好），而**生效端口与访问令牌留在设备本地存储**：端口是每台机器的事实，令牌若被同步就会让另一台设备拿到本机的读与写权限。`normalizePluginData` 对这两个字段做不可信输入规范化（开关回落为布尔，端口越界回落为默认值而不是夹紧成另一个可疑端口）。模型提供商同样属于插件全局设置，但凭据策略分成两半：`settings.aiProviders`（含**明文 API Key**）、`settings.aiChatModels`、`settings.aiEmbeddingModels` 进入 `data.json`，会随插件数据同步；OAuth 访问/刷新令牌留在设备本地存储，不进入 `data.json`。`normalizeAiSettings` 对三者做不可信输入规范化：未知 preset/API 类型回落到预设默认值、越界数字丢弃、重复 ID 去重、单条损坏的供应商或模型只丢弃自身而不影响其余，并把数量限制在 `64 / 512 / 128`；加载不因一条坏数据失败，也不会把修复结果自动写回。因为 API Key 明文存在 `data.json` 中，界面与文档都必须把它当作敏感数据提醒；日志、状态行与错误消息不得回显 API Key 或 OAuth 令牌。扩展名标签忽略列表与别名映射属于纯显示插件设置；视图从关联路径实时派生标签并以同一个测量模型提供给布局、DOM 与 PNG/SVG 导出，不写入节点或大纲。自定义标记同样属于纯显示插件设置：`data.json` 的 `settings.customMarkers` 只保存 `{ id, kind, value }`，节点仅保存 `{ type: "emoji" | "tag", value }`，渲染时由 `ResourceBadgePresentation` 用一次渲染快照把值解析为可见项，因此删除一个定义只会让该值停止渲染，节点数据不被改写，重新添加同值即可恢复。新建导图不在 Frontmatter 写入任何设置属性：未显式设置的项在运行时使用插件全局默认布局、默认主题、默认连线样式、默认节点形状和默认文件收集策略，递归扫描使用代码默认的关闭；用户在树菜单主动设置某项后才写入该属性，并从此固定为该树的值。除非产品需求明确增加树级差异，否则不得把其他全局选项写入 `.mtn.md` Frontmatter 或移入视图菜单。画布左右键行为、节点层级字号与最小尺寸、是否显示源文件入口仍属于固定产品规则，不提供设置项。
+插件设置和可重建文件索引分开存储。MCP 的启用状态与首选端口随插件设置进入 `data.json`（它们是跨设备可迁移的偏好），而**生效端口与访问令牌留在设备本地存储**：端口是每台机器的事实，令牌若被同步就会让另一台设备拿到本机的读与写权限。`normalizePluginData` 对这两个字段做不可信输入规范化（开关回落为布尔，端口越界回落为默认值而不是夹紧成另一个可疑端口）。模型提供商同样属于插件全局设置，但凭据策略分成两半：`settings.aiProviders`（含**明文 API Key**）、`settings.aiChatModels`、`settings.aiEmbeddingModels` 进入 `data.json`，会随插件数据同步；OAuth 访问/刷新令牌留在设备本地存储，不进入 `data.json`。`normalizeAiSettings` 对三者做不可信输入规范化：未知 preset/API 类型回落到预设默认值、越界数字丢弃、重复 ID 去重、单条损坏的供应商或模型只丢弃自身而不影响其余，并把数量限制在 `64 / 512 / 128`；加载不因一条坏数据失败，也不会把修复结果自动写回。因为 API Key 明文存在 `data.json` 中，界面与文档都必须把它当作敏感数据提醒；日志、状态行与错误消息不得回显 API Key 或 OAuth 令牌。模型目录拉取不是持久化设置：目录结果只用于一次批量创建聊天模型，关闭弹窗即丢弃；远程不可用时使用 `model-catalog.ts` 内置的回退列表，不写入 `data.json`。扩展名标签忽略列表与别名映射属于纯显示插件设置；视图从关联路径实时派生标签并以同一个测量模型提供给布局、DOM 与 PNG/SVG 导出，不写入节点或大纲。自定义标记同样属于纯显示插件设置：`data.json` 的 `settings.customMarkers` 只保存 `{ id, kind, value }`，节点仅保存 `{ type: "emoji" | "tag", value }`，渲染时由 `ResourceBadgePresentation` 用一次渲染快照把值解析为可见项，因此删除一个定义只会让该值停止渲染，节点数据不被改写，重新添加同值即可恢复。新建导图不在 Frontmatter 写入任何设置属性：未显式设置的项在运行时使用插件全局默认布局、默认主题、默认连线样式、默认节点形状和默认文件收集策略，递归扫描使用代码默认的关闭；用户在树菜单主动设置某项后才写入该属性，并从此固定为该树的值。除非产品需求明确增加树级差异，否则不得把其他全局选项写入 `.mtn.md` Frontmatter 或移入视图菜单。画布左右键行为、节点层级字号与最小尺寸、是否显示源文件入口仍属于固定产品规则，不提供设置项。
 
 ## 11. 异常处理与数据安全
 
@@ -202,7 +202,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 ### 12.1 跨平台
 
 - 核心读写能力不得依赖 Node.js 专属 API；Electron、`node:http` 等桌面能力只能在桌面端点按判断后延迟加载，移动端必须能加载同一份 `main.js`。
-- **本机 MCP 服务只在桌面端存在**：`isMcpSupported` 是唯一判定点，`services/mcp/availability.ts` 之后才可能出现 `require("node:http")`；「设置 → AI」tab 在移动端不渲染，插件也不构造启动器，因此移动端既不会执行该 `require`，也不会监听端口。
+- **本机 MCP 服务只在桌面端存在**：`isMcpSupported` 是唯一判定点，`services/mcp/availability.ts` 之后才可能出现 `require("node:http")`；「设置 → AI」页在所有平台渲染，但移动端 MCP 分区显示红字不可用说明、控件禁用，插件也不构造启动器，因此移动端既不会执行该 `require`，也不会监听端口。模型提供商分区与手动令牌在移动端可用；OAuth 连接/取消/断开按钮在移动端禁用。
 - 平台门禁优先于设置值：桌面端开启服务后把 `data.json` 同步到移动端，移动端依然不启动服务。
 - 所有路径使用 Obsidian Vault 的 `/` 风格相对路径，比较时按平台规则处理大小写。
 - 不依赖 Node.js 专属 API 完成核心读写，确保移动端可用。
@@ -227,10 +227,11 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 ### 12.3 安全与隐私
 
 - 插件默认不发起网络请求，不上传仓库内容、文件名或 URL。
-- 网络请求只在用户显式操作时发生，主要包括以下四类：
+- 网络请求只在用户显式操作时发生，主要包括以下几种情况：
   - **用户主动开启的本机 MCP 服务**（见 9.2）：一条**入站**回环通道，不向任何服务器发送数据；不开启时既不监听端口，也不加载 Node 的 HTTP 模块。该通道只有一个服务器（`mind-tree-nature`），承载全部 18 个工具；插件不对工具调用做权限判断，读与写共用客户端对这条服务器的审批策略——这是合并只读与修改的明确取舍。启用后还必须同时满足四条，缺一不可：① 只绑定 `127.0.0.1`，不监听任何可路由地址；② `Host` 与 `Origin` 头必须落在回环主机集合内，否则拒绝（防 DNS rebinding）；③ 每个请求都必须带该设备的 `Authorization: Bearer` 令牌（令牌保存在设备本地存储而不进入 `data.json`，以免被同步复制到别的设备）；④ 请求体有固定字节上限，超限在解析前拒绝。
   - **模型连通性测试**：只有点击某个模型行的“测试”按钮后，才向该供应商配置的 Base URL 发送**一次**最小非流式请求。鉴权只使用该供应商配置的 API Key 或设备本地 OAuth 凭据，请求体不含笔记内容、文件名或 URL；不点击、打开设置页或保存配置都不发请求。Azure OpenAI 与 Amazon Bedrock 明确返回“不支持”，不会用误导性的失败结果代替。
-  - **OAuth 登录**：只有点击“连接”后，才访问对应提供商的授权/令牌端点（ChatGPT、Google、GitHub）；Claude 走手动粘贴令牌，不发起登录请求。设备码或浏览器 PKCE 流程由用户在浏览器里完成；插件只轮询该流程自身的令牌端点，不访问其他服务，也不读取笔记内容。已连接 OAuth 的令牌在读取连接状态时可能自动续期一次（例如 Copilot 的短期令牌过期后后台换取新 token），属于登录会话维护，不发送笔记内容，也不调用模型。AI tab 仅在桌面端出现，浏览器跳转与本地回调同样只在那里提供。
+  - **拉取模型目录**：只有点击“拉取模型目录”后，才向该供应商的目录端点发一次 GET 请求（OpenAI-compatible/Responses `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models`、OAuth 会话的对应端点），鉴权复用该供应商的 API Key 或设备本地 OAuth 凭据；请求不携带笔记内容、文件名或 URL。远程失败或供应商不支持时使用本机内置回退列表，不发起额外请求。目录结果不持久化，只用于用户勾选后的批量创建。
+  - **OAuth 登录**：只有点击“连接”后，才访问对应提供商的授权/令牌端点（ChatGPT、Google、GitHub）；Claude 走手动粘贴令牌，不发起登录请求。设备码或浏览器 PKCE 流程由用户在浏览器里完成；插件只轮询该流程自身的令牌端点，不访问其他服务，也不读取笔记内容。已连接 OAuth 的令牌在读取连接状态时可能自动续期一次（例如 Copilot 的短期令牌过期后后台换取新 token），属于登录会话维护，不发送笔记内容，也不调用模型。AI tab 在移动端也渲染，但 OAuth 的浏览器跳转与本地回调只在桌面端提供，移动端按钮禁用并提示改用手动令牌。
   - **插件更新检查**：按用户在设置中的选择访问 GitHub 发布接口；关闭自动检查后，只有主动点击“检查更新”才请求，且不携带仓库内容、文件名或 URL。
 - MCP 通道的日志只记录方法与工具名，绝不记录节点标题或笔记正文；模型提供商相关的日志与错误消息只记录流程状态、HTTP 状态与延迟，绝不记录 API Key、OAuth 令牌、请求头或响应正文。
 - API Key 与模型配置以**明文**保存在 `data.json`，OAuth 令牌保存在设备本地存储；用户应把 `data.json` 与其中的 Key 当作敏感文件。

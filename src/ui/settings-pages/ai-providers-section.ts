@@ -231,12 +231,19 @@ export class AiProvidersSection {
         this.renderModelActions(row.createEl("td", { cls: "mtn-ai-model-actions" }), model.id, "chat");
       }
     }
-    const add = section.createEl("button", {
+    const actions = section.createDiv({ cls: "mtn-ai-model-add-row" });
+    const add = actions.createEl("button", {
       cls: "mtn-ai-model-add",
       text: t("settings.ai.models.addChat"),
       attr: { type: "button" }
     });
     add.addEventListener("click", () => { void this.openModelForm("chat", card.id); });
+    const catalog = actions.createEl("button", {
+      cls: "mtn-ai-model-catalog-open",
+      text: t("settings.ai.models.catalog.open"),
+      attr: { type: "button" }
+    });
+    catalog.addEventListener("click", () => { void this.openModelCatalog(card.id); });
   }
 
   private renderEmbeddingModels(parent: HTMLElement, card: AiProviderCardView): void {
@@ -629,6 +636,20 @@ export class AiProvidersSection {
         { kind, providerId: resolvedProviderId, ...(model === undefined ? {} : { model }) },
         () => this.render()
       ).open();
+    } catch (error) {
+      this.showError(t("settings.ai.models.error.saveFailed", { message: describeError(error) }));
+    }
+  }
+
+  /**
+   * Open the provider's remote catalog. Loaded lazily for the same reason as the
+   * other windows: the page itself must stay constructible without a Modal base,
+   * and the catalog only exists once the user asks for it.
+   */
+  private async openModelCatalog(providerId: string): Promise<void> {
+    try {
+      const { AiModelCatalogModal } = await import("../modals/ai-model-catalog-modal");
+      new AiModelCatalogModal(this.app, this.port, providerId, () => this.render()).open();
     } catch (error) {
       this.showError(t("settings.ai.models.error.saveFailed", { message: describeError(error) }));
     }

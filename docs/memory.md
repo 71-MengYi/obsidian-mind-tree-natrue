@@ -13,7 +13,7 @@
 - `src/services/ai/connectivity.ts`：模型行“测试”按钮的最小非流式请求（OpenAI-compatible/Responses、Anthropic、Gemini）；Azure OpenAI 与 Amazon Bedrock 明确返回“不支持”。
 - 宿主接线：`src/main.ts` 的 `aiSettings()`（`requestUrl`、`app.loadLocalStorage/saveLocalStorage`、`Platform.isMobile`、`saveSettings`、OAuth 管理器）；保存前走 `validateProvider` / `validateChatModel` / `validateEmbeddingModel`；删除供应商级联删除其模型与设备凭据，修改供应商 ID 时模型一起改挂并断开旧 ID 凭据。
 - 持久化：`settings-model.ts` 增加 `aiProviders` / `aiChatModels` / `aiEmbeddingModels`（默认空数组）；`plugin-data.ts` 调用 `normalizeAiSettings`；三者进入 `data.json`。**API Key 以明文随 `data.json` 保存**（与 MCP 令牌不同），README 与 `docs/05` §10/§12.3 已提醒把 `data.json` 当作敏感文件。
-- 设置页：`ai-settings-page.ts` 保留 MCP 分区；新增 `ai-providers-section.ts`、`ai-providers-view.ts`（纯视图模型）、`ai-provider-picker-modal.ts`、`ai-provider-form-modal.ts`、`ai-model-form-modal.ts`。AI tab 仍由 `settings.ts` 的 `availability: "desktop"` 限定，**桌面端专属**；移动端不渲染、不提供入口。
+- 设置页：`ai-settings-page.ts` 保留 MCP 分区；新增 `ai-providers-section.ts`、`ai-providers-view.ts`（纯视图模型）、`ai-provider-picker-modal.ts`、`ai-provider-form-modal.ts`、`ai-model-form-modal.ts`。首轮曾把 AI tab 限定为桌面端；第二轮已改为所有平台可见（见下方“第二轮”），MCP 不可用性改由页面内红字 notice 表达。
 - i18n：`settings.ai.providers.*` / `settings.ai.models.*`（EN/ZH 同步）；预设品牌名属于产品数据，不翻译。
 - 文档：README 中英新增“模型提供商”一节与网络/隐私条目；`docs/01` P1 与非目标、`docs/02` §AI 模型提供商、`docs/05` §9.1/§10/§12.3、`docs/06` 模型提供商验收；`THIRD_PARTY_NOTICES.md` 的 obsidian-yolo（MIT，commit `90f3e183e23304ed85e028175d31887e3827a958`）来源由 Lead 维护，本任务未改。
 
@@ -22,15 +22,34 @@
 **已知风险 / 取舍**
 
 - **API Key 明文在 `data.json`**：插件数据会随用户同步/备份；界面不回显 Key 与令牌，日志与错误消息不记录它们。文档必须持续提醒 `data.json` 的敏感性。
-- **AI tab 桌面端专属**：`settings.ts` 的 `availability: "desktop"` 复用 `isMcpSupported`，移动端整页不渲染；页面内部的 `isDesktop` 与手动令牌只是桌面端之外的兜底，不构成移动端入口。文档按“AI tab 仅桌面端”写，不承诺移动端可配置供应商。
+- **AI tab 平台范围（第二轮已改）**：第二轮起 AI tab 在桌面端与移动端都渲染；MCP 分区仍只在桌面端可用，移动端以红字说明、控件禁用且不启动服务；模型提供商分区在移动端可用，OAuth 按钮禁用但手动令牌可用。不要再按“AI tab 桌面端专属”写文档。
 - **无聊天/推理消费方**：除 OAuth 登录与用户点击模型“测试”外没有模型请求；打开 AI 设置页、保存配置、插件启动都不主动拉取模型或发送笔记内容。注意已连接 OAuth 的令牌在读取状态时可能自动续期一次（当前实现：Copilot 短期 token 过期/缺失时 `status()` 后台换取 token，`test/ai-oauth` 明确覆盖），属于登录会话维护，不是模型调用。搜索/写文件也不使用这些配置。
 - 预设中的第三方品牌、默认端点与 OAuth 常量可能变化；文档只列名称与能力，不承诺具体模型目录、价格或可用性。
 
 **验证（2026-11-13 01:2x）**
 
-- `npm run check` = **0 错误**；`npm test` = **1126 / 1126 通过、0 失败**（在 `danger-full-access` 会话中运行，esbuild 的 `spawn` 可用；workspace-write 沙箱下 `tsx`/esbuild 仍会 `spawn EPERM`）；`npm run build` 成功，`main.js` 4.96 MB、`styles.css` 83 KB、`manifest.json` 235 B，均低于发布上限。
-- 新增测试：`test/ai-settings-normalize.test.ts`、`test/ai-oauth.test.ts`、`test/ai-connectivity.test.ts`、`test/ai-providers-view.test.ts`；`test/ai-settings-page.test.ts` 补 `app`/`ai`/`Modal` 桩并保留原 MCP 断言；`test/settings-index-wiring.test.ts` 的样式检查拆成 MCP 段与 AI provider 段（后者允许 `var(--text-*)` 主题变量、仍禁止硬编码颜色与渐变）。
-- **仍未做**：真实 Obsidian 桌面端人工验收（picker 分类/搜索、表单校验、卡片展开、5 秒删除确认、OAuth 真机流程、Claude 手动令牌、每模型测试的成功/失败/不支持、密钥不回显、移动端无 AI tab）。OAuth 与连通性测试均为注入假 HTTP 的单元测试，没有真实账号/真实网络验收，文档不得写成“已验证可用”。
+- `npm run check` = **0 错误**；`npm test` = **1150 / 1150 通过、0 失败**（在 `danger-full-access` 会话中运行，esbuild 的 `spawn` 可用；workspace-write 沙箱下 `tsx`/esbuild 仍会 `spawn EPERM`）；`npm run build` 成功，`main.js` 5.00 MB、`styles.css` 86 KB、`manifest.json` 235 B，均低于发布上限。
+- 新增测试：`test/ai-settings-normalize.test.ts`、`test/ai-oauth.test.ts`、`test/ai-connectivity.test.ts`、`test/ai-providers-view.test.ts`、`test/ai-model-catalog.test.ts`；`test/ai-settings-page.test.ts` 补 `app`/`ai`/`Modal` 桩并保留原 MCP 断言；`test/settings-index-wiring.test.ts` 的样式检查拆成 MCP 段与 AI provider 段（后者允许 `var(--text-*)` 主题变量、仍禁止硬编码颜色与渐变）。
+- **仍未做**：真实 Obsidian 桌面端人工验收（picker 分类/搜索、表单校验、卡片展开、5 秒删除确认、OAuth 真机流程、Claude 手动令牌、每模型测试的成功/失败/不支持、密钥不回显、移动端红字与手动令牌）。OAuth 与连通性测试均为注入假 HTTP 的单元测试，没有真实账号/真实网络验收，文档不得写成“已验证可用”。
+
+**第二轮（同日）· AI tab 移动端可见 + 从供应商拉取远程模型目录**
+
+**需求（用户口径）**：AI tab 改为移动端也显示；MCP 分区在移动端不可用，页面内用红字 notice 提示（`settings.ai.mcp.status.desktopOnly`，`--text-error`）；模型提供商分区在移动端可用，OAuth 连接/断开按钮禁用并提示，手动 token 仍可用。另把 YOLO 的“从供应商拉取远程模型目录/批量添加模型”搬到聊天模型区：卡片内有「拉取模型目录」按钮，打开即拉取；支持搜索、全选、批量添加；已配置（同 provider + 同 model）不可选/跳过并计数，配置 ID 冲突才加 `-2`/`-3`；`source: "fallback"` 时提示回退目录；批量失败逐条内联汇总，成功项照常落地。
+
+**落点**
+
+- `src/settings.ts`：AI 页 `availability` 从 `"desktop"` 改为 `"all"`；MCP 可用性仍由 `isMcpSupported` 在页面内部判定，不再隐藏整个 tab。
+- `src/ui/settings-pages/ai-settings-page.ts`：MCP notice 按 `model.supported` 切换 `.is-error`（`styles.css` 中 `color: var(--text-error)`）；移动端总开关/端口禁用、客户端配置隐藏、状态行显示 `settings.ai.mcp.status.desktopOnly`；模型提供商分区照常渲染。
+- `src/services/ai/model-catalog.ts`：`fetchChatModelIds()` 只读发现；OpenAI-compatible/Responses 走 `/models`（base 不以 `/v1` 结尾时同时尝试 `/v1/models`）、Anthropic `/v1/models?limit=1000`、Gemini `/v1beta/models`；ChatGPT / Gemini / Copilot / Claude OAuth 使用 token 或内置回退列表；Azure OpenAI 与 Amazon Bedrock 返回 `unsupported`；任何失败都返回 `{ source: "fallback", message }`，不抛错、不写设置。
+- `src/ui/modals/ai-model-catalog-modal.ts`：打开即拉取；搜索、全选（只作用于当前可见且未配置项）、批量添加；已配置同 provider + model 的状态为禁用并标“已存在”，底部汇总已选/已配置；配置 ID 为 `<providerId>/<model>`，仅冲突时追加 `-2`/`-3`（跨聊天与嵌入配置 id 唯一）；逐条调用 `addChatModel`，成功项落地、失败逐条内联，全部成功且无跳过时关闭；“手动添加”转到普通模型表单。
+- `src/ui/settings-pages/ai-providers-section.ts` / `ai-providers-view.ts`：聊天模型区“添加聊天模型”旁新增“拉取模型目录”按钮（动态 import modal）；新增 `modelConfigId()` 与 `inferReasoningType()`（按模型名粗略推断 reasoning 类型）。
+- `src/services/ai/contracts.ts`：`AiRemoteModelList`、`AiSettingsPagePort.listRemoteModels`；`src/main.ts` 接线 `fetchChatModelIds(provider, http, oauth.credential(provider.id))`。
+- i18n：`settings.ai.mcp.status.desktopOnly`、`settings.ai.models.catalog.*`、`settings.ai.providers.oauth.desktopOnly`（EN/ZH 同步）。
+- 文档：README 中英、`docs/01`、`docs/02`、`docs/05` §9.1/§10/§12.3、`docs/06` 验收均已按第二轮口径更新。
+
+**网络与隐私边界**：目录拉取只在用户点击后请求；GET 目录使用该供应商的 API Key 或设备本地 OAuth 凭据，不发送笔记内容、文件名或 URL；远程失败时使用本机内置回退列表，不再发额外请求；目录结果不持久化，关闭弹窗即丢弃。
+
+**测试与验证**：新增 `test/ai-model-catalog.test.ts`；`test/ai-providers-view.test.ts`、`test/ai-settings-page.test.ts`、`test/settings-index-wiring.test.ts` 已随 UI 更新。收尾实测：`npm run check` 0 错误；`npm test` **1150 / 1150 通过、0 失败**；`npm run build` 成功（`main.js` 5.00 MB、`styles.css` 86 KB）。真实 Obsidian 移动端与真实供应商目录的人工验收仍未做。
 
 ## 2026-11-12 · 视图右下角小地图（`feat`，团队协作）
 
@@ -484,7 +503,7 @@
 3. **错误文案归属：谁抛谁本地化。** 宿主抛的 `McpToolError{code,message}` 由协议层**原样透传**（测试钉死 pass-through）；协议层只为自己产生的 `writes-disabled` / `invalid-arguments` 调 `t()`。
 4. **工具描述是静态英文、不走 i18n**——工具目录是给模型读的协议面，不是用户界面文案。
 5. **安全五条**：只绑 `127.0.0.1`；`Host`/`Origin` 必须在回环集合内（防 DNS rebinding）；每请求 `Authorization: Bearer <token>`；请求体 64 KiB 上限；写权限是**独立第二开关**。**端口与 token 存设备本地存储**（`${manifest.id}:mcp-server`），**不进 `data.json`**，避免被 Sync 复制到别的设备。进插件设置的只有 `mcpEnabled`/`mcpAllowWrites`/`mcpPort`。
-6. **移动端策略是「缺席而非不可用」**：`isMcpSupported` 是唯一判定点，移动端不渲染「AI」tab、不构造启动器，因此**永不执行 `require("node:http")`**；`activePage === "ai"` 在移动端回落到首个可用页；平台门禁优先于设置值（桌面开启后把 `data.json` 同步到手机也不启动）。
+6. **移动端策略是「缺席而非不可用」**：`isMcpSupported` 是唯一判定点，移动端不构造启动器，因此**永不执行 `require("node:http")`**；`activePage === "ai"` 在移动端回落到首个可用页；平台门禁优先于设置值（桌面开启后把 `data.json` 同步到手机也不启动）。（注：2026-11-13 第二轮起 AI tab 改为移动端也渲染，MCP 分区在页面内显示红字不可用说明；本条记录的是当时“整页缺席”的旧策略。）
 7. **`link_file` 与界面关联保持同一条路径**（`resources.ensureStableReference`），因此一个**尚无资源身份的非 Markdown 文件会在原目录补 `@`/`%` 身份后缀**——这是获得可引用身份的必要步骤，不是复制/移动。据此已修正 README 与 docs 里「不重命名任何文件」的过度承诺（原措辞不准确）。`link_file` 刻意**不**镜像 `associateFileWithTarget` 的标题改写，并设 `titleSync: "off"`，使一次工具调用无法开启双向改名。
 8. **`require("node:http")` 必须写成函数内的非字面量加载**：`loadNodeHttp()` 里 `loader(NODE_HTTP_SPECIFIER)`。字面量 `require("node:http")` 会让真实构建报 `Could not resolve "node:http"`（`esbuild.config.mjs` 的 `external` 没有 node 内建，且该文件不在本任务写范围）。这个写法比 `default-app-opener.ts` 的字面量 `require("electron")` **更保守**：字面量会生成模块作用域的 `const electron = require("electron")`（移动端加载期就会解析），而非字面量只在函数被调用时解析。行为等价、移动端永不触发，已在产物中复核。
 9. **`MCP_SERVER_VERSION` 硬编码已删除**：版本由 `McpHostEnvironment.version?.()` 提供，缺省回落 `"0.0.0-dev"`（刻意看起来不像发布版），两分支都有测试钉死。

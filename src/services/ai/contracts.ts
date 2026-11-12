@@ -158,6 +158,13 @@ export interface AiSettingsSnapshot {
 }
 
 /** Result of an explicit connectivity test, surfaced in the provider card. */
+/** Models discovered from a provider, or a built-in fallback when discovery fails. */
+export interface AiRemoteModelList {
+  models: string[];
+  source: "remote" | "fallback";
+  message?: string;
+}
+
 export interface AiTestResult {
   ok: boolean;
   latencyMs?: number;
@@ -246,6 +253,8 @@ export interface AiSettingsPagePort {
   deleteEmbeddingModel(modelId: string): Promise<void>;
   testChatModel(modelId: string): Promise<AiTestResult>;
   testEmbeddingModel(modelId: string): Promise<AiTestResult>;
+  /** Fetch the provider's model catalog for batch adding; fallback lists are allowed. */
+  listRemoteModels(providerId: string): Promise<AiRemoteModelList>;
   oauthStatus(providerId: string): AiOAuthStatus;
   oauthBegin(providerId: string): Promise<AiConnectStart>;
   oauthComplete(providerId: string, authorization: AiOAuthAuthorization): Promise<AiOAuthStatus>;
@@ -281,6 +290,7 @@ export function unsupportedAiSettingsPort(): AiSettingsPagePort {
     deleteEmbeddingModel: async () => undefined,
     testChatModel: test,
     testEmbeddingModel: test,
+    listRemoteModels: async () => ({ models: [], source: "fallback", message: "unsupported" }),
     oauthStatus: () => ({ state: "disconnected" }),
     oauthBegin: async () => ({ mode: "manual" }),
     oauthComplete: async () => ({ state: "disconnected" }),

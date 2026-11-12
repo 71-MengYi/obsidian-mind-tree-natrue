@@ -48,6 +48,18 @@ class TestEvent {
 class TestElement {
   readonly children: TestElement[] = [];
   readonly classes = new Set<string>();
+  /** The subset of DOMTokenList the page uses (`classList.toggle` etc.). */
+  readonly classList = {
+    add: (name: string): void => { this.classes.add(name); },
+    remove: (name: string): void => { this.classes.delete(name); },
+    contains: (name: string): boolean => this.classes.has(name),
+    toggle: (name: string, force?: boolean): boolean => {
+      const next = force ?? !this.classes.has(name);
+      if (next) this.classes.add(name);
+      else this.classes.delete(name);
+      return next;
+    }
+  };
   readonly attributes = new Map<string, string>();
   readonly dataset: Record<string, string> = {};
   readonly handlers = new Map<string, Array<(event: TestEvent) => void>>();
@@ -622,9 +634,13 @@ test("a platform without MCP support disables everything, hides the config and s
   assert.equal(h.secretWarning().text, translate("settings.ai.mcp.config.secretWarning", "en"));
   assert.equal(h.notice().hidden, false);
   assert.equal(h.notice().text, translate("settings.ai.mcp.status.desktopOnly", "en"));
+  // Mobile still shows the AI tab for model providers, so the dead MCP section
+  // must be visibly marked as an error rather than looking merely empty.
+  assert.equal(h.notice().hasClass("is-error"), true);
 
   const supported = fixture({ supported: true });
   assert.equal(supported.notice().hidden, true);
+  assert.equal(supported.notice().hasClass("is-error"), false);
   assert.equal(supported.configSection().hidden, false);
 });
 

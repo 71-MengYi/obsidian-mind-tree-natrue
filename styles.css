@@ -1889,6 +1889,11 @@
   font-size: var(--font-ui-smaller);
 }
 
+/* MCP is desktop-only; the AI tab itself remains visible on mobile. */
+.mtn-settings-ai-notice.is-error {
+  color: var(--text-error);
+}
+
 /* ── AI model providers: settings cards, model tables, picker and forms ───── */
 
 /*
@@ -2130,6 +2135,135 @@
 
 .mtn-ai-model-add {
   margin-top: 6px;
+}
+
+/* "Add chat model" and "Fetch model catalog" share one row in the card. */
+.mtn-ai-model-add-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.mtn-ai-model-add-row .mtn-ai-model-add {
+  margin-top: 0;
+}
+
+/* ── Model catalog (fetch + batch add) ───────────────────────────────────── */
+
+.mtn-ai-model-catalog-modal {
+  width: min(560px, calc(100vw - 32px));
+}
+
+.mtn-ai-model-catalog-desc {
+  margin-top: 0;
+}
+
+.mtn-ai-model-catalog-status {
+  margin: 6px 0;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-catalog-status.is-error {
+  color: var(--text-error);
+}
+
+.mtn-ai-model-catalog-search input {
+  width: 100%;
+}
+
+.mtn-ai-model-catalog-selectall {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-catalog-selectall-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+/*
+ * The list scrolls on its own so the search box and the batch controls stay
+ * reachable while a provider reports hundreds of models.
+ */
+.mtn-ai-model-catalog-list {
+  max-height: min(50vh, 420px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border-top: 1px solid var(--background-modifier-border);
+  border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.mtn-ai-model-catalog-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-catalog-row:last-child {
+  border-bottom: none;
+}
+
+.mtn-ai-model-catalog-row code {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mtn-ai-model-catalog-row.is-existing {
+  color: var(--text-muted);
+}
+
+.mtn-ai-model-catalog-badge {
+  margin-left: auto;
+  padding: 0 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-catalog-results {
+  max-height: 120px;
+  margin-top: 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-catalog-failures {
+  margin: 4px 0 0;
+  padding-left: 18px;
+  color: var(--text-error);
+}
+
+.mtn-ai-model-catalog-footer {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 12px;
+}
+
+.mtn-ai-model-catalog-count {
+  margin-right: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-catalog-status[hidden],
+.mtn-ai-model-catalog-results[hidden],
+.mtn-ai-model-catalog-selectall[hidden] {
+  display: none;
 }
 
 .mtn-ai-provider-oauth {

@@ -33,7 +33,7 @@ export const SETTINGS_PAGES = [
   { id: "mind-map", label: "settings.tabs.mindMap", availability: "all", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new MindMapSettingsPage(panel, port) },
   { id: "topic-notes", label: "settings.tabs.topicNotes", availability: "all", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new TopicNoteSettingsPage(panel, port) },
   { id: "custom-markers", label: "settings.tabs.customMarkers", availability: "all", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new CustomMarkersSettingsPage(panel, port) },
-  { id: "ai", label: "settings.tabs.ai", availability: "desktop", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new AiSettingsPage(panel, port) }
+  { id: "ai", label: "settings.tabs.ai", availability: "all", create: (panel: HTMLElement, port: SettingsPagePort): SettingsPageObject => new AiSettingsPage(panel, port) }
 ] as const satisfies ReadonlyArray<SettingsPageEntry>;
 
 type SettingsPage = (typeof SETTINGS_PAGES)[number]["id"];

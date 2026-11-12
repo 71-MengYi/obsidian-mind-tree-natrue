@@ -23,7 +23,9 @@ import {
   builtinToolOptions,
   customParameterTypeOptions,
   filterAiPickerItems,
+  inferReasoningType,
   modalityOptions,
+  modelConfigId,
   presetUsesOAuth,
   reasoningOptions,
   validationErrorText
@@ -370,4 +372,45 @@ test("the card heading uses the stored provider id, not a translated placeholder
   assert.equal(card.presetLabel, "OpenAI");
   assert.equal(card.apiTypeLabel, "OpenAI Responses");
   assert.equal(card.connection.text, "已配置 API Key");
+});
+
+test("catalog model ids use provider/model and grow a numeric suffix only when taken", () => {
+  assert.equal(modelConfigId("openai", "gpt-4o", []), "openai/gpt-4o");
+  assert.equal(modelConfigId("openai", "gpt-4o", ["openai/other"]), "openai/gpt-4o");
+  assert.equal(modelConfigId("openai", "gpt-4o", new Set(["openai/gpt-4o"])), "openai/gpt-4o-2");
+  assert.equal(
+    modelConfigId("openai", "gpt-4o", ["openai/gpt-4o", "openai/gpt-4o-2"]),
+    "openai/gpt-4o-3"
+  );
+  assert.equal(
+    modelConfigId("openai", "gpt-4o", new Set(["openai/gpt-4o", "openai/gpt-4o-2", "openai/gpt-4o-3"])),
+    "openai/gpt-4o-4",
+    "the suffix keeps growing past the first collision"
+  );
+  // The generated ids must satisfy the model id pattern the host validates.
+  for (const id of [
+    modelConfigId("deepseek", "deepseek-chat", []),
+    modelConfigId("gemini", "models/gemini-2.5-pro", []),
+    modelConfigId("openrouter", "anthropic/claude-sonnet-4", ["openrouter/anthropic/claude-sonnet-4"])
+  ]) {
+    assert.match(id, /^[A-Za-z0-9][A-Za-z0-9._/:@-]*$/);
+  }
+});
+
+test("infers the reasoning protocol from the catalog model name", () => {
+  assert.equal(inferReasoningType("gpt-4o"), "openai");
+  assert.equal(inferReasoningType("GPT-4.1-mini"), "openai");
+  assert.equal(inferReasoningType("o3-mini"), "openai");
+  assert.equal(inferReasoningType("openai/o4-mini"), "openai");
+  assert.equal(inferReasoningType("deepseek-chat"), "openai");
+  assert.equal(inferReasoningType("DeepSeek-V3"), "openai");
+  assert.equal(inferReasoningType("gemini-2.5-pro"), "gemini");
+  assert.equal(inferReasoningType("models/gemini-2.5-flash"), "gemini");
+  assert.equal(inferReasoningType("claude-sonnet-4"), "anthropic");
+  assert.equal(inferReasoningType("anthropic/claude-opus-4"), "anthropic");
+  assert.equal(inferReasoningType("mistral-large-latest"), "none");
+  assert.equal(inferReasoningType("llama-3.3-70b-instruct"), "none");
+  assert.equal(inferReasoningType("qwen2.5-coder"), "none");
+  // "o3"/"o4" only count as trimmed tokens, so an embedded letter pair stays none.
+  assert.equal(inferReasoningType("command-a3b"), "none");
 });

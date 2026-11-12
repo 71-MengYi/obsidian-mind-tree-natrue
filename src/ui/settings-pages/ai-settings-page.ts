@@ -215,6 +215,10 @@ export class AiSettingsPage implements SettingsPageObject {
     // client-config block is withdrawn rather than shown with a dead button.
     this.configSection.hidden = !model.config.visible;
     this.notice.hidden = model.supported;
+    // A platform that cannot serve MCP explains itself in the error colour: the
+    // rest of the AI tab (model providers) still works on mobile, so the
+    // section must not look merely empty.
+    this.notice.classList.toggle("is-error", !model.supported);
   }
 
   private applyPort(port: McpServerModel["port"]): void {

@@ -507,3 +507,49 @@ export function filterAiPickerItems(
     return item.label.toLowerCase().includes(needle) || item.preset.includes(needle);
   });
 }
+
+/**
+ * Config id for a model pulled from a provider's catalog.
+ *
+ * The convention is `<provider>/<model>`. When that id is already taken (the
+ * same model added twice under different display names, or a hand-written
+ * config), a numeric suffix keeps the new row addressable instead of silently
+ * overwriting the existing one. The caller passes every model id it already has
+ * and grows that set as it batches, so two catalog entries cannot collide.
+ */
+export function modelConfigId(
+  providerId: string,
+  model: string,
+  existingIds: Iterable<string>
+): string {
+  const base = `${providerId}/${model}`;
+  // Always copy: the caller may hold a Set from another realm (a test sandbox),
+  // where `instanceof Set` is false even though iteration works.
+  const taken = new Set(existingIds);
+  if (!taken.has(base)) return base;
+  let suffix = 2;
+  while (taken.has(`${base}-${suffix}`)) suffix += 1;
+  return `${base}-${suffix}`;
+}
+
+/**
+ * Guess the reasoning protocol a model identifier belongs to.
+ *
+ * The catalog only returns names, so this is a deliberately small heuristic
+ * matching the families the chat form knows: OpenAI-style reasoning models
+ * (GPT, o3/o4 and DeepSeek's OpenAI-compatible API), Gemini and Claude.
+ * Everything else stays `none` and the user can change it afterwards.
+ */
+export function inferReasoningType(modelId: string): AiReasoningType {
+  const value = modelId.toLowerCase();
+  if (
+    value.includes("deepseek") ||
+    value.includes("gpt") ||
+    /(^|[^a-z0-9])o[34]([^a-z0-9]|$)/.test(value)
+  ) {
+    return "openai";
+  }
+  if (value.includes("gemini")) return "gemini";
+  if (value.includes("claude")) return "anthropic";
+  return "none";
+}

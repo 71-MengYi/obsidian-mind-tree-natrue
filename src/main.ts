@@ -44,6 +44,7 @@ import { validateChatModel, validateEmbeddingModel, validateProvider } from "./s
 import { aiPresetInfo } from "./services/ai/presets";
 import { AiOAuthManager, type AiHttpPort } from "./services/ai/oauth";
 import { testChatModel, testEmbeddingModel } from "./services/ai/connectivity";
+import { fetchChatModelIds } from "./services/ai/model-catalog";
 import {
   CHAIN_BROKEN_ICON,
   CHAIN_BROKEN_ICON_SVG,
@@ -1325,6 +1326,11 @@ export default class MindTreeNaturePlugin extends Plugin {
         const provider = providerOf(model.providerId);
         if (!provider) return { ok: false, message: "Provider no longer exists" };
         return testEmbeddingModel(provider, model, http, oauth.credential(provider.id));
+      },
+      listRemoteModels: async (providerId) => {
+        const provider = providerOf(providerId);
+        if (!provider) return { models: [], source: "fallback", message: "Provider no longer exists" };
+        return fetchChatModelIds(provider, http, oauth.credential(provider.id));
       },
       oauthStatus,
       oauthBegin: async (providerId): Promise<AiConnectStart> => oauth.begin(oauthProvider(providerId)),
