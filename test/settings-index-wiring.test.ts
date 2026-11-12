@@ -144,10 +144,11 @@ test("the AI page mutates the one server only through named transitions", () => 
   assert.match(page, /destroy\(\): void \{[\s\S]*?clearTimeout/);
 });
 
-test("the AI stylesheet block stays namespaced and adds no colour styling", () => {
+test("the MCP stylesheet block stays namespaced and adds no colour styling", () => {
   const css = rootFile("styles.css");
   const start = css.indexOf("/* ── AI settings");
-  const end = css.indexOf("/* ── Manage markers");
+  const providerStart = css.indexOf("/* ── AI model providers");
+  const end = providerStart > start ? providerStart : css.indexOf("/* ── Manage markers");
   assert.ok(start > 0, "the AI settings style section exists");
   assert.ok(end > start, "the AI settings style section has an end");
   const block = css.slice(start, end);
@@ -162,5 +163,25 @@ test("the AI stylesheet block stays namespaced and adds no colour styling", () =
   // is reviewed on that rule. `[a-z-]*color` also covers `border-color`,
   // `outline-color` and friends; `fill`/`stroke` are paint as well.
   assert.doesNotMatch(block, /(?:^|[;{\s])(?:background|background-color|color|[a-z-]*color|fill|stroke)\s*:/m);
+  assert.doesNotMatch(block, /gradient|will-change/i);
+});
+
+test("the AI provider stylesheet stays namespaced and paints only with theme variables", () => {
+  const css = rootFile("styles.css");
+  const start = css.indexOf("/* ── AI model providers");
+  const end = css.indexOf("/* ── Manage markers");
+  assert.ok(start > 0, "the AI provider style section exists");
+  assert.ok(end > start, "the AI provider style section has an end");
+  const block = css.slice(start, end);
+
+  for (const line of block.split("\n")) {
+    const trimmed = line.trim();
+    if (trimmed === "" || trimmed.startsWith("/*") || trimmed.startsWith("*") || trimmed.startsWith("}")) continue;
+    if (/^[.#[]/.test(trimmed)) assert.match(trimmed, /^\.mtn-ai-(provider|model)-/);
+  }
+  // Provider status cannot be conveyed by theme colour alone (the sentences do
+  // that), but the rules may use Obsidian's semantic variables. Hard-coded
+  // paint and animation layers are still refused.
+  assert.doesNotMatch(block, /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/);
   assert.doesNotMatch(block, /gradient|will-change/i);
 });

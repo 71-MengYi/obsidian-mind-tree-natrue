@@ -163,11 +163,22 @@ macOS 上把 `Ctrl` 换成 `Cmd`。视图左上角的圆形问号按钮内有同
 
 访问令牌保存在**设备本地存储**而不是插件数据里，因此不会被同步到其他设备。它等价于密码：任何能读到它的人都能读写你的思维树，请像对待密码一样对待复制出去的内容。
 
+### 7. 配置外部模型提供商
+
+「设置 → Mind Tree Nature → AI」在「MCP 服务」之后新增**模型提供商**分区，用来保存外部模型服务的接入信息。**当前版本还没有聊天或推理入口**：这些设置是后续能力的配置层，插件不会主动使用它们，也不会在后台发请求。该设置页只在**桌面端**出现；移动端不显示 AI tab，也不会启动 OAuth 登录流程或发出连通性测试请求。
+
+- **添加供应商**：点击「添加提供商」打开选择器，按「全部 / 主流 / 国内 / 网关 / 云服务 / 本地」筛选或搜索。内置 OpenAI、ChatGPT OAuth、Anthropic、Claude OAuth、Gemini、Gemini OAuth、GitHub Copilot、OpenRouter、Sidrune AI、xAI、Mistral、Perplexity、Groq、Cerebras、SambaNova、Together AI、Morph、DeepSeek、Moonshot、Zhipu、Doubao、SiliconFlow、StepFun、MiniMax、Hunyuan、Xiaomi MiMo、Azure OpenAI、Amazon Bedrock、Ollama、LM Studio，以及可配置任意 OpenAI 兼容端点的「自定义提供商」。选定预设后填表，Base URL 留空即使用该预设的默认地址。
+- **供应商卡片**：每张卡片显示预设名、ID、API 类型、实际生效的 Base URL（默认地址会标注）与连接状态；点开后在卡片内编辑或删除。删除需要在**同一张卡片里再点一次**确认（约 5 秒内有效，超时恢复），并会同时移除该供应商下的聊天/嵌入模型与设备上的 OAuth 凭据。
+- **表单**：ID（唯一；字母或数字开头，可含点、横线、下划线）、预设、API 类型、API Key、Base URL 与请求地址预览；按预设显示请求方式（浏览器请求 / Obsidian 请求 / 桌面端直连）、响应流式模式、提示缓存、跳过 Stainless SDK、Google Cloud 项目、部署名称、API 版本、AWS 区域与自定义请求头。Azure OpenAI 必填 Base URL、部署名称与 API 版本；Amazon Bedrock 必填 AWS 区域；自定义提供商必填 Base URL。必填项、格式、重复 ID 与数字范围都在表单内就地提示，校验不通过不会保存。
+- **模型**：展开的卡片下有「聊天模型」和「嵌入模型」两张表。聊天模型可设模型 ID、显示名、启用、reasoning 类型、temperature、topP、上下文/输出 token、输入模态（文本 / 图片 / PDF）、内置工具族和自定义参数；嵌入模型设模型 ID、显示名与维度。不支持嵌入的预设会直接说明原因；编辑供应商 ID 时，其下模型会一起改挂到新 ID。
+- **测试连通性**：每个模型行有一个「测试」按钮，只有点击后才会发**一次**最小模型请求，并显示结果（通过 + 延迟，或失败原因）。Azure OpenAI 与 Amazon Bedrock 会明确提示“不支持”，不会伪装成 401 之类的失败。打开 AI 设置页、保存配置与插件启动都不会主动拉取模型或发送笔记内容；已连接 OAuth 的令牌在读取连接状态时可能自动续期一次（属于登录会话维护，不含笔记内容，也不调用模型）；连通性测试与 OAuth 登录只在用户点击时发生。
+- **OAuth 登录**：ChatGPT（设备码）、Gemini（浏览器 PKCE）、GitHub Copilot（设备码）与 Claude（手动粘贴访问令牌）在供应商卡片内提供登录面板，显示未连接、等待授权（含设备码与验证页入口）、已连接（含账号）或出错，并可取消与断开。OAuth 浏览器跳转与本地回调只在桌面端提供。API Key 与模型配置保存在插件的 `data.json`；OAuth 令牌保存在**设备本地存储**（`${manifest.id}:ai-oauth:<providerId>`），不进入 `data.json`，也不会同步到其他设备。API Key 与令牌都等价于密码，界面只显示“已配置 / 未连接”状态，不会回显密钥内容。
+
 ## 文档格式与隐私
 
 - 思维树使用顶层 YAML 属性 `documentId`、`schemaVersion`、`layoutMode`、`recursiveScan`、`collectionMode`、`theme` 和 `nodeShape`，其后是一段 Markdown 大纲。大纲之后存放无损 gzip 压缩的 JSON，并附有一条明确要求 AI 工具忽略它的说明；设置项不会在该载荷中重复保存。新建思维树不写入任何设置属性，缺失的设置在运行时使用「设置 → 思维导图」中的全局默认值，只有在该树左上角设置菜单里主动选择某项后才写入该文件并固定下来。
-- 插件不发送遥测数据，也不上传库内容。
-- 插件唯一的网络相关功能是本机 MCP 服务：它默认关闭、只在桌面端、只监听 `127.0.0.1`、需要访问令牌，并且不向任何服务器发送数据。除此之外只在你主动点击检查更新时访问 GitHub。
+- 插件默认不发送遥测，也不上传库内容。网络请求只在你主动操作时发生：本机 MCP 服务默认关闭、只在桌面端、只监听 `127.0.0.1`；点击模型行的「测试」会向该供应商配置的地址发一次最小请求；点击 OAuth 的「连接」会访问对应登录端点。除此之外只在你主动检查更新时访问 GitHub。
+- 模型供应商的 **API Key 与模型清单**保存在插件的 `data.json`（明文，随插件数据一起同步）；**OAuth 令牌**保存在设备本地存储，不进入 `data.json`。请把 `data.json` 与其中的 Key 当作敏感文件，不要提交到公开仓库或分享给他人。
 - 网页链接只做存储，绝不在后台抓取。
 - 所有界面文案由 i18n 提供简体中文与英语两套资源，并跟随 Obsidian 界面语言。
 

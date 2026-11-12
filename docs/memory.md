@@ -1,5 +1,37 @@
 # memory
 
+## 2026-11-13 · AI tab 新增「模型提供商」（`feat`，团队协作）
+
+**需求（用户口径）**：把 obsidian-yolo 的“模型提供商”设置完整搬到本插件「设置 → AI」：在现有“MCP 服务”分区之后新增“模型提供商”分区，支持供应商列表（可展开）、添加/编辑/删除（卡片内二次确认）、每张卡片下的聊天模型与嵌入模型表、显式连通性测试，以及 ChatGPT / Gemini / Claude / GitHub Copilot 的 OAuth。预设覆盖 OpenAI、ChatGPT OAuth、Anthropic、Claude OAuth、Gemini、Gemini OAuth、GitHub Copilot、OpenRouter、Sidrune AI、xAI、Mistral、Perplexity、Groq、Cerebras、SambaNova、Together AI、Morph、DeepSeek、Moonshot、Zhipu、Doubao、SiliconFlow、StepFun、MiniMax、Hunyuan、Xiaomi MiMo、Azure OpenAI、Amazon Bedrock、Ollama、LM Studio 与自定义 OpenAI 兼容端点。当前插件没有聊天/推理消费方，这些设置只是外部模型接入的**配置层**，文档不得暗示已有聊天功能。
+
+**落点**
+
+- `src/services/ai/contracts.ts`：设置模型、校验码、设置页端口与硬上限（`64` 供应商 / `512` 聊天模型 / `128` 嵌入模型、`32` 自定义 headers、`64` 自定义参数、URL/名称/密钥长度上限）。
+- `src/services/ai/presets.ts`：31 个预设的分类、默认 API 类型、默认 Base URL、可用 API 类型、是否需要 API Key/Base URL、是否支持嵌入、OAuth 类型与额外请求项；`presets.ts` 是预设数据的唯一真源。
+- `src/services/ai/normalize.ts`：`data.json` 的不可信输入规范化（未知 preset/API 类型回落、越界数字丢弃、重复 ID 去重、单条坏记录只丢弃自身）、表单校验、`resolveProviderBaseUrl` / `resolvePrimaryRequestUrl` 请求预览。
+- `src/services/ai/oauth.ts`：ChatGPT 设备码 + 浏览器 PKCE、Gemini 浏览器 PKCE、Claude 手动令牌、GitHub Copilot 设备码；凭据键 `ai-oauth:<providerId>`，宿主再加 `${manifest.id}:` 前缀，**只写设备本地存储**，不进 `data.json`；含过期刷新与 Copilot token 交换。
+- `src/services/ai/connectivity.ts`：模型行“测试”按钮的最小非流式请求（OpenAI-compatible/Responses、Anthropic、Gemini）；Azure OpenAI 与 Amazon Bedrock 明确返回“不支持”。
+- 宿主接线：`src/main.ts` 的 `aiSettings()`（`requestUrl`、`app.loadLocalStorage/saveLocalStorage`、`Platform.isMobile`、`saveSettings`、OAuth 管理器）；保存前走 `validateProvider` / `validateChatModel` / `validateEmbeddingModel`；删除供应商级联删除其模型与设备凭据，修改供应商 ID 时模型一起改挂并断开旧 ID 凭据。
+- 持久化：`settings-model.ts` 增加 `aiProviders` / `aiChatModels` / `aiEmbeddingModels`（默认空数组）；`plugin-data.ts` 调用 `normalizeAiSettings`；三者进入 `data.json`。**API Key 以明文随 `data.json` 保存**（与 MCP 令牌不同），README 与 `docs/05` §10/§12.3 已提醒把 `data.json` 当作敏感文件。
+- 设置页：`ai-settings-page.ts` 保留 MCP 分区；新增 `ai-providers-section.ts`、`ai-providers-view.ts`（纯视图模型）、`ai-provider-picker-modal.ts`、`ai-provider-form-modal.ts`、`ai-model-form-modal.ts`。AI tab 仍由 `settings.ts` 的 `availability: "desktop"` 限定，**桌面端专属**；移动端不渲染、不提供入口。
+- i18n：`settings.ai.providers.*` / `settings.ai.models.*`（EN/ZH 同步）；预设品牌名属于产品数据，不翻译。
+- 文档：README 中英新增“模型提供商”一节与网络/隐私条目；`docs/01` P1 与非目标、`docs/02` §AI 模型提供商、`docs/05` §9.1/§10/§12.3、`docs/06` 模型提供商验收；`THIRD_PARTY_NOTICES.md` 的 obsidian-yolo（MIT，commit `90f3e183e23304ed85e028175d31887e3827a958`）来源由 Lead 维护，本任务未改。
+
+**OAuth client 常量来源与 MIT**：ChatGPT 设备码/浏览器 PKCE、Gemini、GitHub Copilot 的 OAuth client 常量、预设与默认请求规则改编自 [obsidian-yolo](https://github.com/Lapis0x0/obsidian-yolo)（MIT），已记录在 `THIRD_PARTY_NOTICES.md`。这些是产品内置的应用凭据常量，不是用户配置项；`contracts.ts`/`normalize.ts` 虽然保留了 `additionalSettings.oauthClientId/oauthClientSecret` 字段作为可选覆盖，但当前没有任何预设声明它们，因此表单不显示 OAuth client 输入。改动常量前先核对上游与许可声明。
+
+**已知风险 / 取舍**
+
+- **API Key 明文在 `data.json`**：插件数据会随用户同步/备份；界面不回显 Key 与令牌，日志与错误消息不记录它们。文档必须持续提醒 `data.json` 的敏感性。
+- **AI tab 桌面端专属**：`settings.ts` 的 `availability: "desktop"` 复用 `isMcpSupported`，移动端整页不渲染；页面内部的 `isDesktop` 与手动令牌只是桌面端之外的兜底，不构成移动端入口。文档按“AI tab 仅桌面端”写，不承诺移动端可配置供应商。
+- **无聊天/推理消费方**：除 OAuth 登录与用户点击模型“测试”外没有模型请求；打开 AI 设置页、保存配置、插件启动都不主动拉取模型或发送笔记内容。注意已连接 OAuth 的令牌在读取状态时可能自动续期一次（当前实现：Copilot 短期 token 过期/缺失时 `status()` 后台换取 token，`test/ai-oauth` 明确覆盖），属于登录会话维护，不是模型调用。搜索/写文件也不使用这些配置。
+- 预设中的第三方品牌、默认端点与 OAuth 常量可能变化；文档只列名称与能力，不承诺具体模型目录、价格或可用性。
+
+**验证（2026-11-13 01:2x）**
+
+- `npm run check` = **0 错误**；`npm test` = **1126 / 1126 通过、0 失败**（在 `danger-full-access` 会话中运行，esbuild 的 `spawn` 可用；workspace-write 沙箱下 `tsx`/esbuild 仍会 `spawn EPERM`）；`npm run build` 成功，`main.js` 4.96 MB、`styles.css` 83 KB、`manifest.json` 235 B，均低于发布上限。
+- 新增测试：`test/ai-settings-normalize.test.ts`、`test/ai-oauth.test.ts`、`test/ai-connectivity.test.ts`、`test/ai-providers-view.test.ts`；`test/ai-settings-page.test.ts` 补 `app`/`ai`/`Modal` 桩并保留原 MCP 断言；`test/settings-index-wiring.test.ts` 的样式检查拆成 MCP 段与 AI provider 段（后者允许 `var(--text-*)` 主题变量、仍禁止硬编码颜色与渐变）。
+- **仍未做**：真实 Obsidian 桌面端人工验收（picker 分类/搜索、表单校验、卡片展开、5 秒删除确认、OAuth 真机流程、Claude 手动令牌、每模型测试的成功/失败/不支持、密钥不回显、移动端无 AI tab）。OAuth 与连通性测试均为注入假 HTTP 的单元测试，没有真实账号/真实网络验收，文档不得写成“已验证可用”。
+
 ## 2026-11-12 · 视图右下角小地图（`feat`，团队协作）
 
 **需求（用户口径）**：在导图视图右下角加一个整棵树的小地图，标出当前可见区域，便于在大型导图中快速定位；尺寸按显示分辨率取 12%，小画布上再收缩；配色跟随当前树主题；可在「基础设置」关闭，默认开启。

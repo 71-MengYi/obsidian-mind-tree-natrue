@@ -147,6 +147,23 @@
 12. 协议层、工具目录、客户端配置、会话写入与传输全部有自动化测试；纯协议模块零 Obsidian 依赖。
 
 
+## 模型提供商验收
+
+满足以下条件才视为模型提供商配置完成（P1，配置层，不包含聊天/推理）：
+
+1. **预设与选择器**：预设目录覆盖 OpenAI、ChatGPT OAuth、Anthropic、Claude OAuth、Gemini、Gemini OAuth、GitHub Copilot、OpenRouter、Sidrune AI、xAI、Mistral、Perplexity、Groq、Cerebras、SambaNova、Together AI、Morph、DeepSeek、Moonshot、Zhipu、Doubao、SiliconFlow、StepFun、MiniMax、Hunyuan、Xiaomi MiMo、Azure OpenAI、Amazon Bedrock、Ollama、LM Studio 与“自定义提供商”；每个预设的分类、默认 API 类型、默认 Base URL、是否需要 API Key/Base URL、是否支持嵌入、OAuth 类型与额外请求项都有纯数据测试。选择器支持分类 chips、按名称/preset id 搜索、无匹配空态与自定义 tile。
+2. **供应商 CRUD**：新增、编辑、删除都立即保存并刷新卡片列表；卡片默认收起，可展开查看模型；删除为卡片内**二次点击确认（约 5 秒超时）**且无弹窗，删除供应商会级联删除其聊天/嵌入模型并清除设备上的 OAuth 凭据；修改供应商 ID 后其模型改挂到新 ID、旧 ID 的 OAuth 凭据被断开；供应商数量上限 `64`。
+3. **表单与校验**：ID 必填、唯一、以字母/数字开头且只含点/横线/下划线；按预设要求 API Key；自定义提供商与 Azure OpenAI 必须填 Base URL；URL 只接受不带凭据的 http/https；Azure OpenAI 必须填部署名与 API 版本，Amazon Bedrock 必须填区域；temperature `0–2`、topP `0–1`、token 与维度为正数且有硬上限；自定义请求头上限 `32`、自定义参数上限 `64`；所有失败都在表单内提示且不保存。
+4. **模型**：聊天模型表包含名称、模型、启用（切换即保存）与操作，嵌入模型表包含名称、模型、维度与操作；两张表都能增删改、有空态；预设不支持嵌入时不显示添加入口并说明原因；模型 ID 在同一类模型中唯一，加载 `data.json` 时跨两类去重；数量上限 `512 / 128`。
+5. **连通性测试**：只有点击模型行“测试”才发出一次最小非流式请求；成功显示延迟、失败显示截断后的原因；测试使用该供应商的 API Key 或设备本地 OAuth 凭据、自定义请求头与解析后的地址，不发送笔记内容；Azure OpenAI 与 Amazon Bedrock 明确返回“不支持”；打开 AI 设置页、保存设置与插件启动都不主动拉取模型或发送笔记内容，已连接 OAuth 的令牌在读取状态时可能自动续期一次（登录会话维护，非模型调用）。
+6. **OAuth 状态**：ChatGPT（设备码，服务层另实现浏览器 PKCE）、Gemini（浏览器 PKCE）、GitHub Copilot（设备码）与 Claude（手动令牌）都能进入未连接、等待授权、已连接、出错四类状态；等待授权显示设备码与验证页入口，已连接可显示账号，出错显示原因；连接、取消、断开与手动保存令牌均可用；OAuth 流程只在桌面端提供。
+7. **密钥边界**：界面任何位置都不回显 API Key 或 OAuth 令牌；编辑供应商时 API Key 留空表示保留原值；OAuth 凭据只写设备本地存储（`${manifest.id}:ai-oauth:<providerId>`），不进入 `data.json`；API Key 与模型配置进入 `data.json`，文档与界面都明确提示其为明文敏感数据。
+8. **数据迁移与损坏输入**：旧 `data.json` 没有这些字段时得到空列表；未知 preset/API 类型回落到预设默认值；越界数字、非法 URL、重复 ID 与单条损坏记录被丢弃而不影响其余记录；读取与规范化不触发自动写回，`data.json` 仍只包含 `settings`。
+9. **移动端**：移动端不渲染「AI」tab，不启动 MCP 服务，不发起 OAuth 或连通性请求；把桌面端含供应商配置的 `data.json` 同步到移动端后，插件仍正常加载且不出现入口。
+10. **隐私与日志**：默认不联网；日志与错误消息不记录 API Key、OAuth 令牌、请求头或响应正文，最多记录方法、状态与延迟；文档明确“用户点击测试/连接才会请求”。
+11. **自动化与人工验收**：预设/规范化/校验/视图模型/OAuth/连通性有纯数据测试，设置页接线有静态断言；真实 Obsidian 内的桌面端人工验收（picker、表单、卡片展开、删除二次确认、OAuth 真机流程、测试结果与错误文案）仍以本轮收尾的实测记录为准，未完成前不得写成“已验收”。
+
+
 ## 设置与本机索引隔离验收
 
 - `data.json` 仅输出用户设置；扫描、关联、移动、重建、卸载不夹带旧设置保存。

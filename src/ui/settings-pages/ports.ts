@@ -1,10 +1,14 @@
+import type { App } from "obsidian";
 import type { MindTreeSettings } from "../../settings-model";
 import type { ResourceIndexProgress, ResourceIndexReport } from "../../services/resource-catalog";
 import type { UpdateState } from "../../services/updates/update-coordinator";
 import type { McpEndpointState, McpPageState } from "../../services/mcp/settings-page-model";
+import type { AiSettingsPagePort } from "../../services/ai/contracts";
 
 /** Settings pages mutate only the supplied model and named persistence ports. */
 export interface SettingsPagePort {
+  /** Obsidian host, needed by modal-backed subpages. */
+  readonly app: App;
   readonly settings: MindTreeSettings;
   readonly save: () => Promise<void>;
   readonly refreshOpenLayouts: () => void;
@@ -15,6 +19,7 @@ export interface SettingsPagePort {
     subscribe(listener: (state: UpdateState) => void): () => void;
   };
   readonly mcp: McpSettingsPagePort;
+  readonly ai: AiSettingsPagePort;
 }
 
 /**

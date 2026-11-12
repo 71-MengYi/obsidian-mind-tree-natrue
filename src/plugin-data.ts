@@ -8,6 +8,7 @@ import {
   type MindTreeSettings
 } from "./settings-model";
 import { normalizeNodeWrapWidth } from "./render/layout";
+import { normalizeAiSettings } from "./services/ai/normalize";
 import {
   COLLECTION_MODE_OPTIONS,
   LAYOUT_OPTIONS,
@@ -32,6 +33,7 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
   const root = asRecord(value);
   const settings = asRecord(root?.["settings"]);
   const legacyCollectionMode = settings?.["defaultCollectionMode"] ?? settings?.["scanSameFolder"];
+  const ai = normalizeAiSettings(settings);
   return {
     settings: {
       autoCheckUpdates: safeBoolean(settings?.["autoCheckUpdates"], DEFAULT_SETTINGS.autoCheckUpdates),
@@ -86,7 +88,10 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
       mcpPort: normalizeMcpPort(settings?.["mcpPort"])
         ?? normalizeMcpPort(settings?.["mcpReadPort"])
         ?? normalizeMcpPort(settings?.["mcpWritePort"])
-        ?? DEFAULT_SETTINGS.mcpPort
+        ?? DEFAULT_SETTINGS.mcpPort,
+      aiProviders: ai.providers,
+      aiChatModels: ai.chatModels,
+      aiEmbeddingModels: ai.embeddingModels
     }
   };
 }

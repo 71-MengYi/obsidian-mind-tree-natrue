@@ -7,6 +7,7 @@ import { UpdateError, type PluginRelease, type ReleaseClient } from "../src/serv
 import { UpdateCoordinator, type UpdateRuntime, type UpdateState } from "../src/services/updates/update-coordinator";
 import type { UpdateStore } from "../src/services/updates/update-store";
 import { unsupportedMcpSettingsPort, type SettingsPagePort } from "../src/ui/settings-pages/ports";
+import { unsupportedAiSettingsPort } from "../src/services/ai/contracts";
 
 // Isolate the Obsidian boundary without changing module hooks shared by other tests.
 // The plugin, modal, settings section, translations and coordinator run unchanged.
@@ -286,10 +287,11 @@ test("settings View update reopens the cached release without checking or instal
     const f = fixture(language); const modal = await f.open(); modal.close();
     const Section = f.load("/plugin-update-section.js").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
     const parent = f.app.document.createElement("div");
-    const port: SettingsPagePort = { settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
+    const port: SettingsPagePort = { app: {} as SettingsPagePort["app"], settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
       refreshOpenLayouts() {}, rebuildResourceIndex: async () => assert.fail(),
       updates: { check: () => f.updates.check(), showAvailable: () => f.plugin.showAvailableUpdate(),
-        subscribe: (listener) => f.updates.subscribe(listener) }, mcp: unsupportedMcpSettingsPort() };
+        subscribe: (listener) => f.updates.subscribe(listener) }, mcp: unsupportedMcpSettingsPort(),
+      ai: unsupportedAiSettingsPort() };
     const section = new Section(parent, port);
     const view = parent.all().find((element) => element.text === viewText)!;
     assert.equal(view.hidden, false); view.click();
@@ -307,10 +309,11 @@ test("pending restart and actionable write errors are localized without offering
     const f = fixture(language);
     const Section = f.load("/plugin-update-section.js").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
     let state: UpdateState = { phase: "restart-required", currentVersion: "1.0.1", installedVersion: "1.0.2" };
-    const port: SettingsPagePort = { settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
+    const port: SettingsPagePort = { app: {} as SettingsPagePort["app"], settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
       refreshOpenLayouts() {}, rebuildResourceIndex: async () => assert.fail(),
       updates: { check: async () => assert.fail(), showAvailable: () => assert.fail(),
-        subscribe(listener) { listener(state); return () => {}; } }, mcp: unsupportedMcpSettingsPort() };
+        subscribe(listener) { listener(state); return () => {}; } }, mcp: unsupportedMcpSettingsPort(),
+      ai: unsupportedAiSettingsPort() };
     const parent = f.app.document.createElement("div");
     const section = new Section(parent, port);
     const status = parent.all().find((element) => element.attributes.role === "status")!;

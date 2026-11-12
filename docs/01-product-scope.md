@@ -23,7 +23,7 @@ Mind Tree Nature 是一个用于 Obsidian 的交互式思维导图插件。它�
 - 不实现多人实时协作，也不实现任何把仓库内容上传出去的服务端；同步交由用户现有的 Obsidian 同步方案。唯一的入站服务是本机回环地址上的 MCP 服务（见 4.2 与 `05-technical-design.md` §12），它默认关闭、只绑定 `127.0.0.1`、必须由用户显式开启。
 - 不实现通用画布、自由连线、流程图或任意图结构；首个版本只处理有序树。
 - 不抓取、缓存或总结网页正文；URL 节点只保存标题、地址和可选图标。
-- 不提供云端 AI 能力；AI 直接读取文档中的 Markdown 大纲，或通过本机 MCP 服务读取结构化节点。
+- 不提供聊天、问答或推理界面。插件只提供**外部模型提供商的接入配置层**（供应商、API Key、Base URL、聊天/嵌入模型与 OAuth），不负责调用模型，也不把笔记内容发给模型；AI 仍直接读取文档中的 Markdown 大纲，或通过本机 MCP 服务读取结构化节点。
 - 不替代 Obsidian 的全文搜索、文件管理器和模板插件。
 
 ## 2. 术语与核心概念
@@ -92,6 +92,7 @@ Mind Tree Nature 是一个用于 Obsidian 的交互式思维导图插件。它�
 - 导图内搜索、缩略图导航、适应画布。
 - “将关联文件移动到”及包含子节点全部关联文件的批量移动。
 - 本机 MCP 服务（仅桌面端，默认关闭）：在 Obsidian 内启动**一个**只监听 `127.0.0.1` 的 MCP 服务器 `mind-tree-nature`（默认端口 27321），让 Claude Desktop、Cursor 等 MCP 客户端直接读写思维树；「设置 → AI」提供一键复制客户端配置 JSON（含一条服务器记录）。服务器承载**全部 18 个工具**：9 个只读工具（列出/读取思维树、按标题查找节点、读取节点及其父/子/标题路径/关联信息/统计）与 9 个会改动的工具（新增/移动/重命名/删除节点、关联与取消关联文件、建立与取消同文档节点关联，以及新建整棵思维树）。插件不按工具拦截调用；MCP 客户端的审批策略只能挂在服务器上，因此读与写**共用同一条客户端审批策略**——这是本轮把只读与修改合并为单服务器的明确取舍，产品不再提供「读取免审批、写入需确认」的分权。端口与令牌保存在设备本地存储，不进入 `data.json`，也不会同步到其他设备。移动端不加载、不启动该服务器。
+- 外部模型提供商配置（P1，**配置层**）：在「设置 → AI」的 MCP 分区之后新增「模型提供商」分区，支持 OpenAI、ChatGPT OAuth、Anthropic、Claude OAuth、Gemini、Gemini OAuth、GitHub Copilot、OpenRouter、Sidrune AI、xAI、Mistral、Perplexity、Groq、Cerebras、SambaNova、Together AI、Morph、DeepSeek、Moonshot、Zhipu、Doubao、SiliconFlow、StepFun、MiniMax、Hunyuan、Xiaomi MiMo、Azure OpenAI、Amazon Bedrock、Ollama、LM Studio 与自定义 OpenAI 兼容端点。每个供应商可配置 API 类型、API Key、Base URL 与请求方式/流式模式等高级项，并挂载聊天模型（模型 ID、显示名、启用、reasoning 类型、temperature、topP、上下文/输出 token、输入模态、内置工具族、自定义参数）与嵌入模型（模型 ID、显示名、维度）；每张模型行提供**显式点击**的连通性测试，OAuth 覆盖 ChatGPT、Gemini、Claude 与 GitHub Copilot。OAuth 凭据只保存在设备本地存储，API Key 与模型配置保存在 `data.json`；AI tab 仅在桌面端出现。该能力**没有聊天或推理消费方**，配置不会被插件主动使用，也不代表插件已具备问答能力。
 
 ### 4.3 P2：后续探索
 

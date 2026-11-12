@@ -59,7 +59,7 @@
 mind-tree-nature/
 ├── agent.md                    ← 本文件：Agent 规则与索引
 ├── src/                        源码（169 个 .ts，唯一的开发区域）
-├── test/                       单元测试（99 个 *.test.ts + test/helpers/）
+├── test/                       单元测试（103 个 *.test.ts + test/helpers/）
 ├── docs/                       产品与技术基线文档（Agent 必读，见第 4 节）
 ├── assets/                     README 用图片（mind-tree-nature-header.png）
 ├── .github/
@@ -100,7 +100,7 @@ src/
 ├── format/      (9)  .mtn.md 格式：document.ts、outline.ts、mermaid.ts（分支 → Mermaid mindmap 代码块）、migrations.ts、document-identity.ts、resource-id.ts、node-title.ts、regions.ts（数据区/大纲区定位，内容索引、与行号无关）、yaml-patch.ts（只补丁插件拥有的 YAML 键，注释与键序逐字节保留）
 ├── i18n/        (2)  catalog.ts（EN 真源 + ZH）、index.ts（t()）
 ├── render/      (10) ★ 中性渲染层（零 ui、零 services、零 Obsidian）：layout、text-measurer(纯)、resource-badges(纯)、image-nodes(纯)、presentation、theme-presets、viewport、minimap(纯投影)、color、inline-math
-├── services/   (26)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）/保存计划（`save-plan.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线
+├── services/   (26)  会话/冲突/资源/模板/导出/设置持久化/分支引用解析/稳定读取（`stable-source-read.ts`）/保存计划（`save-plan.ts`）等；updates/ 另有 7 个自更新文件，mcp/ 另有 MCP 协议与宿主接线，ai/ 另有模型提供商预设/校验/OAuth/连通性测试
 └── ui/         (21)  视图与全部 DOM/SVG：
     ├── components/     (15) view-shell（含 StatusIndicator）、canvas-shell、工具栏、状态栏、预览、笔记内嵌分支视图、小地图、ui-object 基类
     ├── controllers/    (13) 画布交互、键盘、拖拽、触摸手势、剪贴板、搜索、图片缩放、键盘避让…
@@ -273,7 +273,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 5. 测试结构
 
-- 位置：`test/*.test.ts`（**平铺**，99 个文件，1053 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
+- 位置：`test/*.test.ts`（**平铺**，103 个文件，1126 个用例）+ `test/helpers/`（1 个共享桩）。**沙箱基线 = 7 个必然失败**（`spawn EPERM`：`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），另有 `test/mcp-http-transport.test.ts` 的端口占用抖动；**判定回归前先单独重跑该文件**。
 - 框架：`node:test` + `node:assert/strict`，由 `tsx` 运行；所有文件在**同一进程**（`--test-isolation=none`），全局状态泄漏会互相污染。
 - 命名：多数与源文件同名（`src/format/document.ts` ↔ `test/format.test.ts`）；少数按主题聚合（`exchange.test.ts` 覆盖导入导出与剪贴板、`safety.test.ts` 覆盖数据安全、`identity-repair.test.ts` 覆盖身份恢复）。
 - 风格：优先**纯数据测试**——用注入端口/时钟替代真实 Obsidian；断言行为而不是实现细节。
@@ -450,4 +450,4 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ---
 
-*最后核对：2026-11-12 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*
+*最后核对：2026-11-13 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」、2026-11-13「AI 模型提供商设置」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。*

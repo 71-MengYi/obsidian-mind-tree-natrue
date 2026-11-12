@@ -11,6 +11,7 @@ import {
   type McpServerModel,
   type McpSettingsStatus
 } from "../../services/mcp/settings-page-model";
+import { AiProvidersSection } from "./ai-providers-section";
 import type { SettingsPageObject, SettingsPagePort } from "./ports";
 
 /**
@@ -59,6 +60,7 @@ export class AiSettingsPage implements SettingsPageObject {
   private readonly configSection: HTMLElement;
   private readonly copyFeedback: HTMLElement;
   private readonly notice: HTMLElement;
+  private readonly providers: AiProvidersSection;
   private copyFeedbackTimer?: ReturnType<typeof setTimeout>;
 
   constructor(parent: HTMLElement, private readonly port: SettingsPagePort) {
@@ -122,15 +124,21 @@ export class AiSettingsPage implements SettingsPageObject {
       text: describeMcpStatus({ kind: "unsupported" })
     });
 
+    // The provider settings follow the MCP section: one tab for every external
+    // integration. The section owns its own heading, cards and modals, and reads
+    // its data from the AI port; this page only supplies the container and App.
+    this.providers = new AiProvidersSection(parent, port.ai, port.app);
+
     this.applyModel(model);
   }
 
   /**
-   * Only the copy confirmation timer is owned by this page: every listener sits
-   * on an element inside the settings panel, which the host drops wholesale
-   * when the tab is hidden.
+   * The copy confirmation timer and the provider section are this page's only
+   * owned state: every other listener sits on an element inside the settings
+   * panel, which the host drops wholesale when the tab is hidden.
    */
   destroy(): void {
+    this.providers.destroy();
     if (this.copyFeedbackTimer === undefined) return;
     clearTimeout(this.copyFeedbackTimer);
     this.copyFeedbackTimer = undefined;

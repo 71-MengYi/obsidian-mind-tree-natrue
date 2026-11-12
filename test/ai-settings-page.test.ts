@@ -12,6 +12,8 @@ import {
 } from "../src/settings-model";
 import { MCP_SERVER_NAME, mcpUrl } from "../src/services/mcp/connection";
 import type { McpPageState, McpSettingsStatus } from "../src/services/mcp/settings-page-model";
+import { unsupportedAiSettingsPort } from "../src/services/ai/contracts";
+import type { App } from "obsidian";
 import type { SettingsPagePort } from "../src/ui/settings-pages/ports";
 
 // Exercise the real AI settings page with only the Obsidian helpers it uses
@@ -245,7 +247,9 @@ function evaluate(): Sandbox {
     clearTimeout: (id: number) => { timers.delete(id); },
     require: (id: string) => {
       assert.equal(id, "obsidian");
-      return { getLanguage: () => "en", Setting: SandboxSetting };
+      // The provider section loads its modals lazily; the stub still needs a
+      // Modal base so a clicked action could never crash on a missing class.
+      return { getLanguage: () => "en", Setting: SandboxSetting, Modal: class {} };
     }
   });
   return { Page: module.exports["AiSettingsPage"] as PageConstructor, settings, timers, document };
@@ -358,6 +362,7 @@ function fixture(options: HarnessOptions = {}): Harness {
 
   const port: SettingsPagePort = {
     settings,
+    app: {} as App,
     save: async () => { calls.push("save"); },
     refreshOpenLayouts: () => { calls.push("refresh"); },
     rebuildResourceIndex: async () => assert.fail("the AI page never rebuilds the file index"),
@@ -404,7 +409,11 @@ function fixture(options: HarnessOptions = {}): Harness {
         copied.push(text);
         return options.copySucceeds ?? true;
       }
-    }
+    },
+    // The provider section is out of scope here; an unsupported port renders
+    // its standing notice and no provider rows, leaving the MCP assertions
+    // exactly as they were.
+    ai: unsupportedAiSettingsPort()
   };
 
   const page = new sandbox.Page(root, port);

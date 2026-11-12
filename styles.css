@@ -1889,6 +1889,429 @@
   font-size: var(--font-ui-smaller);
 }
 
+/* ── AI model providers: settings cards, model tables, picker and forms ───── */
+
+/*
+ * The provider section lives below the MCP block. It is a vertical stack of
+ * cards; nothing here paints a background or an entrance animation, so the
+ * section inherits the settings pane's surface and stays cheap to redraw while
+ * an OAuth flow polls once a second.
+ */
+.mtn-ai-provider-section {
+  margin-top: 18px;
+}
+
+.mtn-ai-provider-section-heading {
+  margin-top: 0;
+}
+
+.mtn-ai-provider-section-desc {
+  margin-top: 0;
+}
+
+.mtn-ai-provider-section-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 10px 0;
+}
+
+.mtn-ai-provider-section-count {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-section-add {
+  margin-left: auto;
+}
+
+.mtn-ai-provider-section-empty {
+  margin-top: 4px;
+}
+
+.mtn-ai-provider-section-error {
+  margin-top: 8px;
+  color: var(--text-error);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.mtn-ai-provider-section-notice {
+  margin-top: 12px;
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-section-error[hidden],
+.mtn-ai-provider-section-notice[hidden],
+.mtn-ai-provider-section-empty[hidden] {
+  display: none;
+}
+
+.mtn-ai-provider-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.mtn-ai-provider-card {
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-m);
+  padding: 10px 12px;
+}
+
+.mtn-ai-provider-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+}
+
+/* The disclosure is an icon-sized control, so the header keeps its one row. */
+.mtn-ai-provider-expand {
+  flex: 0 0 auto;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: none;
+  box-shadow: none;
+}
+
+.mtn-ai-provider-identity {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  min-width: 0;
+}
+
+.mtn-ai-provider-name {
+  font-weight: var(--font-semibold);
+  overflow-wrap: anywhere;
+}
+
+.mtn-ai-provider-preset,
+.mtn-ai-provider-api {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-api {
+  padding: 0 6px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+}
+
+.mtn-ai-provider-status {
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+/*
+ * Status is spelled out in words; the variable-coloured text is a second cue,
+ * not the only one, and the kind also rides on `data-status` for tests.
+ */
+.mtn-ai-provider-status[data-status="api-key"],
+.mtn-ai-provider-status[data-status="oauth-connected"],
+.mtn-ai-model-test-status[data-result="ok"] {
+  color: var(--text-success);
+}
+
+.mtn-ai-provider-status[data-status="no-api-key"],
+.mtn-ai-provider-status[data-status="oauth-disconnected"],
+.mtn-ai-provider-status[data-status="oauth-pending"],
+.mtn-ai-model-test-status[data-result="testing"] {
+  color: var(--text-warning);
+}
+
+.mtn-ai-provider-status[data-status="oauth-error"],
+.mtn-ai-model-test-status[data-result="failed"] {
+  color: var(--text-error);
+}
+
+.mtn-ai-provider-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.mtn-ai-provider-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+  padding-top: 10px;
+  border-top: 1px solid var(--background-modifier-border);
+}
+
+.mtn-ai-provider-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 8px;
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-field-label {
+  min-width: 80px;
+  color: var(--text-muted);
+}
+
+.mtn-ai-provider-field-value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.mtn-ai-provider-field-hint {
+  margin: 0;
+}
+
+.mtn-ai-model-section,
+.mtn-ai-provider-oauth {
+  min-width: 0;
+}
+
+.mtn-ai-model-section {
+  overflow-x: auto;
+}
+
+.mtn-ai-model-section > h5,
+.mtn-ai-provider-oauth > h5 {
+  margin: 0 0 6px;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.mtn-ai-model-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.mtn-ai-model-table th,
+.mtn-ai-model-table td {
+  padding: 4px 6px;
+  border-bottom: 1px solid var(--background-modifier-border);
+  font-size: var(--font-ui-smaller);
+  text-align: left;
+  vertical-align: top;
+}
+
+.mtn-ai-model-table th {
+  color: var(--text-muted);
+  font-weight: var(--font-medium);
+}
+
+.mtn-ai-model-table code {
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.mtn-ai-model-enable {
+  text-align: center;
+}
+
+.mtn-ai-model-actions {
+  min-width: 168px;
+}
+
+.mtn-ai-model-action-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+}
+
+.mtn-ai-model-test-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-model-add {
+  margin-top: 6px;
+}
+
+.mtn-ai-provider-oauth {
+  padding-top: 10px;
+  border-top: 1px dashed var(--background-modifier-border);
+}
+
+.mtn-ai-provider-oauth-desc {
+  margin-top: 0;
+}
+
+.mtn-ai-provider-oauth-status {
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-oauth-code {
+  display: inline-block;
+  margin: 6px 0;
+  padding: 2px 8px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s);
+  font-size: var(--font-ui-medium);
+  letter-spacing: 0.08em;
+  user-select: all;
+}
+
+.mtn-ai-provider-oauth-verify {
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-oauth-waiting,
+.mtn-ai-provider-oauth-hint {
+  margin-top: 4px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-oauth-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.mtn-ai-provider-oauth-token-error[hidden] {
+  display: none;
+}
+
+/* ── Provider picker ─────────────────────────────────────────────────────── */
+
+.mtn-ai-provider-picker-modal {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.mtn-ai-provider-picker-search {
+  margin-bottom: 10px;
+}
+
+.mtn-ai-provider-picker-search input {
+  width: 100%;
+}
+
+.mtn-ai-provider-picker-categories {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.mtn-ai-provider-picker-chip {
+  border-radius: var(--radius-l);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-picker-chip.is-active {
+  box-shadow: inset 0 0 0 1px var(--interactive-accent);
+  font-weight: var(--font-semibold);
+}
+
+.mtn-ai-provider-picker-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.mtn-ai-provider-picker-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  min-height: 54px;
+  padding: 8px 10px;
+  text-align: left;
+  white-space: normal;
+}
+
+.mtn-ai-provider-picker-tile.is-custom {
+  outline: 1px dashed var(--background-modifier-border);
+  outline-offset: -2px;
+}
+
+.mtn-ai-provider-picker-tile-label {
+  font-weight: var(--font-medium);
+}
+
+.mtn-ai-provider-picker-tile-desc {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-ai-provider-picker-empty[hidden] {
+  display: none;
+}
+
+/* ── Provider and model forms ────────────────────────────────────────────── */
+
+.mtn-ai-provider-form-modal,
+.mtn-ai-model-form-modal {
+  width: min(640px, calc(100vw - 32px));
+}
+
+.mtn-ai-provider-form,
+.mtn-ai-model-form {
+  display: flex;
+  flex-direction: column;
+}
+
+.mtn-ai-provider-form > h5,
+.mtn-ai-model-form > h5 {
+  margin: 16px 0 6px;
+  font-size: var(--font-ui-small);
+  font-weight: var(--font-semibold);
+}
+
+.mtn-ai-provider-preview {
+  margin: 2px 0 10px;
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+  overflow-wrap: anywhere;
+}
+
+.mtn-ai-provider-form-actions,
+.mtn-ai-model-form-actions {
+  margin-top: 8px;
+}
+
+.mtn-ai-provider-form-header-row,
+.mtn-ai-model-form-parameter-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.mtn-ai-provider-form-header-key,
+.mtn-ai-model-form-parameter-key {
+  flex: 1 1 120px;
+  min-width: 0;
+}
+
+.mtn-ai-provider-form-header-value,
+.mtn-ai-model-form-parameter-value {
+  flex: 2 1 180px;
+  min-width: 0;
+}
+
+.mtn-ai-model-form-parameter-type {
+  flex: 0 0 auto;
+}
+
+.mtn-ai-provider-form-add-row,
+.mtn-ai-model-form-add-row {
+  margin-top: 2px;
+}
+
+.mtn-ai-model-modality {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 10px;
+}
+
 /* ── Manage markers: emoji grid and text tag grid ─────────────────────────── */
 
 /* An empty grid collapses completely, so the section keeps no reserved space. */

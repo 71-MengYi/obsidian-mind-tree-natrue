@@ -194,3 +194,37 @@ test("the merged switch survives independently of a damaged port", () => {
   assert.equal(normalized.settings.mcpEnabled, true);
   assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
 });
+
+test("AI providers and models survive plugin-data normalization without leaking OAuth tokens", () => {
+  const normalized = normalizePluginData({
+    settings: {
+      aiProviders: [{
+        id: "openai",
+        preset: "openai",
+        apiType: "openai-responses",
+        apiKey: "sk-test",
+        baseUrl: "https://api.openai.com/v1"
+      }],
+      aiChatModels: [{
+        id: "openai/gpt",
+        providerId: "openai",
+        model: "gpt",
+        enable: true
+      }],
+      aiEmbeddingModels: [{
+        id: "openai/emb",
+        providerId: "openai",
+        model: "text-embedding-3-small",
+        dimension: 1536
+      }],
+      // Device-local OAuth material must never be accepted from data.json.
+      oauthAccessToken: "secret",
+      aiOAuth: { accessToken: "secret" }
+    }
+  });
+  assert.deepEqual(normalized.settings.aiProviders.map((provider) => provider.id), ["openai"]);
+  assert.equal(normalized.settings.aiProviders[0]?.apiKey, "sk-test");
+  assert.deepEqual(normalized.settings.aiChatModels.map((model) => model.id), ["openai/gpt"]);
+  assert.equal(normalized.settings.aiEmbeddingModels[0]?.dimension, 1536);
+  assert.equal(JSON.stringify(normalized.settings).includes("secret"), false);
+});

@@ -30,6 +30,20 @@ import { normalizePluginData, type PluginData } from "./plugin-data";
 import { DEFAULT_SETTINGS, MindTreeSettingTab, type MindTreeSettings } from "./settings";
 import { createParseOptions, normalizeMcpPort } from "./settings-model";
 import { unsupportedMcpSettingsPort, type McpSettingsPagePort } from "./ui/settings-pages/ports";
+import type {
+  AiChatModelConfig,
+  AiConnectStart,
+  AiEmbeddingModelConfig,
+  AiOAuthAuthorization,
+  AiOAuthStatus,
+  AiProviderConfig,
+  AiSettingsPagePort,
+  AiTestResult
+} from "./services/ai/contracts";
+import { validateChatModel, validateEmbeddingModel, validateProvider } from "./services/ai/normalize";
+import { aiPresetInfo } from "./services/ai/presets";
+import { AiOAuthManager, type AiHttpPort } from "./services/ai/oauth";
+import { testChatModel, testEmbeddingModel } from "./services/ai/connectivity";
 import {
   CHAIN_BROKEN_ICON,
   CHAIN_BROKEN_ICON_SVG,
@@ -83,6 +97,7 @@ export default class MindTreeNaturePlugin extends Plugin {
    */
   private mcpServer?: McpServerController;
   private mcpReader?: MindTreeReader;
+  private aiOAuth?: AiOAuthManager;
 
 
   async onload(): Promise<void> {
@@ -1112,6 +1127,215 @@ export default class MindTreeNaturePlugin extends Plugin {
         await this.mcpServer?.stop();
       },
       copyText: (text) => copyToClipboard(text)
+    };
+  }
+
+  /**
+   * AI tab: model providers and their models.
+   *
+   * The settings page owns no persistence and no network: it reads one resolved
+   * snapshot and calls these named operations. OAuth credentials never enter
+   * `data.json`; they live in device-local storage through the manager below.
+   */
+  aiSettings(): AiSettingsPagePort {
+    const http: AiHttpPort = {
+      request: async (request) => {
+        const response = await requestUrl({
+          url: request.url,
+          method: request.method,
+          headers: request.headers,
+          body: request.body,
+          throw: false
+        });
+        let json: unknown;
+        try {
+          json = response.json as unknown;
+        } catch {
+          // Obsidian's `json` getter throws for non-JSON bodies; the raw text
+          // is still meaningful to the caller.
+          json = undefined;
+        }
+        return { status: response.status, text: response.text, json };
+      }
+    };
+    const storagePrefix = `${this.manifest.id}:`;
+    const oauth = this.aiOAuth ??= new AiOAuthManager({
+      http,
+      storage: {
+        load: (key) => this.app.loadLocalStorage(storagePrefix + key),
+        save: (key, value) => this.app.saveLocalStorage(storagePrefix + key, value),
+        remove: (key) => this.app.saveLocalStorage(storagePrefix + key, null)
+      },
+      openExternal: (url) => {
+        try {
+          const parsed = new URL(url);
+          if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+            window.open(parsed.toString(), "_blank", "noopener,noreferrer");
+          }
+        } catch {
+          // A malformed authorize URL is reported by the OAuth flow itself.
+        }
+      },
+      isDesktop: () => !Platform.isMobile,
+      logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
+    });
+
+    const providerOf = (providerId: string): AiProviderConfig | undefined =>
+      this.settings.aiProviders.find((provider) => provider.id === providerId);
+    const chatModelOf = (modelId: string): AiChatModelConfig | undefined =>
+      this.settings.aiChatModels.find((model) => model.id === modelId);
+    const embeddingModelOf = (modelId: string): AiEmbeddingModelConfig | undefined =>
+      this.settings.aiEmbeddingModels.find((model) => model.id === modelId);
+    const requireProvider = (providerId: string): AiProviderConfig => {
+      const provider = providerOf(providerId);
+      if (!provider) throw new Error("AI provider no longer exists");
+      return provider;
+    };
+    const oauthProvider = (providerId: string): AiProviderConfig => {
+      const provider = requireProvider(providerId);
+      if (!aiPresetInfo(provider.preset).oauth) throw new Error("This provider does not use OAuth");
+      return provider;
+    };
+    const oauthStatus = (providerId: string): AiOAuthStatus => {
+      const provider = providerOf(providerId);
+      if (!provider || !aiPresetInfo(provider.preset).oauth) return { state: "disconnected" };
+      return oauth.status(provider);
+    };
+
+    return {
+      state: () => {
+        const providers = structuredClone(this.settings.aiProviders);
+        const statuses: Record<string, AiOAuthStatus> = {};
+        for (const provider of providers) {
+          if (aiPresetInfo(provider.preset).oauth) statuses[provider.id] = oauth.status(provider);
+        }
+        return {
+          supported: true,
+          isDesktop: !Platform.isMobile,
+          providers,
+          chatModels: structuredClone(this.settings.aiChatModels),
+          embeddingModels: structuredClone(this.settings.aiEmbeddingModels),
+          oauth: statuses
+        };
+      },
+      addProvider: async (input) => {
+        const result = validateProvider(input, this.settings.aiProviders);
+        if (!result.ok) return result;
+        this.settings.aiProviders = [...this.settings.aiProviders, result.value];
+        await this.saveSettings();
+        return result;
+      },
+      updateProvider: async (previousId, input) => {
+        const result = validateProvider(input, this.settings.aiProviders, previousId);
+        if (!result.ok) return result;
+        const previous = providerOf(previousId);
+        if (!previous) return { ok: false, issues: [{ code: "provider-id-invalid", field: "id" }] };
+        this.settings.aiProviders = this.settings.aiProviders.map((provider) =>
+          provider.id === previousId ? result.value : provider
+        );
+        if (previousId !== result.value.id) {
+          this.settings.aiChatModels = this.settings.aiChatModels.map((model) =>
+            model.providerId === previousId ? { ...model, providerId: result.value.id } : model
+          );
+          this.settings.aiEmbeddingModels = this.settings.aiEmbeddingModels.map((model) =>
+            model.providerId === previousId ? { ...model, providerId: result.value.id } : model
+          );
+        }
+        if (previousId !== result.value.id) await oauth.disconnect(previousId);
+        await this.saveSettings();
+        return result;
+      },
+      deleteProvider: async (providerId) => {
+        this.settings.aiProviders = this.settings.aiProviders.filter((provider) => provider.id !== providerId);
+        this.settings.aiChatModels = this.settings.aiChatModels.filter((model) => model.providerId !== providerId);
+        this.settings.aiEmbeddingModels = this.settings.aiEmbeddingModels.filter((model) => model.providerId !== providerId);
+        await oauth.disconnect(providerId);
+        await this.saveSettings();
+      },
+      addChatModel: async (input) => {
+        const result = validateChatModel(input, this.settings.aiChatModels, this.settings.aiProviders.map((p) => p.id));
+        if (!result.ok) return result;
+        this.settings.aiChatModels = [...this.settings.aiChatModels, result.value];
+        await this.saveSettings();
+        return result;
+      },
+      updateChatModel: async (previousId, input) => {
+        const result = validateChatModel(
+          input,
+          this.settings.aiChatModels,
+          this.settings.aiProviders.map((p) => p.id),
+          previousId
+        );
+        if (!result.ok) return result;
+        this.settings.aiChatModels = this.settings.aiChatModels.map((model) =>
+          model.id === previousId ? result.value : model
+        );
+        await this.saveSettings();
+        return result;
+      },
+      deleteChatModel: async (modelId) => {
+        this.settings.aiChatModels = this.settings.aiChatModels.filter((model) => model.id !== modelId);
+        await this.saveSettings();
+      },
+      setChatModelEnabled: async (modelId, enabled) => {
+        this.settings.aiChatModels = this.settings.aiChatModels.map((model) =>
+          model.id === modelId ? { ...model, enable: enabled } : model
+        );
+        await this.saveSettings();
+      },
+      addEmbeddingModel: async (input) => {
+        const result = validateEmbeddingModel(
+          input,
+          this.settings.aiEmbeddingModels,
+          this.settings.aiProviders.map((p) => p.id)
+        );
+        if (!result.ok) return result;
+        this.settings.aiEmbeddingModels = [...this.settings.aiEmbeddingModels, result.value];
+        await this.saveSettings();
+        return result;
+      },
+      updateEmbeddingModel: async (previousId, input) => {
+        const result = validateEmbeddingModel(
+          input,
+          this.settings.aiEmbeddingModels,
+          this.settings.aiProviders.map((p) => p.id),
+          previousId
+        );
+        if (!result.ok) return result;
+        this.settings.aiEmbeddingModels = this.settings.aiEmbeddingModels.map((model) =>
+          model.id === previousId ? result.value : model
+        );
+        await this.saveSettings();
+        return result;
+      },
+      deleteEmbeddingModel: async (modelId) => {
+        this.settings.aiEmbeddingModels = this.settings.aiEmbeddingModels.filter((model) => model.id !== modelId);
+        await this.saveSettings();
+      },
+      testChatModel: async (modelId): Promise<AiTestResult> => {
+        const model = chatModelOf(modelId);
+        if (!model) return { ok: false, message: "Model no longer exists" };
+        const provider = providerOf(model.providerId);
+        if (!provider) return { ok: false, message: "Provider no longer exists" };
+        return testChatModel(provider, model, http, oauth.credential(provider.id));
+      },
+      testEmbeddingModel: async (modelId): Promise<AiTestResult> => {
+        const model = embeddingModelOf(modelId);
+        if (!model) return { ok: false, message: "Model no longer exists" };
+        const provider = providerOf(model.providerId);
+        if (!provider) return { ok: false, message: "Provider no longer exists" };
+        return testEmbeddingModel(provider, model, http, oauth.credential(provider.id));
+      },
+      oauthStatus,
+      oauthBegin: async (providerId): Promise<AiConnectStart> => oauth.begin(oauthProvider(providerId)),
+      oauthComplete: async (providerId, authorization: AiOAuthAuthorization): Promise<AiOAuthStatus> =>
+        oauth.complete(oauthProvider(providerId), authorization),
+      oauthCancel: (providerId) => oauth.cancel(providerId),
+      oauthDisconnect: async (providerId) => {
+        await oauth.disconnect(providerId);
+      },
+      oauthSaveManualToken: async (providerId, token) =>
+        oauth.saveManualToken(oauthProvider(providerId), token)
     };
   }
 

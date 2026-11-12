@@ -80,6 +80,7 @@ export class MindTreeSettingTab extends PluginSettingTab {
     this.renderPageTabs(containerEl, pages);
     const panel = containerEl.createDiv({ cls: "mtn-settings-panel", attr: { role: "tabpanel" } });
     const port: SettingsPagePort = {
+      app: this.app,
       settings: this.plugin.settings,
       save: () => this.plugin.saveSettings(),
       refreshOpenLayouts: () => this.plugin.refreshOpenMindTreeLayouts(),
@@ -89,7 +90,8 @@ export class MindTreeSettingTab extends PluginSettingTab {
         showAvailable: () => this.plugin.showAvailableUpdate(),
         subscribe: (listener) => this.plugin.updates.subscribe(listener)
       },
-      mcp: this.plugin.mcpSettings()
+      mcp: this.plugin.mcpSettings(),
+      ai: this.plugin.aiSettings()
     };
     // An unavailable page can never become the active one: a stale preference
     // (or a settings pane synced from another device) falls back to the first

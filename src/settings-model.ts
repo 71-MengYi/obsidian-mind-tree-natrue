@@ -4,6 +4,7 @@ import {
 } from "./format/resource-id";
 import type { ParseMindTreeOptions } from "./format/document";
 import type { CustomMarkerDefinition } from "./domain/custom-markers";
+import type { AiChatModelConfig, AiEmbeddingModelConfig, AiProviderConfig } from "./services/ai/contracts";
 import type {
   MindTreeCollectionMode,
   MindTreeConnectionStyle,
@@ -62,6 +63,12 @@ export interface MindTreeSettings {
    * The server carries both reading and editing tools, so this is the only port.
    */
   mcpPort: number;
+  /** External model providers configured in the AI tab. */
+  aiProviders: AiProviderConfig[];
+  /** Chat models attached to those providers. */
+  aiChatModels: AiChatModelConfig[];
+  /** Embedding models attached to those providers. */
+  aiEmbeddingModels: AiEmbeddingModelConfig[];
 }
 
 /** Above 1024 the port needs no privileges; the upper bound is the TCP limit. */
@@ -96,7 +103,10 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   connectionStyle: "theme",
   nodeShape: "rounded",
   mcpEnabled: false,
-  mcpPort: DEFAULT_MCP_PORT
+  mcpPort: DEFAULT_MCP_PORT,
+  aiProviders: [],
+  aiChatModels: [],
+  aiEmbeddingModels: []
 };
 
 /** Clamp a user-supplied port into the usable range; `undefined` means "not a port". */
