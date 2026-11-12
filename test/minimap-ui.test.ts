@@ -47,6 +47,12 @@ test("content is appended before the viewport indicator so the indicator paints 
   assert.ok(indicatorAppend > contentAppend, "indicator is appended after the content layer");
 });
 
+test("the focus window uses rounded corners", () => {
+  // A hard rectangle reads as a selection box; the indicator is an overlay.
+  assert.match(component, /this\.indicator\.setAttribute\("rx", "4"\)/);
+  assert.match(component, /this\.indicator\.setAttribute\("ry", "4"\)/);
+});
+
 test("a drag freezes the projection and unprojects map points into canvas moves", () => {
   assert.match(component, /pointerdown/);
   assert.match(component, /pointermove/);

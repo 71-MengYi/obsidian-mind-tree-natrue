@@ -90,6 +90,11 @@ export class MindTreeMinimap extends DisposableUiObject {
     this.content.classList.add("mtn-minimap-content");
     this.indicator = ownerDocument.createElementNS(SVG_NAMESPACE, "rect");
     this.indicator.classList.add("mtn-minimap-viewport");
+    // A rounded focus window reads as an overlay rather than a hard selection
+    // box. SVG clamps the radius when the viewport indicator is only a few
+    // pixels wide, so this stays legible at every zoom level.
+    this.indicator.setAttribute("rx", "4");
+    this.indicator.setAttribute("ry", "4");
     // The content layer is appended first so the indicator always paints above
     // it, independent of z-index support in the host WebView.
     this.surface.appendChild(this.content);
