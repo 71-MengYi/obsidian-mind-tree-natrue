@@ -160,7 +160,7 @@ A few deliberate rules:
 - Creating a mind tree through MCP never steals the view you are currently looking at.
 - Mobile can open the AI page, but the MCP section shows a red notice that the server is desktop-only and never starts; even if you sync a desktop configuration with MCP enabled to your phone, the phone still will not start it.
 
-The access token lives in **device-local storage**, not in plugin data, so it is never synced to another device. Treat it like a password: anyone who can read it can both read and write your mind trees.
+The access token lives in the plugin's `data.json` and syncs with the rest of the plugin data, so every device uses the **same fixed string** and a synced configuration does not stop working on another device; the bound port is still recorded per device. Treat it like a password: anyone who can read it can both read and write your mind trees.
 
 ### 7. Configure external model providers
 

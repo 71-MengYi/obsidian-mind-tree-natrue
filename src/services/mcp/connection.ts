@@ -81,3 +81,23 @@ export function normalizeMcpServerRecord(value: unknown): McpServerRecord | unde
   if (!isValidMcpToken(record["token"])) return undefined;
   return { port, token: record["token"] };
 }
+
+/**
+ * The one token every device must use.
+ *
+ * Preference order: the token already synced in `data.json`, then the old
+ * device-local record (so an installed client configuration survives this
+ * migration), then `undefined` for the caller to mint a fresh one. The result
+ * is written back to `data.json`, which is what makes it stable across sync.
+ */
+export function resolveSyncedMcpToken(
+  syncedToken: unknown,
+  localRecords: readonly unknown[]
+): string | undefined {
+  if (isValidMcpToken(syncedToken)) return syncedToken;
+  for (const record of localRecords) {
+    const normalized = normalizeMcpServerRecord(record);
+    if (normalized) return normalized.token;
+  }
+  return undefined;
+}

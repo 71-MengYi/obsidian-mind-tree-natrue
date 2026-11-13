@@ -9,6 +9,7 @@ import {
 } from "./settings-model";
 import { normalizeNodeWrapWidth } from "./render/layout";
 import { normalizeAiSettings } from "./services/ai/normalize";
+import { isValidMcpToken } from "./services/mcp/connection";
 import {
   COLLECTION_MODE_OPTIONS,
   LAYOUT_OPTIONS,
@@ -89,6 +90,10 @@ export function normalizePluginData(value: unknown): NormalizedPluginData {
         ?? normalizeMcpPort(settings?.["mcpReadPort"])
         ?? normalizeMcpPort(settings?.["mcpWritePort"])
         ?? DEFAULT_SETTINGS.mcpPort,
+      // A malformed synced token is discarded so the next desktop start mints
+      // exactly one replacement; keeping an unusable string would make every
+      // client fail with no recovery path.
+      mcpToken: isValidMcpToken(settings?.["mcpToken"]) ? settings["mcpToken"] : "",
       aiProviders: ai.providers,
       aiChatModels: ai.chatModels,
       aiEmbeddingModels: ai.embeddingModels

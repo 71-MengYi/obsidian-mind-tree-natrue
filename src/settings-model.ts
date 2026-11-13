@@ -63,6 +63,15 @@ export interface MindTreeSettings {
    * The server carries both reading and editing tools, so this is the only port.
    */
   mcpPort: number;
+  /**
+   * Bearer token of the local MCP server.
+   *
+   * Deliberately part of `data.json` so every device that syncs the plugin data
+   * uses the same credential. It used to live in device-local storage, which
+   * meant each device minted its own token and a synced client configuration
+   * stopped working on the other machine.
+   */
+  mcpToken: string;
   /** External model providers configured in the AI tab. */
   aiProviders: AiProviderConfig[];
   /** Chat models attached to those providers. */
@@ -104,6 +113,9 @@ export const DEFAULT_SETTINGS: MindTreeSettings = {
   nodeShape: "rounded",
   mcpEnabled: false,
   mcpPort: DEFAULT_MCP_PORT,
+  // Minted on first desktop start (or adopted from the old device-local
+  // record) and then synced with the rest of the settings.
+  mcpToken: "",
   aiProviders: [],
   aiChatModels: [],
   aiEmbeddingModels: []

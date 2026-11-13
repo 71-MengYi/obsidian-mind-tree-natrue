@@ -37,7 +37,7 @@ UI 采用命令式 DOM 组件但保持单向数据流。`MindTreeView` 只负责
 
 MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`contracts.ts` 冻结边界接口，`mcp-core.ts`、`json-rpc-core.ts`、`tool-schemas.ts`、`client-config.ts`、`settings-page-model.ts`、`availability.ts`、`connection.ts` 是零 Obsidian 依赖的纯模块，可以被 `node:test` 直接覆盖；`obsidian-tool-host.ts`、`tree-reader.ts`、`tree-locator.ts`、`session-writer.ts`、`http-transport.ts`、`mcp-server.ts` 才允许接触仓库、会话与设置。协议层不引入 `@modelcontextprotocol/sdk`（会带来整棵依赖树并触碰体积上限），只实现传输规范要求的子集：`POST /mcp` 端点、`application/json` 响应、`Mcp-Session-Id` 与 `MCP-Protocol-Version` 头、通知返回 `202`、未提供 SSE 时 `GET` 返回 `405`。
 
-**只有一个服务器，承载全部工具**：`MCP_SERVER_NAME` 固定为 `mind-tree-nature`（同时是 `serverInfo.name` 与复制配置里的 `mcpServers` 键），`tool-schemas.ts` 的工具目录不再按服务器分组、也没有 `server` 字段，`mcp-core` 的 `handleMcpMessage(raw, host)` 始终暴露全部 18 个工具。MCP 客户端的审批策略只能挂在服务器上，所以读与写共用同一条客户端策略；这是产品明确选择合并入站服务的取舍，插件**不对工具调用做权限判断**。`McpServerController` 只有单实例，持有端口、令牌与 `McpServerRecord`（键 `${manifest.id}:mcp-server`）；升级时若没有新记录，沿用旧只读记录（`${manifest.id}:mcp-server:read`）的端口与令牌，让已安装的客户端配置继续可用——该配置从此也带写权限。设置模型只保留 `mcpEnabled` 与 `mcpPort`（读取时兼容旧配置端口，都没有时回落默认 `27321`），`mcpWriteEnabled` / `mcpWritePort` 删除。
+**只有一个服务器，承载全部工具**：`MCP_SERVER_NAME` 固定为 `mind-tree-nature`（同时是 `serverInfo.name` 与复制配置里的 `mcpServers` 键），`tool-schemas.ts` 的工具目录不再按服务器分组、也没有 `server` 字段，`mcp-core` 的 `handleMcpMessage(raw, host)` 始终暴露全部 18 个工具。MCP 客户端的审批策略只能挂在服务器上，所以读与写共用同一条客户端策略；这是产品明确选择合并入站服务的取舍，插件**不对工具调用做权限判断**。`McpServerController` 只有单实例，端口记录保存在 `McpServerRecord`（键 `${manifest.id}:mcp-server`），令牌来自 `settings.mcpToken`；升级时若没有新记录，沿用旧只读记录（`${manifest.id}:mcp-server:read`）的端口与令牌，让已安装的客户端配置继续可用——该配置从此也带写权限。设置模型只保留 `mcpEnabled` 与 `mcpPort`（读取时兼容旧配置端口，都没有时回落默认 `27321`），`mcpWriteEnabled` / `mcpWritePort` 删除。
 
 读取工具经由 `tree-reader.ts` 直接解析文件，**不要求打开视图**；写入工具经由 `session-writer.ts` 复用 `SharedMindTreeSession` 的历史与文件级串行写队列，因此与画布操作共用撤销栈和保存基线，磁盘基线不一致时宁可拒绝也不覆盖。思维树的创建路径被抽到 `services/tree-creation.ts`，界面命令与 MCP 工具共用同一实现。参见 [MCP Streamable HTTP 传输规范](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports)。
 
@@ -142,7 +142,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 | 自定义标记（文字标记） | 空 | 全局“管理标记”页；有序的 `{ id, kind: "tag", value }` 列表，最多 64 项、每项 24 字符，决定标记面板中文字标记组的顺序与节点尾部文字标签的显示。 |
 | MCP 服务开关 | 关闭 | 全局“AI”页的 MCP 分区；仅桌面端可用（移动端显示红字说明，控件禁用）。开启后在本机 `127.0.0.1` 上启动唯一的 MCP 服务器，承载全部 18 个工具。默认关闭，因此默认不监听、不加载 HTTP 模块。 |
 | MCP 服务端口 | 27321 | 全局“AI”页，取值 `1024–65535`；占用时按顺序尝试其后最多 10 个端口，实际生效值写入设备本地存储并在状态行显示。字段为 `mcpPort`，升级时兼容旧双服务器配置的端口（优先 `mcpReadPort`），都没有时回落 27321。 |
-| MCP 访问令牌 | 每台设备一个 | **不属于全局设置**：保存在设备本地存储（键 `${manifest.id}:mcp-server`），随仓库隔离并跟随本机，不写 `data.json`，因此不会被同步复制到其他设备。升级时沿用旧只读记录（`:mcp-server:read`）的令牌，已安装的客户端配置继续可用；该令牌同时拥有读与写权限。 |
+| MCP 访问令牌 | 首次桌面启动生成，之后跨设备固定 | 全局设置 `mcpToken`，随 `data.json` 同步；首次桌面启动优先沿用旧设备本地记录（`:mcp-server` / `:mcp-server:read`）的令牌，否则生成一个并写回，之后不再随设备变化。端口实际生效值与绑定记录仍留在设备本地存储。该令牌同时拥有读与写权限。 |
 | 模型提供商 | 空 | 全局“AI”页“模型提供商”分区；有序的供应商列表，最多 `64` 项。字段为 `id`、`preset`、`apiType`、`baseUrl?`、`apiKey?`、`additionalSettings?`、`customHeaders?`；OAuth 预设不需要 API Key，自定义提供商与 Azure OpenAI 必须提供 Base URL。删除供应商同时移除其名下模型与设备上的 OAuth 凭据；修改供应商 ID 时其模型一起改挂并断开旧 ID 的凭据。 |
 | 聊天模型 | 空 | 挂在某个供应商下，最多 `512` 项。字段为 `id`、`providerId`、`model`、`name?`、`enable`、`reasoningType?`、`temperature?`、`topP?`、`maxContextTokens?`、`maxOutputTokens?`、`modalities?`、`builtinToolProvider?`、`customParameters?`；temperature 限 `0–2`、topP 限 `0–1`，token 上限与自定义参数条数有硬上限。 |
 | 嵌入模型 | 空 | 挂在某个供应商下，最多 `128` 项。字段为 `id`、`providerId`、`model`、`name?`、`dimension`；只有预设声明支持嵌入时才提供添加入口。 |
@@ -150,7 +150,7 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 
 表中“布局模式”“主题”“连线样式”“节点形状”“文件收集策略”和“递归扫描子目录”是文档设置；六者以可读 YAML 保存，不能复制进底部压缩 JSON。表中的“默认布局”“默认配色主题”“默认连线样式”“默认节点形状”和“默认文件收集策略”是插件全局设置，为所有尚未显式设置该项的导图（含新建导图）提供运行时默认值。文档设置变化进入当前视图的撤销栈并触发自动保存；文件收集策略或递归扫描变化还会使当前目录扫描缓存失效。
 
-插件设置和可重建文件索引分开存储。MCP 的启用状态与首选端口随插件设置进入 `data.json`（它们是跨设备可迁移的偏好），而**生效端口与访问令牌留在设备本地存储**：端口是每台机器的事实，令牌若被同步就会让另一台设备拿到本机的读与写权限。`normalizePluginData` 对这两个字段做不可信输入规范化（开关回落为布尔，端口越界回落为默认值而不是夹紧成另一个可疑端口）。模型提供商同样属于插件全局设置，但凭据策略分成两半：`settings.aiProviders`（含**明文 API Key**）、`settings.aiChatModels`、`settings.aiEmbeddingModels` 进入 `data.json`，会随插件数据同步；OAuth 访问/刷新令牌留在设备本地存储，不进入 `data.json`。`normalizeAiSettings` 对三者做不可信输入规范化：未知 preset/API 类型回落到预设默认值、越界数字丢弃、重复 ID 去重、单条损坏的供应商或模型只丢弃自身而不影响其余，并把数量限制在 `64 / 512 / 128`；加载不因一条坏数据失败，也不会把修复结果自动写回。因为 API Key 明文存在 `data.json` 中，界面与文档都必须把它当作敏感数据提醒；日志、状态行与错误消息不得回显 API Key 或 OAuth 令牌。模型目录拉取不是持久化设置：目录结果只用于一次批量创建聊天模型，关闭弹窗即丢弃；远程不可用时使用 `model-catalog.ts` 内置的回退列表，不写入 `data.json`。扩展名标签忽略列表与别名映射属于纯显示插件设置；视图从关联路径实时派生标签并以同一个测量模型提供给布局、DOM 与 PNG/SVG 导出，不写入节点或大纲。自定义标记同样属于纯显示插件设置：`data.json` 的 `settings.customMarkers` 只保存 `{ id, kind, value }`，节点仅保存 `{ type: "emoji" | "tag", value }`，渲染时由 `ResourceBadgePresentation` 用一次渲染快照把值解析为可见项，因此删除一个定义只会让该值停止渲染，节点数据不被改写，重新添加同值即可恢复。新建导图不在 Frontmatter 写入任何设置属性：未显式设置的项在运行时使用插件全局默认布局、默认主题、默认连线样式、默认节点形状和默认文件收集策略，递归扫描使用代码默认的关闭；用户在树菜单主动设置某项后才写入该属性，并从此固定为该树的值。除非产品需求明确增加树级差异，否则不得把其他全局选项写入 `.mtn.md` Frontmatter 或移入视图菜单。画布左右键行为、节点层级字号与最小尺寸、是否显示源文件入口仍属于固定产品规则，不提供设置项。
+插件设置和可重建文件索引分开存储。MCP 的启用状态、首选端口与**访问令牌**随插件设置进入 `data.json`（令牌必须跨设备固定，否则同步后的客户端配置会在另一台设备失效），而**生效端口与绑定记录留在设备本地存储**：端口是每台机器的事实。`normalizePluginData` 对开关、端口与令牌做不可信输入规范化（开关回落为布尔，端口越界回落为默认值而不是夹紧成另一个可疑端口，格式不合法的令牌清空并在下一次桌面启动重新生成）。模型提供商同样属于插件全局设置，但凭据策略分成两半：`settings.aiProviders`（含**明文 API Key**）、`settings.aiChatModels`、`settings.aiEmbeddingModels` 进入 `data.json`，会随插件数据同步；OAuth 访问/刷新令牌留在设备本地存储，不进入 `data.json`。`normalizeAiSettings` 对三者做不可信输入规范化：未知 preset/API 类型回落到预设默认值、越界数字丢弃、重复 ID 去重、单条损坏的供应商或模型只丢弃自身而不影响其余，并把数量限制在 `64 / 512 / 128`；加载不因一条坏数据失败，也不会把修复结果自动写回。因为 API Key 明文存在 `data.json` 中，界面与文档都必须把它当作敏感数据提醒；日志、状态行与错误消息不得回显 API Key 或 OAuth 令牌。模型目录拉取不是持久化设置：目录结果只用于一次批量创建聊天模型，关闭弹窗即丢弃；远程不可用时使用 `model-catalog.ts` 内置的回退列表，不写入 `data.json`。扩展名标签忽略列表与别名映射属于纯显示插件设置；视图从关联路径实时派生标签并以同一个测量模型提供给布局、DOM 与 PNG/SVG 导出，不写入节点或大纲。自定义标记同样属于纯显示插件设置：`data.json` 的 `settings.customMarkers` 只保存 `{ id, kind, value }`，节点仅保存 `{ type: "emoji" | "tag", value }`，渲染时由 `ResourceBadgePresentation` 用一次渲染快照把值解析为可见项，因此删除一个定义只会让该值停止渲染，节点数据不被改写，重新添加同值即可恢复。新建导图不在 Frontmatter 写入任何设置属性：未显式设置的项在运行时使用插件全局默认布局、默认主题、默认连线样式、默认节点形状和默认文件收集策略，递归扫描使用代码默认的关闭；用户在树菜单主动设置某项后才写入该属性，并从此固定为该树的值。除非产品需求明确增加树级差异，否则不得把其他全局选项写入 `.mtn.md` Frontmatter 或移入视图菜单。画布左右键行为、节点层级字号与最小尺寸、是否显示源文件入口仍属于固定产品规则，不提供设置项。
 
 ## 11. 异常处理与数据安全
 
@@ -228,13 +228,13 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 
 - 插件默认不发起网络请求，不上传仓库内容、文件名或 URL。
 - 网络请求只在用户显式操作时发生，主要包括以下几种情况：
-  - **用户主动开启的本机 MCP 服务**（见 9.2）：一条**入站**回环通道，不向任何服务器发送数据；不开启时既不监听端口，也不加载 Node 的 HTTP 模块。该通道只有一个服务器（`mind-tree-nature`），承载全部 18 个工具；插件不对工具调用做权限判断，读与写共用客户端对这条服务器的审批策略——这是合并只读与修改的明确取舍。启用后还必须同时满足四条，缺一不可：① 只绑定 `127.0.0.1`，不监听任何可路由地址；② `Host` 与 `Origin` 头必须落在回环主机集合内，否则拒绝（防 DNS rebinding）；③ 每个请求都必须带该设备的 `Authorization: Bearer` 令牌（令牌保存在设备本地存储而不进入 `data.json`，以免被同步复制到别的设备）；④ 请求体有固定字节上限，超限在解析前拒绝。
+  - **用户主动开启的本机 MCP 服务**（见 9.2）：一条**入站**回环通道，不向任何服务器发送数据；不开启时既不监听端口，也不加载 Node 的 HTTP 模块。该通道只有一个服务器（`mind-tree-nature`），承载全部 18 个工具；插件不对工具调用做权限判断，读与写共用客户端对这条服务器的审批策略——这是合并只读与修改的明确取舍。启用后还必须同时满足四条，缺一不可：① 只绑定 `127.0.0.1`，不监听任何可路由地址；② `Host` 与 `Origin` 头必须落在回环主机集合内，否则拒绝（防 DNS rebinding）；③ 每个请求都必须带 `Authorization: Bearer` 令牌（令牌保存在 `data.json` 的 `mcpToken`，随插件数据同步，使同步后的各设备共用同一客户端配置；拿到令牌即可读写，必须按密码对待）；④ 请求体有固定字节上限，超限在解析前拒绝。
   - **模型连通性测试**：只有点击某个模型行的“测试”按钮后，才向该供应商配置的 Base URL 发送**一次**最小非流式请求。鉴权只使用该供应商配置的 API Key 或设备本地 OAuth 凭据，请求体不含笔记内容、文件名或 URL；不点击、打开设置页或保存配置都不发请求。Azure OpenAI 与 Amazon Bedrock 明确返回“不支持”，不会用误导性的失败结果代替。
   - **拉取模型目录**：只有点击“拉取模型目录”后，才向该供应商的目录端点发一次 GET 请求（OpenAI-compatible/Responses `/models`、Anthropic `/v1/models`、Gemini `/v1beta/models`、OAuth 会话的对应端点），鉴权复用该供应商的 API Key 或设备本地 OAuth 凭据；请求不携带笔记内容、文件名或 URL。远程失败或供应商不支持时使用本机内置回退列表，不发起额外请求。目录结果不持久化，只用于用户勾选后的批量创建。
   - **OAuth 登录**：只有点击“连接”后，才访问对应提供商的授权/令牌端点（ChatGPT、Google、GitHub）；Claude 走手动粘贴令牌，不发起登录请求。设备码或浏览器 PKCE 流程由用户在浏览器里完成；插件只轮询该流程自身的令牌端点，不访问其他服务，也不读取笔记内容。已连接 OAuth 的令牌在读取连接状态时可能自动续期一次（例如 Copilot 的短期令牌过期后后台换取新 token），属于登录会话维护，不发送笔记内容，也不调用模型。AI tab 在移动端也渲染，但 OAuth 的浏览器跳转与本地回调只在桌面端提供，移动端按钮禁用并提示改用手动令牌。
   - **插件更新检查**：按用户在设置中的选择访问 GitHub 发布接口；关闭自动检查后，只有主动点击“检查更新”才请求，且不携带仓库内容、文件名或 URL。
 - MCP 通道的日志只记录方法与工具名，绝不记录节点标题或笔记正文；模型提供商相关的日志与错误消息只记录流程状态、HTTP 状态与延迟，绝不记录 API Key、OAuth 令牌、请求头或响应正文。
-- API Key 与模型配置以**明文**保存在 `data.json`，OAuth 令牌保存在设备本地存储；用户应把 `data.json` 与其中的 Key 当作敏感文件。
+- API Key、模型配置与 **MCP 访问令牌**以**明文**保存在 `data.json`，OAuth 令牌保存在设备本地存储；用户应把 `data.json` 与其中的全部凭据当作敏感文件。
 - URL 只允许安全协议，并使用 Obsidian 提供的外部链接打开方式。
 - 节点标题、Markdown 和 SVG/HTML 导出内容必须转义，避免脚本注入。
 - Base64 解码、gzip 解压、JSON 解析、图片解码和导出设置体积、节点数量、嵌套深度或像素上限。

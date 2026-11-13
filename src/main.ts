@@ -23,6 +23,11 @@ import { McpServerController, type McpServerStorage } from "./services/mcp/mcp-s
 import { ObsidianToolHost } from "./services/mcp/obsidian-tool-host";
 import { MindTreeSessionWriter } from "./services/mcp/session-writer";
 import { parseMcpPortInput, type McpPageState } from "./services/mcp/settings-page-model";
+import {
+  legacyMcpServerRecordKey,
+  mcpServerRecordKey,
+  resolveSyncedMcpToken
+} from "./services/mcp/connection";
 import { McpToolError } from "./services/mcp/tool-error";
 import { MindTreePathLocator } from "./services/mcp/tree-locator";
 import { MindTreeReader } from "./services/mcp/tree-reader";
@@ -132,6 +137,7 @@ export default class MindTreeNaturePlugin extends Plugin {
     });
     await this.removeLegacyIndexOnce();
     await this.loadSettings();
+    await this.ensureSyncedMcpToken();
     this.resourceCache = new LocalResourceCache(this.manifest.id, {
       load: (key) => this.app.loadLocalStorage(key),
       save: (key, value) => this.app.saveLocalStorage(key, value)
@@ -506,6 +512,27 @@ export default class MindTreeNaturePlugin extends Plugin {
 
   async loadSettings(): Promise<void> { await this.settingsPersistence.reload(); }
   async saveSettings(): Promise<void> { await this.settingsPersistence.save(this.settings); }
+
+  /**
+   * One MCP bearer token for every device.
+   *
+   * The token used to live only in device-local storage, so syncing the vault
+   * gave each device a different credential and a copied client configuration
+   * failed on the other machine. It now lives in `data.json`: adopt the old
+   * local token once when possible, otherwise mint one, then persist it so the
+   * sync carries the same value everywhere.
+   */
+  private async ensureSyncedMcpToken(): Promise<void> {
+    // Mobile never listens; it receives the token through plugin-data sync and
+    // must not mint a competing value.
+    if (Platform.isMobile) return;
+    const local = this.app.loadLocalStorage(mcpServerRecordKey(this.manifest.id));
+    const legacy = this.app.loadLocalStorage(legacyMcpServerRecordKey(this.manifest.id));
+    const token = resolveSyncedMcpToken(this.settings.mcpToken, [local, legacy]) ?? crypto.randomUUID();
+    if (this.settings.mcpToken === token) return;
+    this.settings.mcpToken = token;
+    await this.saveSettings();
+  }
 
   /** Obsidian owns the merge; adopt the result without echoing it back to Sync. */
   async onExternalSettingsChange(): Promise<void> {
@@ -1034,6 +1061,8 @@ export default class MindTreeNaturePlugin extends Plugin {
       pluginId: this.manifest.id,
       isDesktop: () => !Platform.isMobile,
       storage,
+      // The synced token wins over this device's legacy record.
+      getToken: () => this.settings.mcpToken,
       handleMessage: (raw) => handleMcpMessage(raw, host),
       logger: (message) => console.debug(`Mind Tree Nature: ${message}`)
     });

@@ -168,24 +168,24 @@ test("the merged switch and port survive a valid configuration and nothing legac
       mcpWritePort: 29_010,
       mcpAllowWrites: true,
       mcpAllowTreeCreation: true,
-      mcpToken: "Bearer leaked"
+      mcpToken: "token-abcdefghijklmnop"
     }
   });
   assert.equal(normalized.settings.mcpEnabled, true);
   assert.equal(normalized.settings.mcpPort, 29_000);
   // The normalized object is exactly the merged model: no retired key survives,
-  // and the device-local token is never part of plugin data.
+  // while the now-synced MCP token is preserved.
   assert.deepEqual(Object.keys(normalized.settings).sort(), Object.keys(DEFAULT_SETTINGS).sort());
   for (const key of [
     "mcpReadPort",
     "mcpWritePort",
     "mcpWriteEnabled",
     "mcpAllowWrites",
-    "mcpAllowTreeCreation",
-    "mcpToken"
+    "mcpAllowTreeCreation"
   ]) {
     assert.equal(Object.hasOwn(normalized.settings, key), false, key);
   }
+  assert.equal(normalized.settings.mcpToken, "token-abcdefghijklmnop");
   assert.equal(JSON.stringify(normalized).includes("Bearer"), false);
 });
 
@@ -193,6 +193,13 @@ test("the merged switch survives independently of a damaged port", () => {
   const normalized = normalizePluginData({ settings: { mcpEnabled: true, mcpPort: 80 } });
   assert.equal(normalized.settings.mcpEnabled, true);
   assert.equal(normalized.settings.mcpPort, DEFAULT_SETTINGS.mcpPort);
+});
+
+test("the synced MCP token is preserved and a malformed value is discarded", () => {
+  const token = "token-abcdefghijklmnop";
+  assert.equal(normalizePluginData({ settings: { mcpToken: token } }).settings.mcpToken, token);
+  assert.equal(normalizePluginData({ settings: { mcpToken: "short" } }).settings.mcpToken, "");
+  assert.equal(normalizePluginData({ settings: {} }).settings.mcpToken, "");
 });
 
 test("AI providers and models survive plugin-data normalization without leaking OAuth tokens", () => {

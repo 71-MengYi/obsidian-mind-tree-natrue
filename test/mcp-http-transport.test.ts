@@ -4,6 +4,7 @@ import { createServer, request as httpRequest } from "node:http";
 import {
   legacyMcpServerRecordKey,
   MAX_MCP_REQUEST_BYTES,
+  resolveSyncedMcpToken,
   MCP_ENDPOINT_PATH,
   mcpServerRecordKey,
   mcpUrl,
@@ -383,6 +384,39 @@ test("the controller reuses one device token and records the bound port", async 
   assert.deepEqual(normalizeMcpServerRecord(stored.get(recordKey)), {
     port: DEFAULT_MCP_PORT, token: "token-abcdefghijklmnop"
   } as McpServerRecord);
+});
+
+test("the synced token wins, then the old local record, then nothing", () => {
+  const record = { port: 27321, token: "local-token-abcdefgh" };
+  assert.equal(resolveSyncedMcpToken("synced-token-abcdefgh", [record]), "synced-token-abcdefgh");
+  assert.equal(resolveSyncedMcpToken("", [record]), record.token);
+  assert.equal(resolveSyncedMcpToken(undefined, [record]), record.token);
+  assert.equal(resolveSyncedMcpToken("short", [record]), record.token);
+  assert.equal(resolveSyncedMcpToken("short", []), undefined);
+});
+
+test("a supplied synced token overrides the device record", async () => {
+  const stored = new Map<string, unknown>();
+  const key = mcpServerRecordKey("mind-tree-nature");
+  stored.set(key, { port: 27321, token: "old-token-abcdefgh" });
+  const controller = new McpServerController({
+    pluginId: "mind-tree-nature",
+    isDesktop: () => true,
+    storage: {
+      load: (storageKey) => stored.get(storageKey) ?? null,
+      save: (storageKey, value) => { stored.set(storageKey, value); }
+    },
+    getToken: () => "synced-token-abcdefgh",
+    handleMessage: echo,
+    createListener: flakyListenerFactory(0).factory
+  });
+  assert.equal(controller.token(), "synced-token-abcdefgh");
+  await controller.start(DEFAULT_MCP_PORT);
+  assert.deepEqual(normalizeMcpServerRecord(stored.get(key)), {
+    port: DEFAULT_MCP_PORT,
+    token: "synced-token-abcdefgh"
+  } as McpServerRecord);
+  await controller.stop();
 });
 
 test("the retired read-only record is adopted, port and token included", async () => {

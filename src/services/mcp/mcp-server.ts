@@ -27,6 +27,14 @@ export interface McpServerControllerOptions {
   /** `!Platform.isMobile`, read at call time so a reload cannot stale it. */
   isDesktop(): boolean;
   storage: McpServerStorage;
+  /**
+   * The token synced through `data.json`.
+   *
+   * When supplied it wins over the device-local record, because a synced
+   * configuration must keep working on every device. Omitted by unit tests
+   * that exercise the legacy record-adoption path.
+   */
+  getToken?: () => string;
   handleMessage: (raw: string) => unknown | Promise<unknown>;
   createListener?: McpListenerFactory;
   createToken?: () => string;
@@ -76,6 +84,8 @@ export class McpServerController {
    * a token that changed on start would invalidate what the user just copied.
    */
   token(): string {
+    const synced = this.options.getToken?.();
+    if (synced !== undefined && synced !== "") return synced;
     const record = this.readRecord();
     if (record) return record.token;
     const token = this.options.createToken?.() ?? crypto.randomUUID();

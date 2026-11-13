@@ -1,5 +1,22 @@
 # memory
 
+## 2026-11-14 · MCP 访问令牌改为跨设备固定（`fix`）
+
+**需求（用户口径）**：MCP 的鉴权字符串（Bearer token）总是变，Obsidian 同步后每个 MCP 服务都会失效；要求固定下来，不因同步换设备而失效。
+
+**原因**：令牌原先只存设备本地存储（`${manifest.id}:mcp-server` / `:mcp-server:read`），每台设备首次启动各生成一个；`data.json` 同步只带端口偏好，不带令牌，所以另一台设备复制出的客户端配置必然对不上。
+
+**落点**：
+- `settings-model.ts` / `plugin-data.ts`：新增全局设置 `mcpToken`（`data.json`，空字符串为未生成；格式不合法清空）。
+- `connection.ts`：`resolveSyncedMcpToken(synced, localRecords)` 选令牌——`data.json` 已有合法令牌直接用；否则沿用旧设备本地记录（当前键优先，其次 `:mcp-server:read`）；都没有返回 `undefined`。
+- `main.ts`：`onload` 在 `loadSettings()` 后调用 `ensureSyncedMcpToken()`（桌面端）：解析上述令牌，缺失则 `crypto.randomUUID()` 生成并 `saveSettings()` 写回；移动端不生成/不启动 MCP，只通过同步接收。`McpServerController` 增加可选 `getToken()`，同步令牌优先于设备记录（测试不传时保留旧记录路径）。
+- 端口实际生效值与绑定记录仍在设备本地存储；令牌与端口组合才是客户端配置，端口默认 `27321` 且回退策略不变。
+- 安全口径改变：令牌现在随 `data.json` 同步（用户明确要求固定），拿到 `data.json` 即可取得读写权限；README/docs/05 已改为提醒把 `data.json` 当敏感文件，不再声称令牌仅设备本地。
+
+**迁移**：首次桌面启动优先沿用旧设备本地令牌，已安装的客户端配置继续可用；写入 `data.json` 后同步到其他设备即固定。若多台桌面设备在同步前各自首次启动，最后一台同步值为准，需要重新复制一次配置。
+
+**验证**：`npm run check` 0 错误；`npm test` **1153 / 1153 通过、0 失败**；`npm run build` 成功（`main.js` 5.00 MB、`styles.css` 86 KB）。新增 `resolveSyncedMcpToken`、controller `getToken` 优先、plugin-data `mcpToken` 保留/非法清空测试。
+
 ## 2026-11-13 · AI tab 新增「模型提供商」（`feat`，团队协作）
 
 **需求（用户口径）**：把 obsidian-yolo 的“模型提供商”设置完整搬到本插件「设置 → AI」：在现有“MCP 服务”分区之后新增“模型提供商”分区，支持供应商列表（可展开）、添加/编辑/删除（卡片内二次确认）、每张卡片下的聊天模型与嵌入模型表、显式连通性测试，以及 ChatGPT / Gemini / Claude / GitHub Copilot 的 OAuth。预设覆盖 OpenAI、ChatGPT OAuth、Anthropic、Claude OAuth、Gemini、Gemini OAuth、GitHub Copilot、OpenRouter、Sidrune AI、xAI、Mistral、Perplexity、Groq、Cerebras、SambaNova、Together AI、Morph、DeepSeek、Moonshot、Zhipu、Doubao、SiliconFlow、StepFun、MiniMax、Hunyuan、Xiaomi MiMo、Azure OpenAI、Amazon Bedrock、Ollama、LM Studio 与自定义 OpenAI 兼容端点。当前插件没有聊天/推理消费方，这些设置只是外部模型接入的**配置层**，文档不得暗示已有聊天功能。
