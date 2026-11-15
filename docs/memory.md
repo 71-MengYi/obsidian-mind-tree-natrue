@@ -794,6 +794,33 @@
 
 **验证（2026-11-11 00:1x）**：`npm run check` 0 错误；`npm test` **1023 条全部通过 / 0 失败**（在 `danger-full-access` 会话中运行，esbuild 的 `spawn` 可用；workspace-write 沙箱下 `tsx`/`esbuild` 仍会 `spawn EPERM`，属既有环境限制）；`npm run build` 成功，`main.js` 4.75 MB、`styles.css` 71 KB、`manifest.json` 235 B，均低于发布上限。MCP 相关测试：`test/mcp-tools.test.ts`、`test/mcp-client-config.test.ts`、`test/mcp-http-transport.test.ts`、`test/mcp-settings-page-model.test.ts`、`test/ai-settings-page.test.ts`、`test/plugin-data.test.ts`、`test/settings-index-wiring.test.ts`。本轮测试改动删除的断言均为“前提已不存在”（服务器分组/第二端口/写入开关），未放宽其他覆盖。
 
+## 2026-11-15 · 节点右键菜单「创建 TaskNote」接入 TaskNotes（`feat`，未提交）
+
+**需求（用户原话）**：节点右键菜单里，未关联节点在「添加笔记」下方增加「创建 TaskNote」；接入 TaskNotes（https://github.com/callumalpass/tasknotes）；未安装 TaskNotes 时点击弹出 notice 提示安装。
+
+**口径**：菜单项**始终**对未关联节点显示（不按安装状态动态隐藏），点击后才判可用性；未安装/未启用 → 安装提示；已安装但 API 不合格 → 更新提示；两种提示都带仓库地址且不创建文件。TaskNotes 只通过其公开运行时 API v1 使用：`app.plugins.getPlugin("tasknotes").api`，要求 `apiVersion === 1`、`hasCapability("tasks.write")`、`tasks.create` 为函数（指定目录时还要求 `hasCapability("tasks.move")` 与 `tasks.move` 函数）；不导入 TaskNotes 内部模块、不新增依赖、不发起网络请求。
+
+**落点**
+- `src/services/tasknotes.ts`（新，零 Obsidian 依赖）：`TASKNOTES_PLUGIN_ID` / `TASKNOTES_RUNTIME_API_VERSION` / `TASKNOTES_WRITE_CAPABILITY`（后续追加 `TASKNOTES_MOVE_CAPABILITY`）、`pluginRegistryOf(app)`、`findTaskNotesPlugin(registry)`（`getPlugin` 优先，异常或空值回退 `plugins` map）、`resolveTaskNotesApi(plugin)`（fail closed）、`TaskNotesService`（每次调用重新解析；`createTask(title, { targetFolder })` → `api.tasks.create({ title }, { source, correlationId, reason })`，指定目录时再 `api.tasks.move(path, targetFolder, context)`；移动失败返回 `{ path: 原路径, moved: false, moveError }` 而不是抛错；拒绝空 `path`）。
+- `src/ui/ui-contracts.ts`：`NodeResourceMenuItemId` 加 `create-task-note`；`nodeResourceMenuItemOrder()` 在 `!hasResource && !nodeLinked` 分支内排 `add-note → create-task-note → add-file-template → link-file → link-web`。
+- `src/ui/menus/node-context-menu.ts`：新增 `createTaskNote` 动作与菜单行（`list-todo`）。
+- `src/ui/mind-tree-view.ts`：`createTaskNoteForNode(nodeId)`——沿用 `captureAssociationTarget` / `requireAssociationTarget` / `associateFileWithTarget` / `openCreatedFile`；无标题时 `TextPromptModal`；在途键 `tasknote:<token>:<nodeId>`（与「添加笔记」区分，避免两条命令互相吞并）；成功后 `ensureStableReference(file)` 再以 `file.basename` 关联（默认启用双向同步）并产生一次撤销。失败分型：`TaskNotesUnavailableError` → `notice.taskNotesMissing`；已拿到 `taskPath` 但取文件/身份/关联失败 → `notice.createdTaskNoteNotLinked`（不删除任务文件）；其他 → `notice.createTaskNoteFailed`；vault 暂时看不到文件 → `notice.taskNoteFileMissing`。
+- `src/main.ts`：`readonly taskNotes = new TaskNotesService(() => pluginRegistryOf(this.app), () => this.manifest.id)`。
+- i18n 新增 10 个键（EN+ZH）；`docs/02` §6.6/§6.7（新增「创建 TaskNote（可选集成）」小节）、`docs/01` P1、`docs/05` §9.1、`docs/06` §13.1、`docs/requirements` 第 6 条、中英 README §3、`AGENTS.md` §3.2/§3.3/§10。
+
+**测试**：新增 `test/tasknotes.test.ts` 12 条（注册表两路查找与回退、app 端口容错、API 版本/能力/`tasks.create` 拒绝表、标题与 mutation context、缺失/降级、抛错/无 path、创建后移动到树目录、根目录空串、缺 `tasks.move` 创建前拒绝、移动失败保留路径、菜单顺序与视图接线、双语占位符）；`test/ui-modules.test.ts` 的菜单顺序期望同步为 5 项，未放宽“已关联/已节点关联隐藏创建入口”的既有断言。
+
+**验证（2026-11-15）**：`npm run check` 0 错误；全量 **1165 tests / 1165 pass / 0 fail**（含同日追加的 4 条目录用例）；`npm run build` 成功，`main.js` 5,009,164 B ≈ 4.78 MiB（上限 10 MiB）。`main.js` 与 `.mtn-test-run.log` 均已被 `.gitignore` 忽略，未提交。
+
+**环境坑（本会话）**：`workspace-write` 下 `npm test` 必失败——`node:test` 多文件 runner 与 tsx/esbuild 都要 spawn 子进程（`spawn EPERM`）；`npx tsx test/xxx.test.ts` 也会在 esbuild 同步服务启动时 EPERM。全量测试需一次 `danger-full-access`。删除临时日志 `.mtn-test-run.log` 的提权被用户拒绝：**不要绕过**，该文件已在 `.gitignore` 第 9 行，留在工作区不影响 `git status`。
+
+**留给下一任**：未在真实 Obsidian + TaskNotes 内人工验收（本机未装两者）；TaskNotes 若升级 API 版本，只改 `src/services/tasknotes.ts` 的版本/能力判断并补 `test/tasknotes.test.ts`；若希望 TaskNote 标题不跟随文件名双向同步，可在 `createTaskNoteForNode` 里传入节点标题并显式 `titleSync: "off"`，但要先确认产品口径。
+
+**↳ 同日追加 · 任务笔记放入思维树目录（用户追问后的口径）**：用户问「能否指定创建任务笔记的位置，能的话指定为思维树目录」。结论：**TaskNotes 的 `tasks.create` 没有任何目录参数**（`TaskCreationService.resolveTargetFolder` 只读设置里的 `tasksFolder` 与 inline 上下文），但公开运行时 API 有 `api.tasks.move(path, targetFolder)`，所以实现为「创建后立即移动」。已核对 TaskNotes 源码语义（`src/api/TaskNotesAPI.ts` 的 `moveTask`）：`normalizePath("")` → `newPath = file.name`（仓库根目录）；`newPath === task.path` 时直接返回 no-op；目标已存在同名文件时抛 `file_already_exists`（409）；移动完成会更新缓存并发出 `task.moved` 事件。实现要点：
+- `src/services/tasknotes.ts`：`TASKNOTES_MOVE_CAPABILITY = "tasks.move"`；`TaskNotesRuntimeApi.tasks.move?` 为可选；`createTask(title, { targetFolder })` 在提供目录时先要求 `tasks.move` 能力（缺失 → `TaskNotesMoveUnavailableError`，**创建前**拒绝），创建成功后用同一 correlationId 调 move；成功返回 `{ path, moved: true }`，失败返回 `{ path: 原路径, moved: false, moveError }`（不抛，便于视图仍建立关联）。
+- `src/ui/mind-tree-view.ts`：目录取 `this.file?.parent?.isRoot() ? "" : this.file?.parent?.path ?? ""`（仓库根目录传空串）；移动失败时照常完成 `ensureStableReference` 与关联，并用 `notice.taskNoteMoveFailed` 提示真实路径与原因（用户可再用右键菜单「将关联文件移动到」）；新增 i18n 键 `notice.taskNotesMoveUnsupported`、`notice.taskNoteMoveFailed`。
+- `test/tasknotes.test.ts` 增 4 条：移动与 correlationId、根目录空串、缺 move 能力创建前拒绝（含能力位与函数两条判据）、移动失败保留原路径；`test/ui-modules.test.ts` 未改。
+
 
 
 

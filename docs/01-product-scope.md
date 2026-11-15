@@ -85,6 +85,7 @@ Mind Tree Nature 是一个用于 Obsidian 的交互式思维导图插件。它�
 ### 4.2 P1：增强版本
 
 - 从模板目录及子目录复制任意仓库文件，包含图片、附件、Canvas、Excalidraw 和思维树；仅替换副本的关联身份，不处理内部引用。
+- 可选的 [TaskNotes](https://github.com/callumalpass/tasknotes) 集成：未关联节点的右键菜单在「添加笔记」下方提供「创建 TaskNote」，通过 TaskNotes 运行时 API v1 的 `api.tasks.create` 创建任务笔记后，立即用 `api.tasks.move` 放进**当前思维树所在目录**（仓库根目录即空目录），再按普通新笔记建立关联；文件名与 Frontmatter 由 TaskNotes 决定。未安装、未启用、不支持 `tasks.move` 或版本不兼容时只提示安装/更新，不创建任何文件；移动失败时保留并关联原位置文件并提示路径；不新增运行时依赖，也不发起网络请求。
 - 附件节点的内容预览。
 - 多选后的批量标记。
 - PNG 复制到系统剪贴板。

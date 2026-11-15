@@ -196,6 +196,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `LocalResourceCache` | `local-resource-cache.ts` | 仓库隔离的本机缓存（不是归属证明） |
 | `TemplateFileService` | `template-files.ts` | 「从模板添加文件」：复制任意文件、分配独立身份、回收未关联副本 |
 | `DefaultAppOpener` | `default-app-opener.ts` | 桌面端用系统默认应用/浏览器打开（延迟加载 Electron） |
+| `TaskNotesService` | `tasknotes.ts` | 可选 TaskNotes 集成：注册表查找、运行时 API v1 校验、创建任务笔记并返回真实路径（零 Obsidian 依赖，每次调用重新解析） |
 | `renderBranchSvg` / `exportBranchPng` | `export.ts` | SVG/PNG 导出与安全图片嵌入 |
 | `parseTextLine` / `parseTextImport` | `text-links.ts` / `text-import.ts` | 粘贴与导入共用的行级解析 |
 | `SettingsPersistence` | `settings-persistence.ts` | 设置串行保存与外部更新接收 |
@@ -239,6 +240,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | `ResourceService` | `src/services/resource-index.ts` + `resource-identity.ts` + `linked-resource-sync.ts` |
 | `TemplateFileService` | `src/services/template-files.ts`（同名） |
 | `DefaultAppOpener` | `src/services/default-app-opener.ts`（同名） |
+| `TaskNotesService` | `src/services/tasknotes.ts`（同名） |
 | `ClipboardService` | `src/services/clipboard.ts` + `src/ui/controllers/clipboard-controller.ts` |
 | `ExportService` | `src/services/export.ts` |
 | `SettingsService` | `src/settings-model.ts` + `src/settings.ts` + `src/services/settings-persistence.ts` |
@@ -403,6 +405,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 改画布交互/手势/拖拽 | `src/ui/controllers/*`、`src/render/viewport.ts`、`src/ui/drop-placement.ts` | `docs/02-interface-interactions.md` §6.3、`docs/05-technical-design.md` §12.1 | `test/pointer-operations.test.ts`、`test/touch-gesture.test.ts`、`test/touch-routing.test.ts`、`test/drop-placement.test.ts` |
 | 改小地图（尺寸/投影/显隐/跳转） | `src/render/minimap.ts`、`src/ui/components/mind-tree-minimap.ts`、`src/ui/mind-tree-view.ts`（`updateMinimap` / `centerCanvasOnWorldPoint`）、`src/render/viewport.ts`（`centerViewportOnPoint`）、`styles.css` | `docs/02-interface-interactions.md` §5.1、`docs/05-technical-design.md` §9.3、§10 | `test/minimap.test.ts`、`test/minimap-ui.test.ts`、`test/minimap-wiring.test.ts`、`test/minimap-setting.test.ts` |
 | 改文件关联/索引/缓存 | `src/services/resource-index.ts`、`resource-catalog.ts`、`resource-identity.ts`、`local-resource-cache.ts`、`linked-resource-sync.ts` | `docs/04-resource-index.md` 全篇 | `test/resource-index-service.test.ts`、`test/resource-catalog.test.ts`、`test/resource-identity.test.ts`、`test/local-resource-cache.test.ts` |
+| 改可选插件集成（TaskNotes） | `src/services/tasknotes.ts`、`src/ui/mind-tree-view.ts`（`createTaskNoteForNode`）、`src/ui/ui-contracts.ts`、`src/ui/menus/node-context-menu.ts`、`src/main.ts`（`taskNotes` 端口） | `docs/02-interface-interactions.md` §6.7、`docs/05-technical-design.md` §9.1 | `test/tasknotes.test.ts`、`test/ui-modules.test.ts` |
 | 改冲突/未决版本/保存 | `src/services/version-conflict-coordinator.ts`、`pending-conflict-store.ts`、`document-conflict.ts`、`document-session.ts`、`save-plan.ts`、`mind-tree-session-registry.ts`、`src/ui/mind-tree-view.ts`（`save` / `performQueuedSave` / `acceptExternalSource`） | `docs/03-document-format.md` §7.6、`docs/05-technical-design.md` §11 | `test/external-adopt.test.ts`、`test/save-persistence.test.ts`、`test/version-conflict.test.ts`、`test/pending-conflict-store.test.ts`、`test/safety.test.ts`、`test/document-session.test.ts` |
 | 改模板文件流程 | `src/services/template-files.ts` | `docs/05-technical-design.md` §9.1 | `test/template-files.test.ts` |
 | 改导入/粘贴 | `src/services/text-import.ts`、`text-links.ts`、`text-url.ts`、`clipboard.ts`、`src/ui/paste-routing.ts` | `docs/02-interface-interactions.md` §6.10 | `test/text-import.test.ts`、`test/text-links.test.ts`、`test/exchange.test.ts`、`test/paste-routing.test.ts` |

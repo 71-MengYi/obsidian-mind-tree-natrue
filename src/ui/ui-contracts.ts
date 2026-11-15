@@ -14,7 +14,7 @@ export const KEYBOARD_HELP_ACTIONS = [
 ] as const;
 
 export type NodeResourceMenuItemId =
-  | "title-sync" | "add-note" | "add-file-template" | "link-file" | "link-web"
+  | "title-sync" | "add-note" | "create-task-note" | "add-file-template" | "link-file" | "link-web"
   | "open-resource" | "open-default-app" | "unlink-resource";
 
 /** Rows of the nested "copy as…" group shared by the node menu and the toolbar. */
@@ -61,7 +61,11 @@ export function nodeResourceMenuItemOrder(
   if (state.hasFileResource) items.push("title-sync");
   // Creating or linking a resource is not offered once the node links another
   // node: the node link occupies that association slot.
-  if (!state.hasResource && !state.nodeLinked) items.push("add-note", "add-file-template", "link-file", "link-web");
+  // The optional TaskNote row sits directly below the plain note row: both
+  // create one file and link it, so they share the same unlinked-node section.
+  if (!state.hasResource && !state.nodeLinked) {
+    items.push("add-note", "create-task-note", "add-file-template", "link-file", "link-web");
+  }
   if (state.hasResource) {
     items.push("open-resource");
     if (state.isDesktopApp) items.push("open-default-app");

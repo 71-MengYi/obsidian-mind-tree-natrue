@@ -72,6 +72,7 @@ import {
 } from "../services/export";
 import { reconcileLinkedFileReferences } from "../services/linked-resource-sync";
 import { CreatedNoteAssociationError, DuplicateResourceIdError, type FileAssociationProgress } from "../services/resource-index";
+import { TaskNotesMoveUnavailableError, TaskNotesUnavailableError } from "../services/tasknotes";
 import { ResourceVerificationChangedError } from "../services/resource-catalog";
 import {
   assessExternalVersion,
@@ -2674,6 +2675,7 @@ export class MindTreeView extends TextFileView {
         ? this.commit((draft) => { getNode(draft, nodeId).titleSync = "off"; })
         : void this.enableTitleSync(nodeId),
       addNote: () => void this.createNoteForNode(nodeId),
+      createTaskNote: () => void this.createTaskNoteForNode(nodeId),
       addFileFromTemplate: () => this.showTemplateFilePicker(nodeId),
       linkFile: () => this.linkExistingFile(nodeId),
       linkWeb: () => this.linkUrl(nodeId),
@@ -2932,6 +2934,77 @@ export class MindTreeView extends TextFileView {
     };
     if (node.title.trim()) await create(node.title);
     else new TextPromptModal(this.app, t("modal.createNote.title"), "", t("modal.createNote.placeholder"), t("action.create"), (value) => void create(value)).open();
+  }
+
+  /**
+   * Create a task note through the optional TaskNotes plugin, move it into this
+   * tree's folder, then link it like any other created file. TaskNotes owns the
+   * file name and frontmatter; creation, placement and association report
+   * failures separately, and an already-created task is never deleted.
+   */
+  private async createTaskNoteForNode(nodeId: NodeId): Promise<void> {
+    if (this.commitVisibleEditorDraft() === "rejected") return;
+    const target = this.captureAssociationTarget(nodeId);
+    if (!target) return;
+    const taskNotes = this.plugin.taskNotes;
+    // The menu row stays visible without TaskNotes so the install hint is
+    // discoverable; the hint differs according to what is actually missing.
+    if (!taskNotes.resolveApi()) {
+      new Notice(t(taskNotes.installed() ? "notice.taskNotesApiUnsupported" : "notice.taskNotesMissing"));
+      return;
+    }
+    const create = async (source: string): Promise<void> => {
+      const title = fileTitleFromNode(source);
+      if (title === undefined) { new Notice(t("title.codeOrMath")); return; }
+      // A TaskNote is its own in-flight operation: it must not be joined with a
+      // concurrently started plain-note creation for the same node.
+      await this.fileAssociations.createOnce(`tasknote:${target.documentSessionToken}:${nodeId}`, async () => {
+        let created: { file: TFile; reference: FileResourceRef } | undefined;
+        let taskPath: string | undefined;
+        try {
+          // The optional title dialog may outlive the file or its unlinked node.
+          this.requireAssociationTarget(target);
+          // TaskNotes creates in its own tasks folder; move the note into the
+          // folder that holds the tree being edited (the vault root at top level).
+          const treeDirectory = this.file?.parent?.isRoot() ? "" : this.file?.parent?.path ?? "";
+          const task = await taskNotes.createTask(title, { targetFolder: treeDirectory });
+          taskPath = task.path;
+          const file = this.app.vault.getFileByPath(task.path);
+          if (!file) {
+            // TaskNotes created the note but the vault cannot see it yet; report
+            // the real task path instead of pretending nothing was created.
+            new Notice(t("notice.taskNoteFileMissing", { path: task.path }));
+            return;
+          }
+          const reference = await this.plugin.resources.ensureStableReference(file);
+          created = { file, reference };
+          this.associateFileWithTarget(target, file, reference, file.basename);
+          if (!task.moved && task.moveError !== undefined) {
+            // The link is valid, but the note stayed where TaskNotes created it
+            // (for example a same-named file already occupies the tree folder).
+            new Notice(t("notice.taskNoteMoveFailed", {
+              path: task.path,
+              message: this.describeResourceError(task.moveError)
+            }));
+          }
+        } catch (error) {
+          const message = this.describeResourceError(error);
+          if (error instanceof TaskNotesMoveUnavailableError) new Notice(t("notice.taskNotesMoveUnsupported"));
+          else if (error instanceof TaskNotesUnavailableError) new Notice(t("notice.taskNotesMissing"));
+          else if (taskPath) new Notice(t("notice.createdTaskNoteNotLinked", { path: taskPath, message }));
+          else new Notice(t("notice.createTaskNoteFailed", { message }));
+          return;
+        }
+        try {
+          await this.openCreatedFile(created!.file);
+        } catch (error) {
+          new Notice(t("notice.openCreatedFileFailed", { message: error instanceof Error ? error.message : String(error) }));
+        }
+      });
+    };
+    const node = this.document!.nodes[nodeId]!;
+    if (node.title.trim()) await create(node.title);
+    else new TextPromptModal(this.app, t("modal.createTaskNote.title"), "", t("modal.createTaskNote.placeholder"), t("action.create"), (value) => void create(value)).open();
   }
 
   /** Capture the destination before the picker can outlive its original view. */

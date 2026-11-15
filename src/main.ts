@@ -11,6 +11,7 @@ import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
 import { MindTreeReferenceService } from "./services/mind-tree-reference";
 import { MindTreeCreationService } from "./services/tree-creation";
+import { TaskNotesService, pluginRegistryOf } from "./services/tasknotes";
 import { PendingConflictStore } from "./services/pending-conflict-store";
 import { PendingConflictMaintenance } from "./services/pending-conflict-maintenance";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
@@ -97,6 +98,12 @@ export default class MindTreeNaturePlugin extends Plugin {
   private references!: MindTreeReferenceService;
   /** The one path that creates a `.mtn.md`, shared by the UI and the MCP tools. */
   private treeCreation!: MindTreeCreationService<TFile>;
+  /**
+   * Optional TaskNotes integration. The registry and the source id are read
+   * lazily, so enabling or updating TaskNotes while a tree is open is visible
+   * to the next menu attempt without a plugin reload.
+   */
+  readonly taskNotes = new TaskNotesService(() => pluginRegistryOf(this.app), () => this.manifest.id);
   /**
    * The MCP subsystem. Absent on a platform that cannot serve it, which is what
    * makes "unsupported" a fact about the object graph rather than a flag.

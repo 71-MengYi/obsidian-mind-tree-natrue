@@ -23,6 +23,8 @@ export interface NodeContextMenuActions {
   readonly isCurrent: () => boolean;
   readonly toggleTitleSync: () => void;
   readonly addNote: () => void;
+  /** Create a task note through the optional TaskNotes companion plugin. */
+  readonly createTaskNote: () => void;
   readonly addFileFromTemplate: () => void;
   readonly linkFile: () => void;
   readonly linkWeb: () => void;
@@ -65,6 +67,7 @@ export class NodeContextMenu {
           case "title-sync": return item.setTitle(state.titleSyncEnabled ? t("menu.disableTitleSync") : t("menu.enableTitleSync"))
             .setIcon(state.titleSyncEnabled ? "unlink" : "refresh-cw").onClick(guarded(actions.toggleTitleSync));
           case "add-note": return item.setTitle(t("menu.addNote")).setIcon("file-plus-2").onClick(guarded(actions.addNote));
+          case "create-task-note": return item.setTitle(t("menu.createTaskNote")).setIcon("list-todo").onClick(guarded(actions.createTaskNote));
           case "add-file-template": return item.setTitle(t("menu.addFileFromTemplate")).setIcon("copy-plus").onClick(guarded(actions.addFileFromTemplate));
           case "link-file": return item.setTitle(t("menu.linkFile")).setIcon("file-search").onClick(guarded(actions.linkFile));
           case "link-web": return item.setTitle(t("menu.linkWeb")).setIcon("link").onClick(guarded(actions.linkWeb));

@@ -41,7 +41,7 @@ test("toolbar and keyboard help expose the established semantic order", () => {
 
 test("node menu description changes only for applicable resource and tree state", () => {
   const plain = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: true, nodeLinked: false });
-  assert.deepEqual(plain.slice(0, 4), ["add-note", "add-file-template", "link-file", "link-web"]);
+  assert.deepEqual(plain.slice(0, 5), ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"]);
   assert.ok(plain.includes("add-sibling"));
   assert.ok(plain.includes("toggle-collapse"));
   assert.ok(plain.includes("move-files"));
@@ -63,7 +63,7 @@ test("node menu description changes only for applicable resource and tree state"
   // the resource open/remove entries are not offered without a real resource.
   const nodeLinkedOnly = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: false, nodeLinked: true });
   assert.deepEqual(nodeLinkedOnly.slice(0, 3), ["markers", "node-link", "add-child"]);
-  for (const item of ["add-note", "add-file-template", "link-file", "link-web"] as const) {
+  for (const item of ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"] as const) {
     assert.equal(nodeLinkedOnly.includes(item), false);
   }
 });
@@ -80,7 +80,7 @@ test("both menu surfaces share one copy-as order and one export order", () => {
 test("resource menu never offers replacement, and default-app opening is desktop-only for files and URLs", () => {
   for (const isDesktopApp of [true, false]) {
     assert.deepEqual(nodeResourceMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp }),
-      ["add-note", "add-file-template", "link-file", "link-web"]);
+      ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"]);
     for (const hasFileResource of [true, false]) {
       const expected = [
         ...(hasFileResource ? ["title-sync"] : []), "open-resource",
@@ -88,7 +88,7 @@ test("resource menu never offers replacement, and default-app opening is desktop
       ];
       const menu = nodeResourceMenuItemOrder({ hasFileResource, hasResource: true, isDesktopApp });
       assert.deepEqual(menu, expected);
-      for (const item of ["add-note", "add-file-template", "link-file", "link-web"] as const) {
+      for (const item of ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"] as const) {
         assert.equal(menu.includes(item), false);
       }
     }

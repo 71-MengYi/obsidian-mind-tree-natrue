@@ -21,6 +21,7 @@
 | `ResourceService` | 创建、关联、打开、移动文件与处理标题同步。 |
 | `TemplateFileService` | 通过窄化 Vault 接口复制任意模板文件、分配独立身份、预留并发路径并回收未关联副本；不解析内部链接。 |
 | `DefaultAppOpener` | 只读解析关联文件或安全网页 URL，桌面点击时延迟加载系统打开接口，并统一返回可翻译错误码。 |
+| `TaskNotesService` | 可选 TaskNotes 集成：按需读取宿主插件注册表，只接受运行时 API v1 且具备 `tasks.write` 的实例；创建任务笔记并返回真实路径，不缓存 API 实例、不导入 TaskNotes 内部模块。 |
 | `ClipboardService` | 写入和读取自有 JSON、Markdown、PNG。 |
 | `ExportService` | 生成 PNG 和 Markdown 导出结果。 |
 | `SettingsService` | 设置读写和默认值。 |
@@ -50,6 +51,8 @@ MCP 子系统按“纯协议 / 宿主接线”两半分在 `services/mcp/`：`co
 视图在模板选择器打开时捕获共享 `AssociationTarget` 的会话令牌与节点 ID，异步复制和提交边界重复验证。服务只拥有未提交副本的回收权限；领域关联成功后显式移交所有权，后续渲染或打开失败不得删除已关联文件。回收使用 Obsidian 回收站并校验文件对象身份，不删除同路径的替换文件；回收失败保留副本并向用户显示路径。普通新建 Markdown 笔记的初始内容流程不经过此服务。
 
 普通笔记、模板、已有文件与网页关联共用 `AssociationTarget` 校验；已有关联不论是否关闭标题同步都不得被替换。入口和弹窗回调检查之外，领域草稿仍需重新检查，避免另一视图的编辑提交改变目标后继续写入。模板未提交副本沿用回收策略，普通笔记已创建而关联失败时保留文件并明确提示路径，已有文件不做删除回滚。右键菜单通过同一纯函数生成资源分组，并用 `ResourceTarget` 在点击时比较会话、节点与稳定文件 ID/URL；路径和标题变化不被误判为资源替换。
+
+TaskNotes 集成是唯一的可选第三方插件集成：`services/tasknotes.ts` 是零 Obsidian 依赖的纯模块，插件注册表以端口注入（优先 `app.plugins.getPlugin("tasknotes")`，回退 `app.plugins.plugins.tasknotes`），API 每次点击重新解析，因此启用、更新或禁用 TaskNotes 都不需要重载本插件。只接受 `apiVersion === 1` 且 `hasCapability("tasks.write")` 的运行时 API；创建调用只走 `api.tasks.create()`，随后因 TaskNotes 的创建接口不接受目录，再用 `api.tasks.move()` 把任务移入当前思维树目录（要求 `tasks.move` 能力，仓库根目录传空串）。文件名、Frontmatter 与任务字段属于 TaskNotes，本插件不写任务字段，只在移动成功后按最终真实路径写入自己的稳定 `resourceId`、建立节点引用并按偏好打开。缺少 `tasks.move` 时在创建前拒绝；移动失败（例如目标目录已有同名文件）时保留原位置文件、仍建立关联并提示真实路径与原因。插件缺失或版本不兼容时不创建文件、不发起网络请求，也不新增 npm 依赖。
 
 系统默认打开与现有 Obsidian 内打开分离。`DefaultAppOpener` 通过注入接口解析规范 `TFile`、取得 `FileSystemAdapter.getFullPath()` 的原生路径，并调用 `shell.openPath()`；HTTP/HTTPS 则调用 `shell.openExternal()`，不支持其他协议，不拼接命令字符串或文件 URL。`openPath()` 的非空返回字符串也按失败处理。菜单与执行入口都检查 `Platform.isDesktopApp`，只有点击后才加载 Electron；系统打开没有文档修改、保存、历史或视口权限。[Electron Shell API](https://www.electronjs.org/docs/latest/api/shell)
 
