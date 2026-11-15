@@ -34,8 +34,10 @@ SOFTWARE.
 Mind Tree Nature's AI model-provider settings and OAuth flows are adapted from
 [obsidian-yolo](https://github.com/Lapis0x0/obsidian-yolo), reviewed at commit
 `90f3e183e23304ed85e028175d31887e3827a958`. The provider presets, default API
-types, request preview rules and OAuth client identifiers come from that
-project; the UI was rewritten for this plugin's command-style settings pages.
+types, request preview rules and the ChatGPT/GitHub Copilot OAuth client
+identifiers come from that project; Gemini OAuth uses a Google OAuth client
+supplied by the user, so no Gemini client credentials are embedded here. The UI
+was rewritten for this plugin's command-style settings pages.
 `obsidian-yolo` is MIT licensed:
 
 MIT License

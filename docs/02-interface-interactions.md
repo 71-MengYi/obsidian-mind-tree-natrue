@@ -575,8 +575,8 @@ MCP 服务分区的内部顺序：大标题 → 说明 → “开启 MCP 服务�
 **添加与编辑供应商**
 
 - “添加提供商”打开选择器弹窗：搜索框、分类 chips（全部 / 主流 / 国内 / 网关 / 云服务 / 本地）与预设 tile 网格；网格末尾是“自定义提供商”tile（任意 OpenAI 兼容端点）。搜索匹配品牌标签与 preset id、不区分大小写；无匹配显示空态。选择某个预设后进入供应商表单。
-- 表单字段顺序：预设（品牌下拉）→ 提供商 ID → API 类型（只列该预设支持的协议，原生协议在前）→ API Key（密码输入；可打开“获取 API Key”外链；编辑时留空表示保留当前 Key）→ Base URL 与“请求发往 {url}”预览 → 预设相关的请求选项（请求方式：浏览器 / Obsidian / 桌面端直连；流式响应：自动 / 流式 / 非流式；提示缓存；跳过 Stainless SDK；Google Cloud 项目；部署名称；API 版本；AWS 区域）→ 自定义请求头增删 → 保存 / 取消。校验错误内联在表单顶部。
-- 必填规则：ID 必须唯一，以字母或数字开头，只含字母、数字、点、短横线和下划线；需要 API Key 的预设必须填写 Key；自定义提供商、Azure OpenAI 必须填写 Base URL，Azure OpenAI 还必须填部署名称与 API 版本，Amazon Bedrock 必须填 AWS 区域；所有 Base URL 只接受不带用户名/密码的 http/https 地址。OAuth 预设不需要 API Key。
+- 表单字段顺序：预设（品牌下拉）→ 提供商 ID → API 类型（只列该预设支持的协议，原生协议在前）→ API Key（密码输入；可打开“获取 API Key”外链；编辑时留空表示保留当前 Key）→ Base URL 与“请求发往 {url}”预览 → 预设相关的请求选项（请求方式：浏览器 / Obsidian / 桌面端直连；流式响应：自动 / 流式 / 非流式；提示缓存；跳过 Stainless SDK；Google OAuth 客户端 ID / 密钥（Gemini OAuth 必填）；Google Cloud 项目；部署名称；API 版本；AWS 区域）→ 自定义请求头增删 → 保存 / 取消。校验错误内联在表单顶部。
+- 必填规则：ID 必须唯一，以字母或数字开头，只含字母、数字、点、短横线和下划线；需要 API Key 的预设必须填写 Key；自定义提供商、Azure OpenAI 必须填写 Base URL，Azure OpenAI 还必须填部署名称与 API 版本，Amazon Bedrock 必须填 AWS 区域；Gemini OAuth 必须填写用户自建的 Google OAuth 客户端 ID 与密钥（仓库不内置客户端凭据），缺失时以 `provider-oauth-client-required` 提示；所有 Base URL 只接受不带用户名/密码的 http/https 地址。OAuth 预设不需要 API Key。
 - Base URL 留空时使用预设默认接口；预览行显示该 API 类型实际会调用的地址，不支持的 API 类型（例如需要由提供商设置拼接地址的 Bedrock）显示说明而不是编造链接。
 
 **模型表**
@@ -603,7 +603,7 @@ MCP 服务分区的内部顺序：大标题 → 说明 → “开启 MCP 服务�
 
 **OAuth**
 
-- OAuth 面板位于展开卡片的模型表之后，覆盖 ChatGPT（设备码）、Gemini（浏览器 PKCE）、GitHub Copilot（设备码）与 Claude（手动粘贴访问令牌）。状态行为未连接、等待授权、已连接（可带账号）、出错，并相应提供“连接 / 取消 / 断开连接”与验证页入口；设备码会显示在面板里。
+- OAuth 面板位于展开卡片的模型表之后，覆盖 ChatGPT（设备码）、Gemini（浏览器 PKCE）、GitHub Copilot（设备码）与 Claude（手动粘贴访问令牌）。状态行为未连接、等待授权、已连接（可带账号）、出错，并相应提供“连接 / 取消 / 断开连接”与验证页入口；设备码会显示在面板里。Gemini 在登录前会检查供应商表单里的 Google OAuth 客户端 ID 与密钥；缺失时不打开浏览器，直接以“OAuth 出错”显示需要先补全凭据。
 - 手动令牌输入在未连接、等待授权或出错时作为兜底保留：密码输入 + “保存令牌”。OAuth 浏览器跳转与本地回调只在桌面端提供；AI tab 在移动端也显示，但 OAuth 的“连接 / 取消 / 断开”按钮在移动端禁用，并提示“OAuth 登录仅在桌面端可用。可在下方粘贴访问令牌。”，手动令牌仍可用。
 - 已连接 OAuth 的令牌在读取连接状态时可能自动续期一次（例如 GitHub Copilot 的短期令牌过期/缺失时后台换取 Copilot token）。续期属于登录会话维护，不含笔记内容，也不调用模型；除此之外只由“连接”动作触发 OAuth 请求。
 - OAuth 凭据保存在设备本地存储（键 `${manifest.id}:ai-oauth:<providerId>`），不进入 `data.json`；API Key 与模型配置进入 `data.json`。断开 OAuth 与删除供应商都会清除对应设备凭据。

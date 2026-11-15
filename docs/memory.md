@@ -34,7 +34,7 @@
 - i18n：`settings.ai.providers.*` / `settings.ai.models.*`（EN/ZH 同步）；预设品牌名属于产品数据，不翻译。
 - 文档：README 中英新增“模型提供商”一节与网络/隐私条目；`docs/01` P1 与非目标、`docs/02` §AI 模型提供商、`docs/05` §9.1/§10/§12.3、`docs/06` 模型提供商验收；`THIRD_PARTY_NOTICES.md` 的 obsidian-yolo（MIT，commit `90f3e183e23304ed85e028175d31887e3827a958`）来源由 Lead 维护，本任务未改。
 
-**OAuth client 常量来源与 MIT**：ChatGPT 设备码/浏览器 PKCE、Gemini、GitHub Copilot 的 OAuth client 常量、预设与默认请求规则改编自 [obsidian-yolo](https://github.com/Lapis0x0/obsidian-yolo)（MIT），已记录在 `THIRD_PARTY_NOTICES.md`。这些是产品内置的应用凭据常量，不是用户配置项；`contracts.ts`/`normalize.ts` 虽然保留了 `additionalSettings.oauthClientId/oauthClientSecret` 字段作为可选覆盖，但当前没有任何预设声明它们，因此表单不显示 OAuth client 输入。改动常量前先核对上游与许可声明。
+**OAuth client 常量来源与 MIT**：ChatGPT 设备码/浏览器 PKCE、GitHub Copilot 的 OAuth client 常量、预设与默认请求规则改编自 [obsidian-yolo](https://github.com/Lapis0x0/obsidian-yolo)（MIT），已记录在 `THIRD_PARTY_NOTICES.md`。**Gemini OAuth 不内置客户端**：`gemini-oauth` 预设把 `additionalSettings.oauthClientId/oauthClientSecret` 声明为必填，`validateProvider` 以 `provider-oauth-client-required` 拦截缺失，`oauth.ts` 只在用户填写的值存在时发起浏览器登录；仓库与发布包不得再写入任何 Google OAuth 客户端 ID 或客户端密钥常量（2026-11-16 因 GitHub Push Protection 拦截做过历史改写，见当日条目）。改动其他常量前先核对上游与许可声明。
 
 **已知风险 / 取舍**
 
@@ -820,6 +820,23 @@
 - `src/services/tasknotes.ts`：`TASKNOTES_MOVE_CAPABILITY = "tasks.move"`；`TaskNotesRuntimeApi.tasks.move?` 为可选；`createTask(title, { targetFolder })` 在提供目录时先要求 `tasks.move` 能力（缺失 → `TaskNotesMoveUnavailableError`，**创建前**拒绝），创建成功后用同一 correlationId 调 move；成功返回 `{ path, moved: true }`，失败返回 `{ path: 原路径, moved: false, moveError }`（不抛，便于视图仍建立关联）。
 - `src/ui/mind-tree-view.ts`：目录取 `this.file?.parent?.isRoot() ? "" : this.file?.parent?.path ?? ""`（仓库根目录传空串）；移动失败时照常完成 `ensureStableReference` 与关联，并用 `notice.taskNoteMoveFailed` 提示真实路径与原因（用户可再用右键菜单「将关联文件移动到」）；新增 i18n 键 `notice.taskNotesMoveUnsupported`、`notice.taskNoteMoveFailed`。
 - `test/tasknotes.test.ts` 增 4 条：移动与 correlationId、根目录空串、缺 move 能力创建前拒绝（含能力位与函数两条判据）、移动失败保留原路径；`test/ui-modules.test.ts` 未改。
+
+## 2026-11-16 · 移除内置 Google OAuth 客户端并改写未推送历史（`fix` + `docs`）
+
+**起因**：用户执行 `git push` 被 GitHub Push Protection（GH013）拒绝：待推送的 `393135a`（AI 模型提供商设置）在 `src/services/ai/oauth.ts:46-47` 与 `test/ai-oauth.test.ts:376/399` 含有 Gemini CLI 的公开 Google OAuth Client ID 与 Client Secret。GitHub 只要在待推送提交里扫到就拒绝整个 ref。用户选择方案 B（不使用 GitHub 白名单），改写未推送历史移除字面量。
+
+**口径**：工程上无法既保留内置凭据又通过扫描，因此把 Gemini OAuth 改为**使用用户自备的 Google OAuth 客户端**：
+- `src/services/ai/oauth.ts`：删除 `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`；新增 `geminiCredentials(provider)`（读 `additionalSettings.oauthClientId/oauthClientSecret`，缺失抛 `AiOAuthError("unsupported", …)`）；`beginGeminiBrowser` 在 `requireDesktop` 之后、打开回调服务器之前校验凭据，`buildGeminiAuthorizeUrl` 改为接收 clientId；`completeGemini` 同样解析凭据后用于 token 交换。桌面/移动端限制保持不变（移动端仍先报 `not-desktop`）。
+- `src/services/ai/presets.ts`：`gemini-oauth` 的额外设置新增必填 `oauthClientId`/`oauthClientSecret`（标签沿用既有 i18n 键，表单以密码框渲染密钥）。
+- `src/services/ai/normalize.ts`：`validateProvider` 对 Gemini OAuth 缺失凭据发出 `provider-oauth-client-required`（错误码与文案此前已存在但无人使用），并让通用 required 循环跳过这两个键避免重复报错。
+- 测试：`test/ai-oauth.test.ts` 用测试凭据驱动 Gemini 流程并断言 authorize/token 两处 client_id/secret，新增“缺失凭据不打开浏览器”用例；`test/ai-settings-normalize.test.ts` 新增 Gemini OAuth 校验用例。
+
+**历史改写（关键）**：当时 `master` 领先 `origin/master` 7 个提交。在 `393135a`（父 `384e6df`）上直接修改并 `git commit --amend` 成 `e4a9b47`（原提交信息追加 Gemini OAuth 不内置凭据说明），再 `git rebase --onto e4a9b47 393135a master`，把 `2135a30`→`7a5947b`、`348ed0b`→`d0e3bb4`、`9807c95`→`4ac9345` 重放；因后续提交未触碰上述 AI 文件，重放无冲突。验证方式：对 `git rev-list origin/master..HEAD` 的每个提交逐一 `git grep` 搜索旧 Google OAuth 客户端 ID/Secret 的前缀，全部无命中（旧对象仅在本地 reflog/悬空对象里，普通 push 不会发送）。**教训**：不要用新增提交删除 secret（历史仍在、依旧被拦）；不要在未核对上游来源的情况下把公开 CLI 凭据的常量搬进仓库；也不要把被拦凭据的具体值或可识别片段写进文档。
+
+**文档**：README 中英的模型提供商表单/OAuth 段说明 Gemini 需自备 OAuth 客户端且仓库不内置凭据；`docs/01` P1、`docs/02` 表单字段与必填规则、OAuth 面板、`docs/05` §9.1、`docs/06` 模型提供商验收第 7 条同步；`THIRD_PARTY_NOTICES.md` 的 OAuth client 来源改为仅 ChatGPT/Copilot；并更新上方 2026-11-13 条目的“OAuth client 常量来源”段落。
+
+**验证（2026-11-16 00:2x）**：`npm run check` 0 错误；全量 **1167 tests / 1167 pass / 0 fail**；`npm run build` 成功，`main.js` 5,010,853 B ≈ 4.78 MiB（上限 10 MiB）。仍未在真实 Obsidian 内做 Gemini OAuth 人工验收（无 Google OAuth 客户端与真实账号）；文档不得写成“已验证可用”。
+
 
 
 
