@@ -1,5 +1,19 @@
 # memory
 
+## 2026-11-17 · 关联网页的标题默认填入节点文本（`feat`）
+
+**需求（用户口径）**：右键「链接网页」时，标题输入框默认填入该节点的当前文本，不要因为链接一个网址就把节点名换成域名。
+
+**落点**
+- `src/ui/modals/text-prompt-modal.ts`：`UrlPromptModal` 构造签名扩为 `(app, onSubmit, initialTitle = "")`，`this.title = initialTitle.trim()`，标题输入框用 `setValue(this.title)` 预填；提交仍是 `this.title || parsed.hostname`（清空后才回退域名），URL 输入框仍默认 `https://`。
+- `src/ui/mind-tree-view.ts` 的 `linkUrl()`：打开弹窗前读取 `this.document?.nodes[nodeId]?.title ?? ""` 作为第三个参数。节点标题是 Markdown 源文本（可能含 `**` 等），这里不转纯文本——预填值就是节点文本本身，用户不改就直接原样写回，节点显示不变。
+- i18n `modal.linkWeb.titleDesc`（EN/ZH）改为说明「默认使用节点文本；留空时使用网站域名」；`docs/02` §6.7 关联网页补两条；README 中英「把笔记挂到树上」新增「链接网页」条目（此前 README 没写过这个入口）。
+- 新增 `test/url-link-title.test.ts`（2 条源码接线断言：视图把节点文本传给弹窗、弹窗同时预填存储值与输入框、清空回退主机名不变）。
+
+**测试**：`npm run check` 0 错误；全量 **1092 tests / 1085 pass / 7 fail**，7 条全部是已知的 `esbuild buildSync → spawn EPERM` 环境失败（`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），无新增失败。
+
+**环境坑**：`docs/memory` 里记的替代运行器 `C:\Users\Dayiy\AppData\Local\Temp\dsh-mtn-hooks\run-tests.ps1` 已不存在。本轮用 Node 原生 TS 执行替代 `tsx`：一个 `node:module` `resolve` 钩子把无扩展名/目录 index 的本地导入补成 `.ts`，再 `node --experimental-transform-types --import "file:///D:/.../register.mjs" --test --test-isolation=none @files`（`register.mjs` 里 `register("./hooks.mjs", import.meta.url)`）。钩子本轮临时放在 gitignored 的 `.mtn-test-build/`，跑完已删除；需要复跑时按此重建即可。工作区里的中文文件一律用 `edit`/`write` 工具改，不要用 PowerShell 往返编码。
+
 ## 2026-11-14 · MCP 访问令牌改为跨设备固定（`fix`）
 
 **需求（用户口径）**：MCP 的鉴权字符串（Bearer token）总是变，Obsidian 同步后每个 MCP 服务都会失效；要求固定下来，不因同步换设备而失效。

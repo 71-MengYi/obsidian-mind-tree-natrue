@@ -27,14 +27,19 @@ export class TextPromptModal extends Modal {
 
 export class UrlPromptModal extends Modal {
   private url = "https://";
-  private title = "";
-  constructor(app: App, private readonly onSubmit: (url: string, title: string) => void) { super(app); }
+  private title: string;
+  constructor(app: App, private readonly onSubmit: (url: string, title: string) => void,
+    /** The node's own text, which stays the default name of the linked page. */
+    initialTitle = "") {
+    super(app);
+    this.title = initialTitle.trim();
+  }
   onOpen(): void {
     this.titleEl.setText(t("modal.linkWeb.title"));
     new Setting(this.contentEl).setName(t("modal.linkWeb.url")).addText((input) => input
       .setValue(this.url).onChange((value) => { this.url = value.trim(); }));
     new Setting(this.contentEl).setName(t("modal.linkWeb.nodeTitle")).setDesc(t("modal.linkWeb.titleDesc"))
-      .addText((input) => input.onChange((value) => { this.title = value.trim(); }));
+      .addText((input) => input.setValue(this.title).onChange((value) => { this.title = value.trim(); }));
     new Setting(this.contentEl).addButton((button) => button.setCta().setButtonText(t("action.link")).onClick(() => {
       let parsed: URL;
       try { parsed = new URL(this.url); } catch { return; }

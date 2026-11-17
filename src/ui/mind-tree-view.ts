@@ -3166,6 +3166,9 @@ export class MindTreeView extends TextFileView {
   private linkUrl(nodeId: NodeId): void {
     const target = this.captureAssociationTarget(nodeId);
     if (!target) return;
+    // Linking a page must not rename the node implicitly, so its own text is
+    // the default title and the host name only a fallback for a cleared field.
+    const nodeTitle = this.document?.nodes[nodeId]?.title ?? "";
     new UrlPromptModal(this.app, (url, title) => {
       try {
         this.requireAssociationTarget(target);
@@ -3179,7 +3182,7 @@ export class MindTreeView extends TextFileView {
       } catch (error) {
         new Notice(t("notice.operationFailed", { message: this.describeResourceError(error) }));
       }
-    }).open();
+    }, nodeTitle).open();
   }
 
   /** Open a searchable vault-folder picker for the current file or its branch. */
