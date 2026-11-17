@@ -22,3 +22,26 @@ export function shouldHandleMindTreePaste(state: Readonly<PasteTargetState>): bo
   if (!state.targetEditable) return true;
   return !state.targetInView && !state.targetVisible;
 }
+
+export interface StaleKeyTargetState {
+  /** The mind-tree view itself is painted, so the user is looking at it. */
+  viewVisible: boolean;
+  /** The key was delivered to a text surface outside this view. */
+  targetOutsideEditable: boolean;
+  /** That text surface is painted, so the user really is typing in it. */
+  targetVisible: boolean;
+  /** A visible modal, menu, or custom editor owns the gesture. */
+  nativeSurfaceVisible?: boolean;
+}
+
+/**
+ * Only a rendered tree may recover a structural key from an invisible editor.
+ * Obsidian can leave the DOM focus in the editor of a tab that is no longer
+ * painted; without this the next Tab indents that unseen note instead of
+ * reaching the canvas. Visible inputs always keep their native behaviour.
+ */
+export function shouldHandleMindTreeStaleKey(state: Readonly<StaleKeyTargetState>): boolean {
+  if (!state.viewVisible) return false;
+  if (state.nativeSurfaceVisible) return false;
+  return state.targetOutsideEditable && !state.targetVisible;
+}

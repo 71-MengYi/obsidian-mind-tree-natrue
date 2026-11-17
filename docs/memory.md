@@ -851,6 +851,39 @@
 
 **验证（2026-11-16 00:2x）**：`npm run check` 0 错误；全量 **1167 tests / 1167 pass / 0 fail**；`npm run build` 成功，`main.js` 5,010,853 B ≈ 4.78 MiB（上限 10 MiB）。仍未在真实 Obsidian 内做 Gemini OAuth 人工验收（无 Google OAuth 客户端与真实账号）；文档不得写成“已验证可用”。
 
+## 2026-11-17 · Tab 把焦点交给别的笔记（`fix`）
+
+**起因**：用户反馈「在思维树视图里按 Tab，另一篇笔记的文字一直被缩进，只有重启 Obsidian 才恢复」。定位结论（静态可证）：`KeyboardController.keyDown` 只把 `event.key === "Tab"` 放在 `hasPrimary` 之后处理，**没有主选节点时既不 `preventDefault` 也不做任何事**，于是浏览器执行默认的顺序焦点导航：焦点从 `.mtn-canvas`（`tabIndex = 0`，`role="application"`）走到树内按钮、视图外宿主控件，最终落进 `.cm-content`（`contenteditable` 可聚焦）；此后每次 Tab 都是 CodeMirror 的缩进 —— 表现就是「另一篇笔记一直被缩进」。而「空选中」很容易误触：**在画布空白处单击/框选 0 个节点时 `CanvasInteractionController.updateMarquee` 会立刻 `replaceSelection(new Set(), undefined)`**，`primarySelectedId` 直接变 undefined，紧接着按 Tab 就出事。
+
+**落点**：
+- `src/ui/controllers/keyboard-controller.ts`：`Tab` 分支移出 `hasPrimary` 门槛 —— 只要画布收到 Tab 就先 `preventDefault()`（长按 repeat 同样消费但不建节点），`Shift+Tab` 无主选时不执行 `addParent`（插入父节点必须有目标）。**不要在控制器里复刻「无选中 → 根节点」**：`MindTreeView.addChildNode()` 已有该兜底（`primarySelectedId && document.nodes[...] ? … : document.rootId`），命令面板的 `add-child-node` 也走同一条命令；顺手把 `docs/02` §6.4 里过时的「工具栏『添加』」改成「命令面板『添加子节点』与 `Tab`」（§5 早已写明顶部不再有添加按钮）。
+- `test/keyboard-controller.test.ts`（新增 7 条）：无选中时 Tab 被消费且调用 `addChild`、无选中时 Shift+Tab 被消费但不建节点、有选中时 Tab/Shift+Tab 语义不变、repeat 消费但不建节点、`Ctrl+Tab` 无选中时仍交还宿主标签切换、标题输入框/弹窗内 Tab 保留控件原生行为、已 `defaultPrevented` 的事件不重复处理。此前 `KeyboardController` **没有任何测试文件**（`test/keyboard-navigation.test.ts` 只覆盖 `shouldHandleStructuralCreationKey` 与方向键）。
+- 文档：`docs/02` §6.3 的 Tab/Shift+Tab 两条、`docs/06` 验收第 15 条写明「未选中时作用于根节点」「Tab 由画布消费，不交给宿主焦点顺序」。
+
+**验证（2026-11-17）**：`npm run check` 0 错误；全量（沙箱替代运行器，见下）**1099 tests / 1092 pass / 7 fail**，7 条全部是既有 esbuild `spawn EPERM` 环境失败（`adaptive-tooltip`、`ai-settings-page`、`custom-markers-settings-page`、`marker-popover-custom`、`node-renderer`、`plugin-update-modal`、`top-toolbar`），**无新增失败**。`workspace-write` 下 `npm test` / `npx tsx` 仍 `spawn EPERM`；本轮用 Node 原生 TS 跑通：`.mtn-test-build/`（gitignored）里放 `hooks.mjs`（`node:module` resolve 钩子，把无扩展名/目录 index 的本地导入补成 `.ts`）+ `register.mjs`（`register("./hooks.mjs", import.meta.url)`），命令为 `node --experimental-transform-types --import "file:///…/.mtn-test-build/register.mjs" --test --test-isolation=none "test/*.test.ts"`，跑完已删除该目录。**注意**：不带 `--test` 直接 `node file1.ts file2.ts` 只会统计第一个文件的用例（后续文件注册被丢弃），判基线必须带 `--test --test-isolation=none`。
+
+**未完成 / 待确认**：① 未在真实 Obsidian 里人工复现用户场景（本机没有可运行的插件环境）；② 若用户的实际前提是「焦点本来就不在画布上」（例如用鼠标点标签页切回思维树、DOM 焦点仍留在笔记编辑器），本次修复无效 —— 那需要在 `active-leaf-change` 且焦点不在 `rootEl` 内时补 `canvasEl.focus()`，属于「切回视图自动抢焦点」的行为变更，应先确认产品口径（`docs/02` 只写了「后台标签不抢焦点」）；③ WCAG 2.1.2「无键盘陷阱」是既有取舍：有选中时 Tab/Shift+Tab 已是结构命令，画布没有 Tab 出口（小地图也刻意不进 Tab 顺序），本轮未改。
+
+### ↳ 同日追加：用户确认「已选中节点」后的重定位（同一症状，第二处修复）
+
+**新事实（用户答问）**：① 出问题时**确实先选中了节点**；② 用鼠标点画布（节点或空白处）**不会**恢复，只能重启；③ 被缩进的笔记在**另一个标签页**（只有一个是可见的）。因此上面「空选中 → Tab 落到宿主焦点顺序」不是本次路径；真正的状态是：**焦点留在已切走标签页的笔记编辑器里**（该编辑器不再被绘制，却仍是 `document.activeElement`），Tab 由它消费并缩进；点画布也没能抢回焦点，于是「只有重启」。仓库对粘贴早就遇到过同一现象（`shouldCaptureDocumentPaste` 的注释原话：「Elements under display:none ancestors have no rects. They are the stale-focus case this document listener exists to recover from.」），Tab 一直没接这条规则 —— 这才是缺口。
+
+**落点**：
+- `src/ui/paste-routing.ts` → **重命名**为 `src/ui/document-event-routing.ts`（该模块现在管两类文档级事件归属，继续叫 paste 会误导）。保留 `shouldHandleMindTreePaste` 原样，新增 `StaleKeyTargetState` + `shouldHandleMindTreeStaleKey({ viewVisible, targetOutsideEditable, targetVisible, nativeSurfaceVisible })`：**只有「思维树自己已绘制 + 按键落在别的文本编辑面 + 那个编辑面没被绘制 + 没有可见弹窗/菜单」才接管**。
+- `src/ui/components/canvas-shell.ts`：`CanvasShellActions` 新增 `documentKeyDown`，在 `ownerDocument` **捕获阶段**注册 `keydown`（与既有 document `paste` 同一处、同一生命周期）。
+- `src/ui/mind-tree-view.ts`：新增 `onDocumentKeyDown` / `shouldRecoverStaleTab` / `isPainted`（优先 `Element.checkVisibility()`，回退 `getClientRects().length > 0`）；命中后调 `keyboardController.keyDownFromStaleFocus(event)`，并在焦点仍不在 `rootEl` 内时尝试 `canvasEl.focus()`，把后续按键交还画布。顺手把重复的内联选择器提成模块常量 `TEXT_SURFACE_SELECTOR` / `NATIVE_SURFACE_SELECTOR`，粘贴路由一并改用 `isPainted`。
+- `src/ui/controllers/keyboard-controller.ts`：新增 `keyDownFromStaleFocus()`（**跳过 `isTextEditingTarget` 守卫**，因为事件目标正是那个看不见的编辑区），`keyDown` 与它共用私有 `dispatch(event, staleFocus)`。
+- `test/paste-routing.test.ts` → `test/document-event-routing.test.ts`（原有 3 条粘贴断言一字未改，新增 4 条：绘制中的树接管未被绘制编辑区的 Tab、可见编辑器不吃、未绘制的树不抢、可见弹窗/非文本面不吃）；`test/keyboard-controller.test.ts` 增 1 条（残留焦点入口在 textarea 目标上仍处理 Tab，普通入口仍放手）。
+- 文档：`docs/02` §6.3 Tab 条目写明「隐藏标签页残留的编辑器焦点不会吞掉 `Tab`（与粘贴同一条活动视图规则）」；`AGENTS.md` §10「改导入/粘贴」行改指新模块与新测试。
+
+**风险边界（有意为之）**：可见的其他编辑器、弹窗、菜单、侧栏等非文本面**全部保留原生 Tab**；未绘制的思维树永远不抢别处按键。也就是说这不会把 Tab 从用户正在看的输入框里抢走。
+
+**验证（2026-11-17 23:0x）**：`npm run check` 0 错误；全量 **1104 tests / 1097 pass / 7 fail**，7 条仍是既有 esbuild `spawn EPERM` 环境失败，无新增失败（替代运行器命令同上一条）。
+
+**环境坑（本轮新增）**：`workspace-write` 沙箱下 `Remove-Item` 工作区文件被拒（「访问被拒绝」），删/改文件名要一次 `sandbox_permissions: danger-full-access`；本轮经用户批准删了 `src/ui/paste-routing.ts` 与 `test/paste-routing.test.ts` 两个文件。改文件名**不要**用「清空旧文件」绕过。
+
+**仍未完成**：① 仍未在真实 Obsidian 内复现/验收；② 若用户重测后 Tab 仍缩进别的笔记，说明「未被绘制」判据没命中该宿主的隐藏方式（例如宿主用 `visibility:hidden` 之外的裁剪/离屏方案，或该宿主版本没有 `checkVisibility`），下一步改用「事件目标最近的 `.workspace-leaf` 是否为 `.mod-active`」或直接比较 `document.activeElement` 所在 leaf 与当前 leaf；③ WCAG 2.1.2 键盘出口那条既有取舍没变。
+
 
 
 

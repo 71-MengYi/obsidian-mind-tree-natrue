@@ -21,6 +21,7 @@ export interface CanvasShellActions {
   readonly dragLeave: (event: DragEvent) => void;
   readonly drop: (event: DragEvent) => void;
   readonly keyDown: (event: KeyboardEvent) => void;
+  readonly documentKeyDown: (event: KeyboardEvent) => void;
   readonly paste: (event: ClipboardEvent) => void;
   readonly documentDragStart: (event: DragEvent) => void;
   readonly documentDragEnd: (event: DragEvent) => void;
@@ -84,6 +85,9 @@ export class CanvasShell extends DisposableUiObject {
     this.listen(this.element, "keydown", actions.keyDown as EventListener);
 
     const ownerDocument = this.element.ownerDocument;
+    // Document-level capture recovers gestures whose focus stayed in a stale or
+    // hidden editor; the callbacks decide whether this view owns them.
+    this.listen(ownerDocument, "keydown", actions.documentKeyDown as EventListener, { capture: true });
     this.listen(ownerDocument, "paste", actions.paste as EventListener, { capture: true });
     this.listen(ownerDocument, "dragstart", actions.documentDragStart as EventListener);
     this.listen(ownerDocument, "dragend", actions.documentDragEnd as EventListener);

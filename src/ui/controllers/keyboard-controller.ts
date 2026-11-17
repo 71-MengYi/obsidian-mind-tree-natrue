@@ -25,12 +25,25 @@ export class KeyboardController {
   constructor(private readonly actions: KeyboardActions) {}
 
   keyDown(event: KeyboardEvent): void {
+    this.dispatch(event, false);
+  }
+
+  /**
+   * Treat a key that reached a stale, unpainted editor as a canvas key. The
+   * caller already proved the tree owns the event, so the text-target guard
+   * must not hand it back to the surface the user cannot even see.
+   */
+  keyDownFromStaleFocus(event: KeyboardEvent): void {
+    this.dispatch(event, true);
+  }
+
+  private dispatch(event: KeyboardEvent, staleFocus: boolean): void {
     if (event.defaultPrevented) return;
     const command = event.ctrlKey || event.metaKey;
     if (command && !event.altKey && !event.shiftKey && event.key.toLowerCase() === "s") {
       event.preventDefault(); this.actions.save(); return;
     }
-    if (isTextEditingTarget(event.target)) return;
+    if (!staleFocus && isTextEditingTarget(event.target)) return;
     const hasPrimary = this.actions.hasPrimarySelection();
     if (command && !event.altKey && !event.shiftKey
       && (event.key === "ArrowUp" || event.key === "ArrowDown") && hasPrimary) {
@@ -54,10 +67,23 @@ export class KeyboardController {
     if (command && event.key.toLowerCase() === "e" && hasPrimary) {
       event.preventDefault(); this.actions.createNote(); return;
     }
-    if (event.key === "Tab" && hasPrimary) {
+    // Tab belongs to the canvas whenever the canvas receives the key. Letting an
+    // unhandled Tab fall through runs the browser's own focus navigation, whose
+    // next stop is usually another pane's Markdown editor; every later press
+    // then indents that note while the tree looks unresponsive. `addChild`
+    // already falls back to the root when nothing is selected, so the consumed
+    // key stays meaningful without duplicating that rule here. Modifier+Tab
+    // (tab cycling) is only taken over while a node is selected, as before.
+    if (event.key === "Tab" && ((!command && !event.altKey) || hasPrimary)) {
       event.preventDefault();
       if (!shouldHandleStructuralCreationKey(event.key, event.repeat)) return;
-      event.shiftKey ? this.actions.addParent() : this.actions.addChild();
+      if (event.shiftKey) {
+        // Inserting a parent needs a target; without one the press only stays
+        // inside the canvas instead of moving focus into another leaf.
+        if (hasPrimary) this.actions.addParent();
+        return;
+      }
+      this.actions.addChild();
       return;
     }
     if (!command && !event.altKey && event.key === " " && hasPrimary) {

@@ -135,7 +135,7 @@ import {
   type NavigationArrow
 } from "./keyboard-navigation";
 import { openMarkerPopover, type MarkerPopoverHandle } from "./marker-popover";
-import { shouldHandleMindTreePaste } from "./paste-routing";
+import { shouldHandleMindTreePaste, shouldHandleMindTreeStaleKey } from "./document-event-routing";
 import { createBottomStatusBarState, MindTreeViewShell, type StatusMessageState } from "./components";
 import { MindTreeMinimap } from "./components/mind-tree-minimap";
 import {
@@ -217,6 +217,11 @@ interface PasteInsertionContext {
   parentId: NodeId;
   documentSessionToken: string;
 }
+
+/** Text surfaces whose native behaviour wins whenever they are painted. */
+const TEXT_SURFACE_SELECTOR = "input,textarea,[contenteditable='true'],[role='textbox'],.cm-editor";
+/** Host UI that owns the gesture whenever it is painted. */
+const NATIVE_SURFACE_SELECTOR = ".modal-container,.modal,.menu,.popover,.suggestion-container,[role='dialog']";
 
 /**
  * Canvas navigation belongs to this view session, not to the mind-tree file.
@@ -1537,6 +1542,7 @@ export class MindTreeView extends TextFileView {
         dragLeave: (event) => this.onCanvasFileDragLeave(event),
         drop: (event) => void this.onCanvasFileDrop(event),
         keyDown: (event) => this.keyboardController?.keyDown(event),
+        documentKeyDown: (event) => this.onDocumentKeyDown(event),
         paste: (event) => this.onDocumentPaste(event),
         documentDragStart: (event) => this.captureInternalFileDrag(event),
         documentDragEnd: () => {
@@ -2416,16 +2422,13 @@ export class MindTreeView extends TextFileView {
     const elements = ElementConstructor
       ? path.filter((item): item is Element => item instanceof ElementConstructor)
       : [];
-    const editable = elements.find((element) => element.matches(
-      "input,textarea,[contenteditable='true'],[role='textbox'],.cm-editor"
-    ));
+    const editable = elements.find((element) => element.matches(TEXT_SURFACE_SELECTOR));
     const targetInView = elements.some((element) => element === this.rootEl || this.rootEl.contains(element));
-    // Elements under display:none ancestors have no client rects. They are the
+    // Elements under display:none ancestors are not painted. They are the
     // stale-focus case this document listener exists to recover from.
-    const targetVisible = Boolean(editable && editable.getClientRects().length > 0);
-    const nativePasteSurfaceVisible = elements.some((element) => element.matches(
-      ".modal-container,.modal,.menu,.popover,.suggestion-container,[role='dialog']"
-    ) && element.getClientRects().length > 0);
+    const targetVisible = Boolean(editable && this.isPainted(editable));
+    const nativePasteSurfaceVisible = elements.some((element) => element.matches(NATIVE_SURFACE_SELECTOR)
+      && this.isPainted(element));
     return shouldHandleMindTreePaste({
       viewActive: this.app.workspace.getMostRecentLeaf()?.view === this,
       targetInView,
@@ -2433,6 +2436,53 @@ export class MindTreeView extends TextFileView {
       targetVisible,
       nativePasteSurfaceVisible
     });
+  }
+
+  /**
+   * Recover a structural key delivered to an editor that is no longer painted.
+   *
+   * Obsidian can leave the DOM focus in the editor of a tab that is no longer
+   * shown. The canvas then never sees Tab, and that unseen note indents its own
+   * lines on every press while the tree looks selected and ready. The rendered
+   * tree therefore claims the key; visible inputs and native surfaces keep
+   * theirs, and the canvas listener still owns every in-view key.
+   */
+  private onDocumentKeyDown(event: KeyboardEvent): void {
+    if (event.defaultPrevented || event.isComposing || event.key !== "Tab") return;
+    if (this.plugin.updateRuntime.paused || !this.document || this.parseError) return;
+    if (!this.shouldRecoverStaleTab(event)) return;
+    this.keyboardController?.keyDownFromStaleFocus(event);
+    // The invisible editor may still be the only focusable target, so also try
+    // to hand the following keystrokes back to the canvas.
+    if (!this.rootEl.contains(this.rootEl.ownerDocument.activeElement)) {
+      this.canvasEl.focus({ preventScroll: true });
+    }
+  }
+
+  /** Decide whether a Tab sent outside this view still belongs to the canvas. */
+  private shouldRecoverStaleTab(event: KeyboardEvent): boolean {
+    const ElementConstructor = this.rootEl.ownerDocument.defaultView?.Element;
+    const path = event.composedPath?.() ?? [event.target].filter((item): item is EventTarget => Boolean(item));
+    const elements = ElementConstructor
+      ? path.filter((item): item is Element => item instanceof ElementConstructor)
+      : [];
+    const targetInView = elements.some((element) => element === this.rootEl || this.rootEl.contains(element));
+    if (targetInView) return false;
+    const editable = elements.find((element) => element.matches(TEXT_SURFACE_SELECTOR));
+    return shouldHandleMindTreeStaleKey({
+      viewVisible: this.isPainted(this.rootEl),
+      targetOutsideEditable: Boolean(editable),
+      targetVisible: Boolean(editable && this.isPainted(editable)),
+      nativeSurfaceVisible: elements.some((element) => element.matches(NATIVE_SURFACE_SELECTOR)
+        && this.isPainted(element))
+    });
+  }
+
+  /** Whether the browser paints this element, using the host's own capability. */
+  private isPainted(element: Element): boolean {
+    const check = (element as Element & { checkVisibility?: () => boolean }).checkVisibility;
+    if (typeof check === "function") return check.call(element);
+    return element.getClientRects().length > 0;
   }
 
   /** Route structured branches, direct text, URLs, and multiline import once. */
