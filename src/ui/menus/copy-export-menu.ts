@@ -14,10 +14,11 @@ export interface CopyMenuActions extends CopyAsActions {
   readonly copyBranch: () => void;
 }
 
-/** The two branch export commands. */
+/** The branch export commands. */
 export interface ExportMenuActions {
   readonly exportPng: () => void;
   readonly exportMarkdown: () => void;
+  readonly exportCanvas: () => void;
 }
 
 /**
@@ -57,6 +58,7 @@ export function exportRows(actions: ExportMenuActions): MenuRow[] {
     switch (id) {
       case "export-png": return { title: t("menu.exportPng"), icon: "image-down", run: actions.exportPng };
       case "export-markdown": return { title: t("menu.exportMarkdown"), icon: "file-down", run: actions.exportMarkdown };
+      case "export-canvas": return { title: t("menu.exportCanvas"), icon: "layout-dashboard", run: actions.exportCanvas };
     }
   });
 }

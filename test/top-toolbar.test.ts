@@ -54,7 +54,7 @@ function fixture() {
 
 test("node actions are disabled before selection and follow selection being made or cleared", () => {
   const { toolbar, button, calls } = fixture();
-  const nodeActions = ["markers", "copy", "exportTree"] as const;
+  const nodeActions = ["markers", "copy"] as const;
   for (const label of nodeActions) {
     assert.equal(button(label).disabled, true);
     button(label).click();
@@ -72,9 +72,11 @@ test("node actions are disabled before selection and follow selection being made
   toolbar.destroy();
 });
 
-test("whole-tree and canvas actions remain available without a selection while zoom keeps updating", () => {
+test("whole-tree, canvas and export actions remain available without a selection while zoom keeps updating", () => {
   const { toolbar, button, calls } = fixture();
-  const globalActions = ["expandAll", "collapseAll", "collapseLevel", "fit", "zoomOut", "zoomIn", "search", "importText"] as const;
+  // Export follows the whole-tree fallback: without a selection it starts from
+  // the tree root, so the toolbar entry must not require one.
+  const globalActions = ["expandAll", "collapseAll", "collapseLevel", "fit", "zoomOut", "zoomIn", "search", "importText", "exportTree"] as const;
   for (const hasSelection of [false, true, false]) {
     calls.length = 0;
     toolbar.update({ zoom: 0.85, hasSelection });

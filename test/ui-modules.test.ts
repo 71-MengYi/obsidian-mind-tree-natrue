@@ -70,9 +70,9 @@ test("node menu description changes only for applicable resource and tree state"
 
 test("both menu surfaces share one copy-as order and one export order", () => {
   assert.deepEqual(COPY_AS_MENU_ORDER, ["copy-as-reference", "copy-as-outline", "copy-as-mermaid"]);
-  assert.deepEqual(EXPORT_MENU_ORDER, ["export-png", "export-markdown"]);
+  assert.deepEqual(EXPORT_MENU_ORDER, ["export-png", "export-markdown", "export-canvas"]);
   // Ordering is the contract: the reference pointer first, then the two
-  // text renderings, and PNG before Markdown on every surface.
+  // text renderings, and PNG before Markdown before Canvas on every surface.
   assert.equal(new Set(COPY_AS_MENU_ORDER).size, COPY_AS_MENU_ORDER.length);
   assert.equal(new Set(EXPORT_MENU_ORDER).size, EXPORT_MENU_ORDER.length);
 });

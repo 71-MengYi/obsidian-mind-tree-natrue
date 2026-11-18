@@ -51,6 +51,8 @@ export interface NodeContextMenuActions {
   readonly copyMermaid: () => void;
   readonly exportPng: () => void;
   readonly exportMarkdown: () => void;
+  /** Write this branch (or the whole tree without a selection) as a Canvas file. */
+  readonly exportCanvas: () => void;
 }
 
 /** Declarative node-menu composition; all domain work is delegated by name. */
@@ -113,7 +115,8 @@ export class NodeContextMenu {
     }), nested);
     addMenuGroup(menu, exportGroup({
       exportPng: guarded(actions.exportPng),
-      exportMarkdown: guarded(actions.exportMarkdown)
+      exportMarkdown: guarded(actions.exportMarkdown),
+      exportCanvas: guarded(actions.exportCanvas)
     }), nested);
     menu.showAtPosition({ x: event.clientX, y: event.clientY }, ownerDocument);
   }

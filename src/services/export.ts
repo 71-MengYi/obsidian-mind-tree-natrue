@@ -271,6 +271,18 @@ export function renderBranchSvg(
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}"><rect width="100%" height="100%" fill="${canvasColor}"/>${paths}${nodes}</svg>`;
 }
 
+/**
+ * The node a PNG, Markdown or Canvas export starts from. A real selection wins;
+ * without one the whole tree is exported from its root, so this never returns
+ * `undefined` and every export entry point keeps working on an empty selection.
+ */
+export function resolveExportNodeId(
+  document: Pick<MindTreeDocument, "rootId" | "nodes">,
+  primarySelectedId: NodeId | undefined
+): NodeId {
+  return primarySelectedId && document.nodes[primarySelectedId] ? primarySelectedId : document.rootId;
+}
+
 export async function exportBranchPng(
   document: MindTreeDocument,
   nodeId: NodeId,

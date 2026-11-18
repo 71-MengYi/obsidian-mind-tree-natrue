@@ -43,7 +43,7 @@ import {
   serializeMindTreeFile,
   type ParseMindTreeOptions
 } from "../format/document";
-import { buildLinkedResourcePath, classifyFile, linkedFileTitle } from "../format/resource-id";
+import { buildLinkedResourcePath, classifyFile, linkedFileTitle, sanitizeFileTitle } from "../format/resource-id";
 import { renderBranchMarkdown } from "../format/outline";
 import { renderBranchMermaid } from "../format/mermaid";
 import { t } from "../i18n";
@@ -64,10 +64,12 @@ import {
   type ClipboardPasteContent
 } from "../services/clipboard";
 import type { BranchReference } from "../domain/branch-reference";
+import { buildCanvasFile, createCanvasPathCandidates } from "../services/canvas-export";
 import {
   downloadMarkdown,
   exportBranchPng,
   prepareImageExportSource,
+  resolveExportNodeId,
   type ExportThemeColors
 } from "../services/export";
 import { reconcileLinkedFileReferences } from "../services/linked-resource-sync";
@@ -2755,7 +2757,8 @@ export class MindTreeView extends TextFileView {
       copyOutline: () => void this.copySelected("markdown"),
       copyMermaid: () => void this.copyMermaid(nodeId),
       exportPng: () => void this.exportSelectedPng(),
-      exportMarkdown: () => this.exportSelectedMarkdown()
+      exportMarkdown: () => this.exportSelectedMarkdown(),
+      exportCanvas: () => void this.exportSelectedCanvas()
     }).show(event, this.rootEl.ownerDocument);
   }
 
@@ -2852,7 +2855,8 @@ export class MindTreeView extends TextFileView {
   private showExportMenu(event: MouseEvent): void {
     new ExportMenu({
       exportPng: () => void this.exportSelectedPng(),
-      exportMarkdown: () => this.exportSelectedMarkdown()
+      exportMarkdown: () => this.exportSelectedMarkdown(),
+      exportCanvas: () => void this.exportSelectedCanvas()
     }).show(event);
   }
 
@@ -2904,18 +2908,24 @@ export class MindTreeView extends TextFileView {
     }
   }
 
+  /**
+   * Export a PNG. Without a selection this exports the whole tree: the export
+   * target falls back to the root instead of silently doing nothing.
+   */
   private async exportSelectedPng(): Promise<void> {
-    if (!this.document || !this.primarySelectedId) return;
+    const document = this.document;
+    if (!document) return;
+    const nodeId = resolveExportNodeId(document, this.primarySelectedId);
     try {
       await exportBranchPng(
-        this.document,
-        this.primarySelectedId,
+        document,
+        nodeId,
         this.plugin.settings.pngScale,
         this.plugin.settings.nodeWrapWidth,
-        this.document.settings.layoutMode,
-        this.document.settings.connectionStyle,
-        this.document.settings.theme,
-        this.document.settings.nodeShape,
+        document.settings.layoutMode,
+        document.settings.connectionStyle,
+        document.settings.theme,
+        document.settings.nodeShape,
         this.plugin.settings.nodeAlignment,
         this.resolveExportThemeColors(),
         this.textMeasurer ?? fallbackNodeTextMeasurer,
@@ -2932,11 +2942,48 @@ export class MindTreeView extends TextFileView {
     }
   }
 
+  /** Markdown export of a branch, or of the whole tree when nothing is selected. */
   private exportSelectedMarkdown(): void {
-    if (!this.document || !this.primarySelectedId) return;
-    const node = this.document.nodes[this.primarySelectedId];
-    if (!node) return;
-    downloadMarkdown(renderBranchMarkdown(this.document, this.primarySelectedId), node.title || "mind-tree");
+    const document = this.document;
+    if (!document) return;
+    const nodeId = resolveExportNodeId(document, this.primarySelectedId);
+    downloadMarkdown(renderBranchMarkdown(document, nodeId), document.nodes[nodeId]?.title || document.title);
+  }
+
+  /**
+   * Write an Obsidian Canvas file next to the source `.mtn.md`. A canvas is a
+   * vault file, not a browser download: it goes through `vault.create`, keeps
+   * the tree's folder, and reports the path that actually exists. Name
+   * collisions use the same `-2`/`-3` sequence as other generated files.
+   */
+  private async exportSelectedCanvas(): Promise<void> {
+    const document = this.document;
+    if (!document) return;
+    const nodeId = resolveExportNodeId(document, this.primarySelectedId);
+    try {
+      const canvas = buildCanvasFile(
+        document,
+        nodeId,
+        t("node.untitled"),
+        this.plugin.settings.nodeWrapWidth,
+        document.settings.layoutMode,
+        this.plugin.settings.nodeAlignment,
+        this.textMeasurer ?? fallbackNodeTextMeasurer,
+        this.getResourceBadgePresentation()
+      );
+      // Obsidian saves canvases as pretty-printed JSON; matching that shape keeps
+      // a hand-edited export diffable instead of one very long line.
+      const source = `${JSON.stringify(canvas, null, "\t")}\n`;
+      const directory = this.file?.parent && !this.file.parent.isRoot() ? this.file.parent.path : "";
+      const title = sanitizeFileTitle(document.nodes[nodeId]?.title || document.title) || t("node.untitled");
+      const path = createCanvasPathCandidates(directory, title)
+        .find((candidate) => !this.app.vault.getAbstractFileByPath(candidate));
+      if (!path) throw new Error(t("notice.canvasNameExhausted"));
+      const created = await this.app.vault.create(path, source);
+      new Notice(t("notice.canvasExported", { path: created.path }));
+    } catch (error) {
+      new Notice(t("notice.canvasFailed", { message: error instanceof Error ? error.message : String(error) }));
+    }
   }
 
   private async createNoteForNode(nodeId: NodeId): Promise<void> {
