@@ -1,5 +1,32 @@
 # memory
 
+## 2026-11-19 · 版本快照 / 反向引用 / Canvas 导出 / UI 测试装载器（`feat`，团队协作，纯文档同步收尾）
+
+**用户决策（口径）**
+- 版本快照写入库根 `.mind-tree-nature-data/snapshots/`，**不**进入 `.mtn.md`、`.obsidian` 或 `data.json`；建议用户在同步工具中排除该目录。快照随正常保存捕获（冲突选择写盘、MCP 写盘不捕获），恢复必须是可撤销的会话操作。
+- 笔记里的 `mind-tree-ref` 反向显示在节点下方：≤5 个圆点 + `+N`，悬停/键盘聚焦展开为左对齐胶囊气泡，点击打开笔记并定位到引用行；只读、不写回、不参与布局。
+- 导出菜单新增 Canvas；未选中节点时 PNG / Markdown / Canvas 都从根节点导出整棵树，工具栏「导出」不再要求先选择节点。
+- 文档要求：行为 + 边界/失败态；中文；只改文档，不改代码。
+
+**4 个工作树与合并顺序**（本轮实际落点）
+1. `test-bundle-helper` → `92661b1`：用 `loadModule` 替换 esbuild `buildSync`。
+2. `canvas-export` → `d3b571c`：Canvas 导出 + 无选中整树。
+3. `snapshot-history` → `371d920`：`.mind-tree-nature-data/` 版本快照 + 版本历史弹窗。
+4. `backlink-refs` → `0d41411`：节点反向引用圆点/胶囊。
+5. `b4f6560`（收尾）：把装载器的 `tsc` emit 从系统临时目录改到仓库内 `.mtn-test-build/`，避免沙箱拒绝临时目录。
+
+**测试装载器与 TS7 发现**
+- `test/helpers/module-loader.ts` 的 `loadModule()` 在私有 VM realm 中加载真实 TS 源码，每次调用独立模块缓存；`obsidian` 桩与假 DOM 全局显式注入，不再依赖 esbuild。
+- 仓库 pin 的是 **TypeScript 7 原生编译器**，其 npm 包只暴露 `tsc` CLI，没有 `ts.transpileModule`；装载器回退为一次性 `tsc` emit 到仓库根忽略目录 `.mtn-test-build/`（`.gitignore` 已含），stdio 走文件而非管道。不要再把 `buildSync` 写回测试。
+- **坑**：Node 24 `--test-isolation=none` 会吞掉 `test()` 注册之后发生的顶层异常。`loadModule()` 与解构必须放在第一个 `test()` 之前；`test/theme-menu-hover.test.ts` 因此从被静默截断的 7 条恢复为 18 条，全量 1232 pass / 0 fail（112 个测试文件、2 个 helper）。
+- 官方 `npm test`（`tsx`）在受限沙箱仍需提权（tsx/esbuild 走 spawn 管道）；装载器路径本身不依赖 esbuild。
+
+**仍未开始 / 未做**
+- `src/ui/mind-tree-view.ts` 拆分（本轮后 4431 行）**仍未开始**，列为下一轮，不要把它当成已完成项。
+- 未做真实 Obsidian 手工验收：版本历史弹窗浏览/恢复、反链圆点与胶囊跳转、Canvas 在 Obsidian 中打开、移动端触摸展开圆点，都只到自动化测试层。
+
+**文档落点**：`docs/02` §5.1/§5.3/§5.4/§5.5/§6.6/§6.10、`docs/03` §7.6/§7.7、`docs/05` §9.1/§9.3/§11/§12.3、`docs/06` §13.1/§14（新增 23–25 条）、`README.md` / `README.en.md`、`AGENTS.md` §1/§2/§3.2/§4/§5/§10/§12/文末核对。测试数字统一为 112 文件 / 1232 用例 / 0 失败。
+
 ## 2026-11-17 · 关联网页的标题默认填入节点文本（`feat`）
 
 **需求（用户口径）**：右键「链接网页」时，标题输入框默认填入该节点的当前文本，不要因为链接一个网址就把节点名换成域名。
