@@ -137,8 +137,12 @@ test("URL menu snapshots compare the captured URL rather than only the resource 
 });
 
 test("view wiring shares guards for all association paths and keeps default opening separate from mutations", () => {
-  const source = readFileSync(new URL("../src/ui/mind-tree-view.ts", import.meta.url), "utf8");
-  const method = (name: string) => source.split(new RegExp(`  private (?:async )?${name}\\(`))[1]!.split(/\n  private /)[0]!;
+  // The association command layer moved to view-ops/resource-ops.ts, so the
+  // guard assertions cover both that module and its thin view wrappers; the
+  // module is searched first because it holds the real command bodies.
+  const source = readFileSync(new URL("../src/ui/view-ops/resource-ops.ts", import.meta.url), "utf8")
+    + readFileSync(new URL("../src/ui/mind-tree-view.ts", import.meta.url), "utf8");
+  const method = (name: string) => source.split(new RegExp(`  (?:private )?(?:async )?${name}\\(`))[1]!.split(/\n  [a-zA-Z]/)[0]!;
   for (const name of ["createNoteForNode", "showTemplateFilePicker", "linkExistingFile", "linkUrl"]) {
     assert.match(method(name), /this\.captureAssociationTarget\(nodeId\)/);
   }
