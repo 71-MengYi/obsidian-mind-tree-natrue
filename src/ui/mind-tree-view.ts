@@ -45,11 +45,11 @@ import { applyMindTreeThemeDataset } from "./theme-dataset";
 import { ExchangeOps, createViewResourceBadgePresentation } from "./view-ops/exchange-ops";
 import { NodeOps } from "./view-ops/node-ops";
 import { ResourceOps } from "./view-ops/resource-ops";
+import { SettingsOps } from "./view-ops/settings-ops";
 import { UpdateActivity } from "../services/updates/update-activity";
 import { UpdateError } from "../services/updates/release-client";
 import type { UpdateViewPresentation } from "../services/updates/workspace-update-host";
 import {
-  copyBranches,
   insertBranchReferenceNode,
   resolveBranchReferenceTarget,
   resolveMarkdownBranchLinks,
@@ -102,7 +102,7 @@ import type {
   PositionedNode
 } from "../types";
 import { MIND_TREE_VIEW_TYPE, isMindTreePath } from "../view-routing";
-import { acceptSettingsWrite, markSettingsEdited, mergeTreeSettings, type TreeSettingKey } from "../document-settings-state";
+import { acceptSettingsWrite, mergeTreeSettings, type TreeSettingKey } from "../document-settings-state";
 import type MindTreeNaturePlugin from "../main";
 import {
   resolveDropPlacement,
@@ -231,6 +231,7 @@ export class MindTreeView extends TextFileView {
     getPrimarySelectedId: () => this.primarySelectedId,
     getSelectedIds: () => this.selectedIds,
     getDocumentSessionToken: () => this.documentSessionToken,
+    mutationLocked: () => this.mutationLocked(),
     getExportSettings: () => this.plugin.settings,
     getTextMeasurer: () => this.textMeasurer,
     getRootEl: () => this.rootEl,
@@ -239,7 +240,8 @@ export class MindTreeView extends TextFileView {
     resolveVerifiedResource: (resource) => this.plugin.resources.resolveVerified(resource),
     readBinary: (file) => this.app.vault.readBinary(file),
     fileExists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
-    createTextFile: (path, source) => this.app.vault.create(path, source)
+    createTextFile: (path, source) => this.app.vault.create(path, source),
+    deleteTopics: (targetNodeIds, structureMode) => this.deleteTopics(targetNodeIds, structureMode)
   });
   /** Node structure/delete commands; like `exchange`, the host state access stays live. */
   private readonly nodeOps = new NodeOps({
@@ -278,6 +280,16 @@ export class MindTreeView extends TextFileView {
     getSettings: () => this.plugin.settings,
     getResources: () => this.plugin.resources,
     openLinkedFile: (file, destination) => this.plugin.openLinkedFile(file, destination)
+  });
+  /** Per-tree settings commands; the host keeps document/save state reads live. */
+  private readonly settingsOps = new SettingsOps({
+    getDocument: () => this.document,
+    commit: (mutator) => this.commit(mutator),
+    rescanCurrentFile: () => {
+      this.scannedFilePath = undefined;
+      const file = this.file;
+      if (file) this.ownerWindow().setTimeout(() => void this.scanSameFolder(file));
+    }
   });
   private readonly dragDropController = new DragDropController();
   /** Exact snapshot returned to TextFileView while one queued write is active. */
@@ -352,7 +364,6 @@ export class MindTreeView extends TextFileView {
   private backlinkRenderTimer?: number;
   /** Lazily created hover preview for the theme list in the tree settings menu. */
   private themePreview?: ThemePreviewPanel;
-  private cutInProgress = false;
   private suppressContextMenu = false;
   private dropTargetEl?: HTMLElement;
   /**
@@ -1342,10 +1353,7 @@ export class MindTreeView extends TextFileView {
   }
 
   /** Commands change only the tree displayed by this view. */
-  setLayoutMode(layoutMode: MindTreeLayoutMode): void {
-    if (!this.document) return;
-    this.updateDocumentSettings((settings) => { settings.layoutMode = layoutMode; }, false, "layoutMode");
-  }
+  setLayoutMode(layoutMode: MindTreeLayoutMode): void { this.settingsOps.setLayoutMode(layoutMode); }
 
   /** Recalculate the view after a global appearance preference changes. */
   refreshLayoutFromSettings(): void {
@@ -1920,22 +1928,13 @@ export class MindTreeView extends TextFileView {
   }
 
   /** Theme changes belong to this document and are persisted in YAML. */
-  private setTheme(theme: MindTreeTheme): void {
-    if (!this.document) return;
-    this.updateDocumentSettings((settings) => { settings.theme = theme; }, false, "theme");
-  }
+  private setTheme(theme: MindTreeTheme): void { this.settingsOps.setTheme(theme); }
 
   /** Connection geometry is stored per tree; the plugin setting only supplies the unset default. */
-  private setConnectionStyle(connectionStyle: MindTreeConnectionStyle): void {
-    if (!this.document) return;
-    this.updateDocumentSettings((settings) => { settings.connectionStyle = connectionStyle; }, false, "connectionStyle");
-  }
+  private setConnectionStyle(connectionStyle: MindTreeConnectionStyle): void { this.settingsOps.setConnectionStyle(connectionStyle); }
 
   /** Node shape is tree-specific; the plugin setting only supplies the unset default. */
-  private setNodeShape(nodeShape: MindTreeNodeShape): void {
-    if (!this.document) return;
-    this.updateDocumentSettings((settings) => { settings.nodeShape = nodeShape; }, false, "nodeShape");
-  }
+  private setNodeShape(nodeShape: MindTreeNodeShape): void { this.settingsOps.setNodeShape(nodeShape); }
 
   /**
    * Commit an in-place title draft, then force TextFileView to serialize the
@@ -1993,16 +1992,7 @@ export class MindTreeView extends TextFileView {
     mutator: (settings: MindTreeDocumentSettings) => void,
     rescan = false,
     property?: TreeSettingKey
-  ): void {
-    this.commit((draft) => {
-      mutator(draft.settings);
-      if (property) markSettingsEdited(draft, [property]);
-    });
-    if (!rescan) return;
-    this.scannedFilePath = undefined;
-    const file = this.file;
-    if (file) this.ownerWindow().setTimeout(() => void this.scanSameFolder(file));
-  }
+  ): void { this.settingsOps.updateDocumentSettings(mutator, rescan, property); }
 
   private setSelectedBranchesCollapsed(collapsed: boolean): void { this.nodeOps.setSelectedBranchesCollapsed(collapsed); }
 
@@ -3288,33 +3278,7 @@ export class MindTreeView extends TextFileView {
   }
 
   /** Cut every top-level selected branch, but never the protected root node. */
-  private async cutSelected(): Promise<void> {
-    if (this.mutationLocked()) return;
-    const document = this.document;
-    if (!document || !this.primarySelectedId || this.cutInProgress) return;
-    const sourcePath = this.file?.path;
-    const documentSessionToken = this.documentSessionToken;
-    const selected = this.selectedIds.size > 0 ? this.selectedIds : [this.primarySelectedId];
-    const branchRootIds = getTopLevelSelectedNodeIds(document, selected);
-    if (branchRootIds.length === 0) return;
-
-    this.cutInProgress = true;
-    try {
-      // A failed clipboard write must leave the document untouched. This also
-      // retains linked-file metadata so a later paste recreates full branches.
-      await copyBranches(document, branchRootIds, "branch");
-      // Switching files while an asynchronous clipboard write is pending must
-      // never delete matching node IDs from the newly active document.
-      if (this.documentSessionToken !== documentSessionToken || this.file?.path !== sourcePath) return;
-      const survivingIds = branchRootIds.filter((id) => Boolean(this.document?.nodes[id]));
-      if (survivingIds.length > 0) this.deleteTopics(survivingIds, "branch");
-      new Notice(t("notice.branchCut", { count: survivingIds.length }));
-    } catch (error) {
-      new Notice(t("notice.cutFailed", { message: error instanceof Error ? error.message : String(error) }));
-    } finally {
-      this.cutInProgress = false;
-    }
-  }
+  private async cutSelected(): Promise<void> { await this.exchange.cutSelected(); }
 
   /** Keep the source .mtn.md filename and its root node associated both ways. */
   private async renameTreeFileForEditedRoot(title: string, previousTitle: string): Promise<void> {
