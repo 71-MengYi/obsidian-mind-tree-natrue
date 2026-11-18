@@ -3,7 +3,10 @@ import {
   TouchGestureMachine, type GesturePointer, type TouchGestureActions, type TouchTarget
 } from "./touch-gesture";
 
-const NATIVE_INPUT_SELECTOR = "input,textarea,select,[contenteditable]:not([contenteditable='false']),.cm-editor,.modal,.menu";
+// Elements that own their own tap: the canvas must not turn them into a node
+// gesture. Backlink pills are native buttons, and a tap on the collapsed dots
+// has to reach the wrapper so it can take focus and expand its list.
+const NATIVE_INPUT_SELECTOR = "input,textarea,select,[contenteditable]:not([contenteditable='false']),.cm-editor,.modal,.menu,.mtn-node-backlinks";
 
 export interface TouchControllerActions extends TouchGestureActions {
   sessionToken(): string | undefined;
