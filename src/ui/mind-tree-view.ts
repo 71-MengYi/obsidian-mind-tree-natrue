@@ -83,6 +83,7 @@ import {
   sameManagedMindTreeSnapshot
 } from "../services/document-conflict";
 import { planMindTreeSave } from "../services/save-plan";
+import { restoreSnapshotDocument, snapshotKey, type TreeSnapshot } from "../services/snapshot-store";
 import { VersionComparison } from "./components/version-comparison";
 import { ThemePreviewPanel } from "./components/theme-preview";
 import { confirmUsableSource, readStableSource, STABLE_READ_DELAYS_MS, type StableSourcePorts } from "../services/stable-source-read";
@@ -204,6 +205,7 @@ import {
   TemplateSuggestModal,
   UrlPromptModal,
   MoveFilesModal,
+  VersionHistoryModal,
   type CandidateAction,
   type DeleteBranchAction
 } from "./modals/index";
@@ -836,10 +838,36 @@ export class MindTreeView extends TextFileView {
       if (session) session.acceptMetadata(accepted.document, latest, accepted.changedSettings);
       else this.document = accepted.document;
       this.setStatus(this.hasUnsavedState() ? t("status.unsaved") : t("status.saved"), this.hasUnsavedState() ? "dirty" : "saved");
+      // Only a verified real write earns a snapshot: an `identical` pass leaves
+      // the file untouched, and a conflict was not this save's bytes. Capture
+      // the bytes this pass handed to Vault.process, not a later disk read.
+      if (wroteBytes && serialized !== undefined) this.captureVersionSnapshot(written.document, serialized);
       return this.documentSession.dirty;
     } finally {
       this.pendingSerializedSource = undefined;
       if (wroteBytes && serialized !== undefined) session?.endWrite(serialized);
+    }
+  }
+
+  /**
+   * History capture is deliberately fire-and-forget: the store logs its own
+   * failures and this method never reads note text, so a full disk or an
+   * unwritable history directory cannot turn a successful save into an error.
+   */
+  private captureVersionSnapshot(document: MindTreeDocument, source: string): void {
+    const file = this.file;
+    if (!file) return;
+    try {
+      void this.plugin.snapshots.capture({
+        path: file.path,
+        documentId: document.documentId,
+        title: document.title,
+        nodeCount: Object.keys(document.nodes).length,
+        source
+      });
+    } catch (error) {
+      // Even the dispatch must never turn a verified save into a failure.
+      console.error("Mind Tree Nature: could not start a version snapshot.", error);
     }
   }
 
@@ -1494,7 +1522,7 @@ export class MindTreeView extends TextFileView {
         importText: t("toolbar.import"), exportTree: t("toolbar.export")
       },
       bottom: {
-        resetCanvas: t("statusBar.resetCanvas"), save: t("statusBar.save"),
+        resetCanvas: t("statusBar.resetCanvas"), save: t("statusBar.save"), history: t("statusBar.history"),
         scanFolder: t("statusBar.scanFolder"), undo: t("toolbar.undo"), redo: t("toolbar.redo")
       },
       canvas: { ariaLabel: t("canvas.aria") }
@@ -1524,6 +1552,7 @@ export class MindTreeView extends TextFileView {
       bottom: {
         resetCanvas: () => this.resetCanvasToRoot(),
         save: () => void this.saveFromStatusBar(),
+        history: () => this.openVersionHistory(),
         scanFolder: () => void this.scanFolderFromStatusBar(),
         undo: () => this.undo(),
         redo: () => this.redo()
@@ -1781,6 +1810,75 @@ export class MindTreeView extends TextFileView {
       this.saveButtonBusy = false;
       this.refreshBottomStatusBar();
     }
+  }
+
+  /** Browse snapshots captured after earlier saves of this tree. */
+  private openVersionHistory(): void {
+    const file = this.file;
+    const document = this.document;
+    // Browsing is read-only, so a locked session may still look at history;
+    // restore itself re-checks the lock before replacing anything.
+    if (!file || !document || this.parseError) return;
+    const store = this.plugin.snapshots;
+    const key = snapshotKey(file.path, document.documentId);
+    new VersionHistoryModal(this.app, {
+      list: () => store.list(key),
+      load: (entry) => store.load(key, entry),
+      parse: (source) => {
+        try {
+          return parseMindTreeFile(source, this.parseOptions()).document;
+        } catch {
+          return undefined;
+        }
+      },
+      restore: (snapshot) => this.restoreVersionSnapshot(snapshot),
+      preview: {
+        ...this.plugin.settings,
+        resolveImageFile: (node) => node.resource?.type === "file"
+          ? this.plugin.resources.resolve(node.resource)
+          : undefined,
+        resourcePath: (resource) => this.app.vault.getResourcePath(resource)
+      }
+    }).open();
+  }
+
+  /**
+   * Replace the live tree with one saved snapshot as a single undoable session
+   * command. Parsing and identity checks happen before any state changes, so a
+   * damaged or foreign snapshot only produces a Notice.
+   */
+  private restoreVersionSnapshot(snapshot: TreeSnapshot): boolean {
+    if (!this.file || !this.document || this.parseError) {
+      new Notice(t("snapshot.restoreBusy"));
+      return false;
+    }
+    if (this.commitVisibleEditorDraft() === "rejected") return false;
+    if (this.mutationLocked()) {
+      new Notice(t("snapshot.restoreBusy"));
+      return false;
+    }
+    if (this.sharedSession?.commitEditorBeforeMutation(this.sharedParticipantId) === "rejected") return false;
+    // A committed root title may have started a file rename, so the live file
+    // and document are re-read after the editor boundary.
+    const current = this.document;
+    const file = this.file;
+    if (!current || !file) return false;
+    const restored = restoreSnapshotDocument(snapshot,
+      { path: file.path, documentId: current.documentId }, this.parseOptions());
+    if (!restored.ok) {
+      new Notice(t(restored.reason === "mismatch" ? "snapshot.mismatch" : "snapshot.restoreInvalid"));
+      return false;
+    }
+    const layoutAnchor = this.captureLayoutViewportAnchor();
+    // The session owns the undo entry and the dirty revision; markDocumentDirty
+    // below only publishes the replacement to other leaves and schedules the
+    // normal autosave, so the revision must not be counted twice.
+    this.document = this.documentSession.replaceDocument(current, restored.document);
+    this.pruneSelection();
+    this.render(layoutAnchor);
+    this.markDocumentDirty(true, "document", false);
+    new Notice(t("snapshot.restored"));
+    return true;
   }
 
   /** Refresh only views that actually reference the metadata-changed resource. */
@@ -4040,9 +4138,10 @@ export class MindTreeView extends TextFileView {
   /** Mark one semantic document mutation; viewport-only work never calls this. */
   private markDocumentDirty(
     schedule = true,
-    reason: SharedSessionChangeReason = "document"
+    reason: SharedSessionChangeReason = "document",
+    countRevision = true
   ): void {
-    this.documentSession.markChanged();
+    if (countRevision) this.documentSession.markChanged();
     if (!this.applyingSharedSessionUpdate) {
       this.sharedSession?.replaceDocument(this.document, this.sharedParticipantId, reason);
     }

@@ -102,3 +102,24 @@ test("a frozen session blocks commands and history changes at the domain boundar
   assert.equal(session.redo(next), undefined);
   assert.equal(session.canUndo, true);
 });
+
+test("whole-document replacement is one undoable change, clears redo and marks the session dirty", () => {
+  const session = new DocumentSession();
+  session.load("source");
+  const first = createEmptyDocument("First");
+  const changed = session.execute(first, (draft) => { draft.title = "Changed"; });
+  const previous = session.undo(changed);
+  assert.equal(previous, first);
+  assert.equal(session.canRedo, true);
+  assert.equal(session.dirty, false);
+
+  const replacement = createEmptyDocument("Restored");
+  assert.equal(session.replaceDocument(first, replacement), replacement);
+  assert.equal(session.dirty, true);
+  assert.equal(session.canRedo, false, "a whole-tree restore starts a new history branch");
+  assert.equal(session.undo(replacement), first);
+  assert.equal(session.redo(first), replacement);
+
+  session.isMutationBlocked = () => true;
+  assert.throws(() => session.replaceDocument(replacement, first), SaveConflictError);
+});

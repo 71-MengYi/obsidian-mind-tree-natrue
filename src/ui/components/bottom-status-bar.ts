@@ -5,6 +5,7 @@ import { DisposableUiObject } from "./ui-object";
 export interface BottomStatusBarLabels {
   readonly resetCanvas: string;
   readonly save: string;
+  readonly history: string;
   readonly scanFolder: string;
   readonly undo: string;
   readonly redo: string;
@@ -13,6 +14,7 @@ export interface BottomStatusBarLabels {
 export interface BottomStatusBarActions {
   readonly resetCanvas: () => void;
   readonly save: () => void;
+  readonly history: () => void;
   readonly scanFolder: () => void;
   readonly undo: () => void;
   readonly redo: () => void;
@@ -38,6 +40,9 @@ export class BottomStatusBar extends DisposableUiObject {
     this.depth = panel.createSpan("mtn-status-metric");
     this.createButton(panel, "mtn-status-icon-button", "focus", labels.resetCanvas, actions.resetCanvas);
     this.saveButton = this.createButton(panel, "mtn-status-icon-button mtn-save-button is-saved", "save", labels.save, actions.save);
+    // Version history sits beside Save: both act on the persisted tree, and a
+    // user who just saved is the one most likely to inspect the new snapshot.
+    this.createButton(panel, "mtn-status-icon-button mtn-snapshot-history-button", "clock", labels.history, actions.history);
     this.scanButton = this.createButton(panel, "mtn-status-icon-button mtn-scan-folder-button", "folder-search-2", labels.scanFolder, actions.scanFolder);
     this.undoButton = this.createButton(this.element, "mtn-history-button", "undo-2", labels.undo, actions.undo);
     this.redoButton = this.createButton(this.element, "mtn-history-button", "redo-2", labels.redo, actions.redo);
