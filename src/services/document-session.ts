@@ -82,6 +82,18 @@ export class DocumentSession {
     this.redoStack = [];
   }
 
+  /**
+   * Replace the whole document in one undoable step (version-history restore).
+   * This class intentionally never stores the live document, so the caller
+   * passes the immutable previous state together with the replacement.
+   */
+  replaceDocument(previous: MindTreeDocument, replacement: MindTreeDocument): MindTreeDocument {
+    if (this.isMutationBlocked()) throw new SaveConflictError();
+    this.retainConfirmedSnapshot(previous);
+    this.markChanged();
+    return replacement;
+  }
+
   /** Saves, explicit version choices and identity writes share one atomic lane. */
   runExclusiveWrite<T>(task: () => Promise<T>): Promise<T> {
     return this.writeLane.serial(task);

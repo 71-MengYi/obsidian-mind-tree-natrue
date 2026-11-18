@@ -7,3 +7,4 @@ export * from "./plugin-update-modal";
 export * from "./same-folder-candidates-modal";
 export * from "./text-import-modal";
 export * from "./text-prompt-modal";
+export * from "./version-history-modal";

@@ -14,6 +14,7 @@ import { MindTreeCreationService } from "./services/tree-creation";
 import { TaskNotesService, pluginRegistryOf } from "./services/tasknotes";
 import { PendingConflictStore } from "./services/pending-conflict-store";
 import { PendingConflictMaintenance } from "./services/pending-conflict-maintenance";
+import { TreeSnapshotStore } from "./services/snapshot-store";
 import { VersionConflictCoordinator } from "./services/version-conflict-coordinator";
 import { readStableSource } from "./services/stable-source-read";
 import { MindTreeOpenCoordinator } from "./services/mind-tree-open-coordinator";
@@ -78,6 +79,8 @@ export default class MindTreeNaturePlugin extends Plugin {
   /** Every open leaf of the same file shares one document/history/write queue. */
   readonly mindTreeSessions = new MindTreeSessionRegistry();
   pendingConflicts!: PendingConflictStore;
+  /** Local, vault-root version history; best-effort and never part of a save. */
+  snapshots!: TreeSnapshotStore;
   private openCoordinator!: MindTreeOpenCoordinator<WorkspaceLeaf>;
   private pendingActivationTimer?: number;
   private resourceCache!: LocalResourceCache;
@@ -163,6 +166,9 @@ export default class MindTreeNaturePlugin extends Plugin {
     this.pendingConflicts = new PendingConflictStore(this.app.vault.adapter,
       this.manifest.dir ?? `${this.app.vault.configDir}/plugins/${this.manifest.id}`, clientId as string,
       () => this.documentParseOptions());
+    // Version history stays outside the tree file and plugin data: the dotted
+    // vault-root directory is meant to be excluded from sync by the user.
+    this.snapshots = new TreeSnapshotStore(this.app.vault.adapter);
     this.resources = new ResourceIndexService(this.app, this.resourceCache.load(), () => {
       this.scheduleResourceCacheSave();
     }, () => this.settings.nonMarkdownIdSeparator, (file, documentId, expectedDocumentId) =>

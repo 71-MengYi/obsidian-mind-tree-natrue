@@ -1483,6 +1483,100 @@
   gap: 8px;
 }
 
+/* Local version history: metadata list on the left, the shared read-only tree
+   renderer on the right. The preview owns its own canvas and never writes. */
+.mtn-snapshot-modal {
+  width: min(980px, calc(100vw - 32px));
+}
+
+.mtn-snapshot-layout {
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: 12px;
+  min-height: 420px;
+  max-height: min(70vh, 620px);
+}
+
+.mtn-snapshot-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-inline-end: 4px;
+  overflow-y: auto;
+}
+
+.mtn-snapshot-entry {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 6px);
+  text-align: start;
+  white-space: normal;
+}
+
+.mtn-snapshot-entry.is-selected {
+  border-color: var(--interactive-accent);
+}
+
+.mtn-snapshot-entry-time {
+  font-weight: var(--font-medium, 500);
+}
+
+.mtn-snapshot-entry-meta,
+.mtn-snapshot-empty,
+.mtn-snapshot-status {
+  color: var(--text-muted);
+  font-size: var(--font-ui-smaller);
+}
+
+.mtn-snapshot-preview-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.mtn-snapshot-preview {
+  position: relative;
+  flex: 1;
+  min-height: 380px;
+  overflow: hidden;
+  border: 1px solid var(--background-modifier-border);
+  border-radius: var(--radius-s, 6px);
+}
+
+.mtn-snapshot-preview > .mtn-version-tree {
+  position: absolute;
+  inset: 0;
+}
+
+.mtn-snapshot-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+@media (max-width: 720px) {
+  .mtn-snapshot-layout {
+    grid-template-columns: minmax(0, 1fr);
+    max-height: none;
+  }
+
+  .mtn-snapshot-list {
+    max-height: 160px;
+  }
+
+  .mtn-snapshot-preview {
+    min-height: 300px;
+  }
+}
+
 .mtn-plugin-update-modal {
   display: flex;
   flex-direction: column;
