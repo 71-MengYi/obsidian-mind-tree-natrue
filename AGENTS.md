@@ -108,7 +108,7 @@ src/
     ├── menus/           (8) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览、复制/导出菜单描述、嵌套菜单能力探测
     ├── modals/         (15) 新建/删除/移动/导入/文件建议/更新提示、版本历史等对话框（节点关联选择窗口已删除）
     ├── settings-pages/ (10) 基础设置、思维导图、主题笔记、插件更新分区、管理标记
-    ├── view-ops/        (2) 视图命令层：复制/导出/分支引用/Mermaid（exchange-ops）、节点结构/删除（node-ops）
+    ├── view-ops/        (3) 视图命令层：复制/导出/分支引用/Mermaid（exchange-ops）、节点结构/删除（node-ops）、资源关联/移动/标题同步（resource-ops）
     └── search/          (3) 搜索核心（search-core）、右侧搜索面板、搜索载荷
 ```
 
@@ -143,7 +143,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
 | `MindTreeNaturePlugin` | `src/main.ts` | 注册视图/命令/设置页/文件事件，持有各服务，编排冲突清理与更新流程 |
-| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（4089 行）：把文档会话映射为界面状态、派发命名操作；复制/导出与节点结构/删除命令层已拆到 `ui/view-ops/{exchange,node}-ops.ts`，视图只留薄包装。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
+| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3828 行）：把文档会话映射为界面状态、派发命名操作；复制/导出、节点结构/删除、资源关联命令层已拆到 `ui/view-ops/{exchange,node,resource}-ops.ts`，视图只留薄包装。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
 | `MindTreeViewShell` / `CanvasShell` / `ViewMenuBar` / `TopToolbar` / `BottomStatusBar` / `StatusIndicator` | `src/ui/components/*` | 视图外壳、画布宿主、左上菜单栏、顶部工具栏、左下状态栏、状态提示层 |
 | `DisposableUiObject` / `DisposerBag` | `src/ui/components/ui-object.ts` | 所有 UI 对象的幂等销毁基类；新增 UI 模块必须接入 |
 | `MindTreeReferenceEmbed` / `MindTreeReferenceRenderChild` | `src/ui/components/mind-tree-reference-embed.ts` | 笔记内嵌只读分支视图（`mind-tree-ref` 代码块）：复用 `ReadOnlyTreePreview`，只增加分支起点、宽度适配与自适应高度、悬浮打开原树按钮与失效文案；只通过注入端口访问仓库，禁止反向导入视图或插件主类 |
@@ -463,7 +463,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 15. **“未修改不写盘”的判定不要复刻基类**（2026-11-04 改）：`MindTreeView` 覆写了 `TextFileView.save()`，**没有**走基类的 `getViewData() === lastSavedData` 短路，所以不能靠 `lastSavedData`/`getViewData()` 判断是否需要写盘。规则落在两处：`save()` 的 `!hasUnsavedState()` 守卫（`DocumentSession.dirty` 或共享草稿），以及 `services/save-plan.ts` 的 `identical` 分支——把磁盘字节原样回传给 `Vault.process()` 才会跳过写入（Obsidian 只在这一条件下不写文件）。改 `performQueuedSave()` 时保持“`identical` 先返回、再发 `pendingSerializedSource`/`beginWrite()` 回执”的顺序，否则其他视图会把不存在的写入当成外部写入。
 16. **干净会话直接采用外部版本**（2026-11-06 改，旧口径“干净会话也要选择”已作废）：外部机器数据实质变化时，`document-conflict.ts` 的 `decideExternalChange(assessment, hasLocalWork)` 决定 `merge`（仅设置变化，原地重基）/ `adopt`（干净会话采用磁盘版本）/ `conflict`（交给双栏选择）。视图 `acceptExternalSource()` 只把 `conflict` 交给 `VersionConflictCoordinator`；`adopt` 通过 `SharedMindTreeSession.adoptExternalVersion()` 重建文档、基线与历史，与显式选择“外部版本”是同一条状态迁移，不创建未决记录。“本地工作”= `DocumentSession.dirty`、未确认标题草稿、正在使用的标题编辑框（`hasActiveEditor`）或未完成的文件改名副作用——少算一项就会在同步时吞掉用户编辑。`test/external-adopt.test.ts` 与 `test/version-conflict.test.ts` 会拦住回退。
 17. **UI 测试装载器的两个坑**（2026-11-19）：① `loadModule()` 的调用与解构必须放在第一个 `test()` **之前**，因为 Node 24 `--test-isolation=none` 会吞掉注册之后的顶层异常——曾导致 `test/theme-menu-hover.test.ts` 只跑 7/18 条却显示通过；② TypeScript 7 原生编译器没有 `transpileModule`，装载器会一次性 `tsc` emit 到仓库根 `.mtn-test-build/`（已 gitignore），如果该目录被手动删除或磁盘不可写，所有依赖装载器的 UI 测试会一起失败；这是环境问题，不是业务回归。不要再把 esbuild `buildSync` 写回测试，沙箱下它会 `spawn EPERM`，且会绕过装载器的私有 realm 隔离。
+18. **源码字符串测试跨模块读取**（2026-11-19）：`test/association-target.test.ts` 现在把 `src/ui/view-ops/resource-ops.ts` 与 `src/ui/mind-tree-view.ts` 拼接后提取方法体，断言文本未改；提取正则放宽为 `private` 可选、以两空格类成员开头切段，因为模块内命令是 public 方法。再搬这些方法时要同步调整读取列表，不要改成 `includes` 之类的弱匹配。
 
 ---
 
-*最后核对：2026-11-19 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」、2026-11-13「AI 模型提供商设置」、2026-11-19「本地版本快照 / 版本历史」「节点反向引用气泡」「导出 Canvas 与无选中整树导出」「UI 测试装载器」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。`MindTreeView` 拆分完成第 2 阶段（交换/导出到 `ui/view-ops/exchange-ops.ts`、节点结构/删除到 `ui/view-ops/node-ops.ts`；resource/settings 命令层留待下一轮），真实 Obsidian 手工验收仍未做。*
+*最后核对：2026-11-19 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」、2026-11-13「AI 模型提供商设置」、2026-11-19「本地版本快照 / 版本历史」「节点反向引用气泡」「导出 Canvas 与无选中整树导出」「UI 测试装载器」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。`MindTreeView` 拆分完成第 3 阶段（交换/导出到 `ui/view-ops/exchange-ops.ts`、节点结构/删除到 `ui/view-ops/node-ops.ts`、资源关联到 `ui/view-ops/resource-ops.ts`；settings 命令层与 `createTaskNoteForNode`/`linkUrl`/`openResource` 留待下一轮），真实 Obsidian 手工验收仍未做。*
