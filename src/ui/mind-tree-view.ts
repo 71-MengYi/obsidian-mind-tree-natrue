@@ -16,15 +16,11 @@ import {
   collectBranchIds,
   collectFileReferences,
   createId,
-  deleteBranches,
-  deleteNodesOnly,
   findParentId,
   getNode,
   getTopLevelSelectedNodeIds,
   getTreeStatistics,
   insertBranches,
-  insertParentNode,
-  moveNodeAmongSiblings,
   moveNodes,
   renameNode,
   setAllCollapsed,
@@ -49,6 +45,7 @@ import { clamp } from "../numeric";
 import { createParseOptions } from "../settings-model";
 import { applyMindTreeThemeDataset } from "./theme-dataset";
 import { ExchangeOps, createViewResourceBadgePresentation } from "./view-ops/exchange-ops";
+import { NodeOps } from "./view-ops/node-ops";
 import { UpdateActivity } from "../services/updates/update-activity";
 import { UpdateError } from "../services/updates/release-client";
 import type { UpdateViewPresentation } from "../services/updates/workspace-update-host";
@@ -181,7 +178,6 @@ import {
   type ViewportState
 } from "../render/viewport";
 import {
-  DeleteBranchModal,
   confirmLargeExternalFiles,
   FileSuggestModal,
   SameFolderCandidatesModal,
@@ -191,8 +187,7 @@ import {
   UrlPromptModal,
   MoveFilesModal,
   VersionHistoryModal,
-  type CandidateAction,
-  type DeleteBranchAction
+  type CandidateAction
 } from "./modals/index";
 
 /** A visible node center captured before a layout pass changes world coordinates. */
@@ -253,6 +248,20 @@ export class MindTreeView extends TextFileView {
     readBinary: (file) => this.app.vault.readBinary(file),
     fileExists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
     createTextFile: (path, source) => this.app.vault.create(path, source)
+  });
+  /** Node structure/delete commands; like `exchange`, the host state access stays live. */
+  private readonly nodeOps = new NodeOps({
+    getDocument: () => this.document,
+    getPrimarySelectedId: () => this.primarySelectedId,
+    getSelectedIds: () => this.selectedIds,
+    getDocumentSessionToken: () => this.documentSessionToken,
+    mutationLocked: () => this.mutationLocked(),
+    commit: (mutator, anchorNodeId) => this.commit(mutator, anchorNodeId),
+    selectOnly: (nodeId) => this.selectOnly(nodeId),
+    beginEdit: (nodeId) => this.beginEdit(nodeId),
+    centerNodeInViewport: (nodeId) => this.centerNodeInViewport(nodeId),
+    getApp: () => this.app,
+    trashLinkedFile: (resource) => this.plugin.resources.trashLinkedFile(resource)
   });
   private readonly dragDropController = new DragDropController();
   /** Exact snapshot returned to TextFileView while one queued write is active. */
@@ -350,12 +359,14 @@ export class MindTreeView extends TextFileView {
   constructor(leaf: WorkspaceLeaf, readonly plugin: MindTreeNaturePlugin) {
     super(leaf);
     // Track whole file workflows, not only individual I/O calls: a finished
-    // copy must be associated and its document saved before hot reload.
+    // copy must be associated and its document saved before hot reload. The
+    // delete workflow's asynchronous boundary now lives on the command object.
     this.register(this.updateActivity.observe(this, [
       "onCanvasFileDrop", "insertClipboardImages", "insertResolvedBranches", "importText",
       "createNoteForNode", "createFileFromTemplate", "moveFilesToFolder", "enableTitleSync",
-      "executeDeleteBranch", "cutSelected", "collectCandidates"
+      "cutSelected", "collectCandidates"
     ]));
+    this.register(this.updateActivity.observe(this.nodeOps, ["executeDeleteBranch"]));
     this.clipboardController = new ClipboardController(
       async () => {
         const clipboard = this.rootEl.ownerDocument.defaultView?.navigator.clipboard;
@@ -1331,50 +1342,13 @@ export class MindTreeView extends TextFileView {
     this.render(this.captureLayoutViewportAnchor());
   }
 
-  addChildNode(): void {
-    if (this.mutationLocked()) return;
-    const document = this.document;
-    if (!document) return;
-    const parentId = this.primarySelectedId && document.nodes[this.primarySelectedId]
-      ? this.primarySelectedId
-      : document.rootId;
-    let createdId = "";
-    this.commit((draft) => { createdId = addNode(draft, parentId, t("node.untitled")).id; });
-    this.finishInteractiveNodeCreation(createdId);
-  }
+  addChildNode(): void { this.nodeOps.addChildNode(); }
 
-  /** Enter variants insert a sibling immediately above or below the selection. */
-  private addSiblingNode(position: "before" | "after"): void {
-    const document = this.document;
-    const nodeId = this.primarySelectedId;
-    if (!document || !nodeId || nodeId === document.rootId) return;
-    const parentId = findParentId(document, nodeId);
-    if (!parentId) return;
-    const siblingIndex = getNode(document, parentId).childIds.indexOf(nodeId);
-    let createdId = "";
-    this.commit((draft) => {
-      createdId = addNode(draft, parentId, t("node.untitled"), siblingIndex + (position === "after" ? 1 : 0)).id;
-    });
-    this.finishInteractiveNodeCreation(createdId);
-  }
+  private addSiblingNode(position: "before" | "after"): void { this.nodeOps.addSiblingNode(position); }
 
-  /** Shift+Tab inserts a structural parent and also supports replacing the root. */
-  private addParentNode(): void {
-    const document = this.document;
-    const nodeId = this.primarySelectedId;
-    if (!document || !nodeId) return;
-    let createdId = "";
-    this.commit((draft) => { createdId = insertParentNode(draft, nodeId, t("node.untitled")).id; });
-    this.finishInteractiveNodeCreation(createdId);
-  }
+  private addParentNode(): void { this.nodeOps.addParentNode(); }
 
-  /** New nodes are the only structural edits that intentionally recenter the canvas. */
-  private finishInteractiveNodeCreation(nodeId: NodeId): void {
-    if (!this.document?.nodes[nodeId]) return;
-    this.selectOnly(nodeId);
-    this.beginEdit(nodeId);
-    this.centerNodeInViewport(nodeId);
-  }
+  private finishInteractiveNodeCreation(nodeId: NodeId): void { this.nodeOps.finishInteractiveNodeCreation(nodeId); }
 
   /** Center one visible node while retaining the user's current zoom level. */
   private centerNodeInViewport(nodeId: NodeId): void {
@@ -2014,32 +1988,7 @@ export class MindTreeView extends TextFileView {
     if (file) this.ownerWindow().setTimeout(() => void this.scanSameFolder(file));
   }
 
-  /**
-   * Resolve toolbar branch actions against the complete selection. When the
-   * root participates it represents the whole tree; otherwise nested selected
-   * nodes are removed because their ancestor branch already covers them.
-   */
-  private getSelectedBranchRoots(): NodeId[] {
-    const document = this.document;
-    if (!document) return [];
-    const selected = [...this.selectedIds].filter((nodeId) => Boolean(document.nodes[nodeId]));
-    if (selected.includes(document.rootId)) return [document.rootId];
-    const roots = getTopLevelSelectedNodeIds(document, selected);
-    return roots.length > 0 ? roots : [document.rootId];
-  }
-
-  /** Expand or recursively collapse every selected top-level branch as one undo step. */
-  private setSelectedBranchesCollapsed(collapsed: boolean): void {
-    const document = this.document;
-    if (!document) return;
-    const branchRoots = this.getSelectedBranchRoots();
-    const anchorNodeId = this.primarySelectedId && document.nodes[this.primarySelectedId]
-      ? this.primarySelectedId
-      : document.rootId;
-    this.commit((draft) => {
-      for (const branchRootId of branchRoots) setAllCollapsed(draft, branchRootId, collapsed);
-    }, anchorNodeId);
-  }
+  private setSelectedBranchesCollapsed(collapsed: boolean): void { this.nodeOps.setSelectedBranchesCollapsed(collapsed); }
 
   /** Show the global depth menu; its result is stored only in node collapsed flags. */
   private showCollapseLevelMenu(event: MouseEvent): void {
@@ -2519,21 +2468,7 @@ export class MindTreeView extends TextFileView {
     this.fileDropPlacement = undefined;
   }
 
-  /** Reorder only the primary selection; other selected nodes remain selected. */
-  private moveSelectedAmongSiblings(direction: "up" | "down"): void {
-    const document = this.document;
-    const nodeId = this.primarySelectedId;
-    if (!document || !nodeId || nodeId === document.rootId) return;
-    const parentId = findParentId(document, nodeId);
-    if (!parentId) return;
-    const siblings = getNode(document, parentId).childIds;
-    const index = siblings.indexOf(nodeId);
-    const targetIndex = index + (direction === "up" ? -1 : 1);
-    // Check before commit so hitting a list boundary does not dirty the file or
-    // consume an undo slot even though the browser shortcut is still suppressed.
-    if (index < 0 || targetIndex < 0 || targetIndex >= siblings.length) return;
-    this.commit((draft) => { moveNodeAmongSiblings(draft, nodeId, direction); });
-  }
+  private moveSelectedAmongSiblings(direction: "up" | "down"): void { this.nodeOps.moveSelectedAmongSiblings(direction); }
 
   /** Move the single keyboard focus without changing document structure. */
   private navigateSelection(key: NavigationArrow): void {
@@ -3471,134 +3406,17 @@ export class MindTreeView extends TextFileView {
     }
   }
 
-  private requestDeleteBranch(nodeId: NodeId): void {
-    if (this.mutationLocked()) return;
-    const document = this.document;
-    if (!document) return;
-    const targetNodeIds = getTopLevelSelectedNodeIds(document, this.selectedIds.has(nodeId) ? this.selectedIds : [nodeId]);
-    const topicNodeIds = targetNodeIds.flatMap((id) => collectBranchIds(document, id));
-    if (targetNodeIds.length > 0) this.openDeleteDialog(targetNodeIds, topicNodeIds, "branch");
-  }
+  private requestDeleteBranch(nodeId: NodeId): void { this.nodeOps.requestDeleteBranch(nodeId); }
 
   private getResourceBadgePresentation(): ResourceBadgePresentation {
     return createViewResourceBadgePresentation(this.plugin.settings, this.resourceBadgeMeasurer);
   }
 
-  /** Return the de-duplicated topic union represented by the current selection. */
-  private getSelectedBranchNodeIds(nodeId: NodeId): NodeId[] {
-    const document = this.document;
-    if (!document) return [];
-    const roots = getTopLevelSelectedNodeIds(document, this.selectedIds.has(nodeId) ? this.selectedIds : [nodeId]);
-    return roots.flatMap((id) => collectBranchIds(document, id));
-  }
+  private getSelectedBranchNodeIds(nodeId: NodeId): NodeId[] { return this.nodeOps.getSelectedBranchNodeIds(nodeId); }
 
-  /** The node-only menu action uses the same safety dialog but promotes children. */
-  private requestDeleteNodeOnly(nodeId: NodeId): void {
-    const document = this.document;
-    if (!document || nodeId === document.rootId) return;
-    const targetNodeIds = [...new Set(this.selectedIds.has(nodeId) ? this.selectedIds : [nodeId])]
-      .filter((id) => id !== document.rootId && Boolean(document.nodes[id]));
-    if (targetNodeIds.length > 0) this.openDeleteDialog(targetNodeIds, targetNodeIds, "node-only");
-  }
+  private requestDeleteNodeOnly(nodeId: NodeId): void { this.nodeOps.requestDeleteNodeOnly(nodeId); }
 
-  private openDeleteDialog(
-    targetNodeIds: NodeId[],
-    topicNodeIds: NodeId[],
-    structureMode: "branch" | "node-only"
-  ): void {
-    const document = this.document;
-    if (!document) return;
-    const topicTitles = topicNodeIds.map((id) => document.nodes[id]?.title || t("node.untitled"));
-    const linkedFiles = new Map<string, FileResourceRef>();
-    for (const id of topicNodeIds) {
-      const resource = document.nodes[id]?.resource;
-      // Count a multiply-linked file once because the vault can only delete it
-      // once; all matching node references are still cleared for files-only.
-      if (resource?.type === "file") linkedFiles.set(resource.resourceId, { ...resource });
-    }
-    const resources = [...linkedFiles.values()];
-    const token = this.documentSessionToken;
-    new DeleteBranchModal(
-      this.app,
-      { topicTitles, filePaths: resources.map((resource) => resource.pathHint) },
-      (action) => {
-        if (token !== this.documentSessionToken || this.mutationLocked()) return;
-        void this.executeDeleteBranch(targetNodeIds, topicNodeIds, resources, action, structureMode);
-      }
-    ).open();
-  }
-
-  /** Execute the dialog choice; real files are moved through Obsidian's trash. */
-  private async executeDeleteBranch(
-    targetNodeIds: NodeId[],
-    topicNodeIds: NodeId[],
-    resources: FileResourceRef[],
-    action: DeleteBranchAction,
-    structureMode: "branch" | "node-only"
-  ): Promise<void> {
-    if (this.mutationLocked()) return;
-    const token = this.documentSessionToken;
-    if (action === "topics-only") {
-      this.deleteTopics(targetNodeIds, structureMode);
-      return;
-    }
-
-    const deletedResourceIds = new Set<string>();
-    const failedPaths: string[] = [];
-    for (const resource of resources) {
-      if (this.mutationLocked() || token !== this.documentSessionToken) return;
-      try {
-        await this.plugin.resources.trashLinkedFile(resource);
-        deletedResourceIds.add(resource.resourceId);
-      } catch {
-        failedPaths.push(resource.pathHint);
-      }
-    }
-
-    if (this.mutationLocked() || token !== this.documentSessionToken) return;
-    if (action === "topics-and-files") {
-      this.deleteTopics(targetNodeIds, structureMode);
-    } else if (deletedResourceIds.size > 0) {
-      // Keeping topics means their now-deleted files must also be unlinked; a
-      // stale resource reference would misleadingly look like a sync failure.
-      this.commit((draft) => {
-        for (const id of topicNodeIds) {
-          const node = draft.nodes[id];
-          if (node?.resource?.type !== "file" || !deletedResourceIds.has(node.resource.resourceId)) continue;
-          delete node.resource;
-          delete node.titleSync;
-        }
-      });
-    }
-
-    if (failedPaths.length > 0) {
-      new Notice(t("notice.deleteFilesFailed", {
-        count: failedPaths.length,
-        paths: failedPaths.join(", ")
-      }));
-    }
-  }
-
-  /** Delete all selected structures in one undo step and keep a surviving parent selected. */
-  private deleteTopics(targetNodeIds: NodeId[], structureMode: "branch" | "node-only"): void {
-    const document = this.document;
-    if (!document || targetNodeIds.length === 0) return;
-    const anchorId = targetNodeIds.find((id) => id === this.primarySelectedId)
-      ?? targetNodeIds.find((id) => this.primarySelectedId && collectBranchIds(document, id).includes(this.primarySelectedId))
-      ?? targetNodeIds[0];
-    const affected = new Set(structureMode === "branch"
-      ? targetNodeIds.flatMap((id) => collectBranchIds(document, id))
-      : targetNodeIds);
-    let parentId = anchorId ? findParentId(document, anchorId) : undefined;
-    while (parentId && affected.has(parentId)) parentId = findParentId(document, parentId);
-    const nextSelectionId = parentId ?? document.rootId;
-    this.commit((draft) => {
-      if (structureMode === "branch") deleteBranches(draft, targetNodeIds);
-      else deleteNodesOnly(draft, targetNodeIds);
-    });
-    const finalSelectionId = this.document?.nodes[nextSelectionId] ? nextSelectionId : this.document?.rootId;
-    if (finalSelectionId) this.selectOnly(finalSelectionId);
-  }
+  private deleteTopics(targetNodeIds: NodeId[], structureMode: "branch" | "node-only"): void { this.nodeOps.deleteTopics(targetNodeIds, structureMode); }
 
   private beginEdit(nodeId: NodeId, selectionMode: "all" | "end" = "all", restoredDraft?: string): void {
     if (this.mutationLocked()) return;
