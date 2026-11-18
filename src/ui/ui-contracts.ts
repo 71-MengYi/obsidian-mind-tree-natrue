@@ -21,7 +21,7 @@ export type NodeResourceMenuItemId =
 export type CopyAsMenuItemId = "copy-as-reference" | "copy-as-outline" | "copy-as-mermaid";
 
 /** Rows of the "export" group shared by the node menu and the toolbar. */
-export type ExportMenuItemId = "export-png" | "export-markdown";
+export type ExportMenuItemId = "export-png" | "export-markdown" | "export-canvas";
 
 export type NodeMenuItemId = NodeResourceMenuItemId
   | "markers" | "node-link" | "add-child" | "add-sibling"
@@ -38,7 +38,7 @@ export const COPY_AS_MENU_ORDER: readonly CopyAsMenuItemId[] =
   ["copy-as-reference", "copy-as-outline", "copy-as-mermaid"];
 
 /** The one order both the node menu and the toolbar export menu render. */
-export const EXPORT_MENU_ORDER: readonly ExportMenuItemId[] = ["export-png", "export-markdown"];
+export const EXPORT_MENU_ORDER: readonly ExportMenuItemId[] = ["export-png", "export-markdown", "export-canvas"];
 
 export interface NodeMenuContractState {
   readonly hasFileResource: boolean;

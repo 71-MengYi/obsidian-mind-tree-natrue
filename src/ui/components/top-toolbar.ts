@@ -59,7 +59,9 @@ export class TopToolbar extends DisposableUiObject {
     this.addSeparator();
     this.addButton("copy", labels.copy, actions.showCopyMenu, true);
     this.addButton("upload", labels.importText, () => actions.importText());
-    this.addButton("download", labels.exportTree, actions.showExportMenu, true);
+    // Export never waits for a selection: without one it exports the whole tree
+    // from its root, so gating the menu would hide that fallback entirely.
+    this.addButton("download", labels.exportTree, actions.showExportMenu);
   }
 
   update(state: TopToolbarState): void {

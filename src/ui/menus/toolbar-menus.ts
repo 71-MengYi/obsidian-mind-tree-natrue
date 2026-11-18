@@ -33,7 +33,7 @@ export class CopyMenu {
   }
 }
 
-/** Toolbar export dropdown: the same two commands the node menu exports. */
+/** Toolbar export dropdown: the same export commands the node menu renders. */
 export class ExportMenu {
   constructor(private readonly actions: ExportMenuActions) {}
   show(event: MouseEvent): void {
