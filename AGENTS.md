@@ -108,7 +108,7 @@ src/
     ├── menus/           (8) 节点右键菜单、树设置菜单、工具栏菜单、快捷键帮助、主题预览、复制/导出菜单描述、嵌套菜单能力探测
     ├── modals/         (15) 新建/删除/移动/导入/文件建议/更新提示、版本历史等对话框（节点关联选择窗口已删除）
     ├── settings-pages/ (10) 基础设置、思维导图、主题笔记、插件更新分区、管理标记
-    ├── view-ops/        (3) 视图命令层：复制/导出/分支引用/Mermaid（exchange-ops）、节点结构/删除（node-ops）、资源关联/移动/标题同步（resource-ops）
+    ├── view-ops/        (4) 视图命令层：复制/导出/剪切（exchange-ops）、节点结构/删除（node-ops）、资源关联/移动/标题同步（resource-ops）、设置写入（settings-ops）
     └── search/          (3) 搜索核心（search-core）、右侧搜索面板、搜索载荷
 ```
 
@@ -143,7 +143,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 | 名称 | 文件 | 职责 |
 | --- | --- | --- |
 | `MindTreeNaturePlugin` | `src/main.ts` | 注册视图/命令/设置页/文件事件，持有各服务，编排冲突清理与更新流程 |
-| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3828 行）：把文档会话映射为界面状态、派发命名操作；复制/导出、节点结构/删除、资源关联命令层已拆到 `ui/view-ops/{exchange,node,resource}-ops.ts`，视图只留薄包装。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
+| `MindTreeView` | `src/ui/mind-tree-view.ts` | 视图中枢（3792 行）：把文档会话映射为界面状态、派发命名操作；复制/导出/剪切、节点结构/删除、资源关联、设置写入命令层已拆到 `ui/view-ops/{exchange,node,resource,settings}-ops.ts`，视图只留薄包装。**改动前先读它调用的组件/控制器，不要在它里面新增独立逻辑** |
 | `MindTreeViewShell` / `CanvasShell` / `ViewMenuBar` / `TopToolbar` / `BottomStatusBar` / `StatusIndicator` | `src/ui/components/*` | 视图外壳、画布宿主、左上菜单栏、顶部工具栏、左下状态栏、状态提示层 |
 | `DisposableUiObject` / `DisposerBag` | `src/ui/components/ui-object.ts` | 所有 UI 对象的幂等销毁基类；新增 UI 模块必须接入 |
 | `MindTreeReferenceEmbed` / `MindTreeReferenceRenderChild` | `src/ui/components/mind-tree-reference-embed.ts` | 笔记内嵌只读分支视图（`mind-tree-ref` 代码块）：复用 `ReadOnlyTreePreview`，只增加分支起点、宽度适配与自适应高度、悬浮打开原树按钮与失效文案；只通过注入端口访问仓库，禁止反向导入视图或插件主类 |
@@ -467,4 +467,4 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ---
 
-*最后核对：2026-11-19 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」、2026-11-13「AI 模型提供商设置」、2026-11-19「本地版本快照 / 版本历史」「节点反向引用气泡」「导出 Canvas 与无选中整树导出」「UI 测试装载器」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。`MindTreeView` 拆分完成第 3 阶段（交换/导出到 `ui/view-ops/exchange-ops.ts`、节点结构/删除到 `ui/view-ops/node-ops.ts`、资源关联到 `ui/view-ops/resource-ops.ts`；settings 命令层与 `createTaskNoteForNode`/`linkUrl`/`openResource` 留待下一轮），真实 Obsidian 手工验收仍未做。*
+*最后核对：2026-11-19 · 目录与命令以 `package.json`、`tsconfig.json`、`.github/workflows/` 为准；2026-10-11「合并/简化」重构、2026-10-12「关联节点（单向引用）」、2026-10-13 关联节点 UI 缺陷修复与「分支引用 / 笔记内嵌只读分支视图」、2026-10-17「关联节点改为粘贴分支引用创建（移除工具栏与选择窗口）」、2026-11-04「未修改的思维树不再写盘」、2026-11-06「干净会话自动采用外部版本」、2026-11-12「右下角小地图」、2026-11-13「AI 模型提供商设置」、2026-11-19「本地版本快照 / 版本历史」「节点反向引用气泡」「导出 Canvas 与无选中整树导出」「UI 测试装载器」，落点、未完成项与环境坑见 `docs/memory.md` 对应日期条目。`MindTreeView` 拆分完成第 4 阶段（4 个命令模块，视图 4431 → 3792；`refreshLayoutFromSettings` 与 `createTaskNoteForNode`/`linkUrl`/`openResource` 因静态测试钉住方法体保留在视图），真实 Obsidian 手工验收仍未做。*

@@ -10,9 +10,10 @@
 | 模块 | 职责 |
 | --- | --- |
 | `MindTreeView` | 注册自定义视图、管理生命周期和状态提示。 |
-| `ExchangeOps` | 复制/导出/分支引用/Mermaid 命令层：通过 host getter 读取视图活状态，视图只保留同名薄包装；不反向依赖视图或插件主类。 |
+| `ExchangeOps` | 复制/剪切/导出/分支引用/Mermaid 命令层：通过 host getter 读取视图活状态，视图只保留同名薄包装；不反向依赖视图或插件主类。 |
 | `NodeOps` | 节点结构/删除命令层：新增子/同级/父节点、同级移动、折叠、删除分支或仅节点、删除对话框与回收站流程；全部变更仍走视图的 `commit` 回调，撤销锚点与渲染顺序不变。 |
 | `ResourceOps` | 资源关联命令层：创建笔记/TaskNote 辅助、模板副本、关联文件与网页、移动关联文件、标题同步、打开资源；文件写入仍回到视图的统一 `commit`/`applySystemMutation`/`FileAssociationController` 路径，token 与身份校验保持不变。 |
+| `SettingsOps` | 设置写入命令层：布局、主题、连线样式、节点形状与文档设置提交；仍走视图的 `commit` 与重扫顺序。`refreshLayoutFromSettings` 因静态测试钉住方法体而保留在视图。 |
 | `TreeCanvas` | 渲染、布局、选择、缩放、拖拽和可访问性。 |
 | `TreeCommandService` | 封装新增、移动、删除、标记等原子命令及撤销/重做。 |
 | `NodeLinkService` | 同一文档内的单向节点引用：校验发起节点、写入/清除目标 id，并在删除节点时清理指向它的引用；不复制任何节点，也不改动 `childIds`。 |

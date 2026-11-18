@@ -22,7 +22,7 @@
 - 官方 `npm test`（`tsx`）在受限沙箱仍需提权（tsx/esbuild 走 spawn 管道）；装载器路径本身不依赖 esbuild。
 
 **拆分进度**
-- `src/ui/mind-tree-view.ts` 第 3 阶段完成：复制/导出（4431 → 4271，`b46e6c9`）、节点结构/删除（4271 → 4089，`33102f1`）、资源关联命令层搬到 `src/ui/view-ops/resource-ops.ts`（4089 → 3828，`b230ac5`）；`createTaskNoteForNode`、`linkUrl`、`openResource` 与 settings 命令层仍留在视图，留待下一轮。`test/association-target.test.ts` 的源码钉死断言改为同时读取 module 与 view（断言文本未改）。
+- `src/ui/mind-tree-view.ts` 第 4 阶段完成：复制/导出/剪切（4431 → 4271，`b46e6c9`）、节点结构/删除（4271 → 4089，`33102f1`）、资源关联（4089 → 3828，`b230ac5`）、设置写入与剪切归并（3828 → 3792，`54cd165`）；累计 −639 行，拆出 `exchange-ops` / `node-ops` / `resource-ops` / `settings-ops` 四个命令模块。`refreshLayoutFromSettings`、`createTaskNoteForNode`、`linkUrl`、`openResource` 因静态测试钉住方法体保留在视图。
 - 未做真实 Obsidian 手工验收：版本历史弹窗浏览/恢复、反链圆点与胶囊跳转、Canvas 在 Obsidian 中打开、移动端触摸展开圆点，都只到自动化测试层。
 
 **文档落点**：`docs/02` §5.1/§5.3/§5.4/§5.5/§6.6/§6.10、`docs/03` §7.6/§7.7、`docs/05` §9.1/§9.3/§11/§12.3、`docs/06` §13.1/§14（新增 23–25 条）、`README.md` / `README.en.md`、`AGENTS.md` §1/§2/§3.2/§4/§5/§10/§12/文末核对。测试数字统一为 112 文件 / 1232 用例 / 0 失败。
