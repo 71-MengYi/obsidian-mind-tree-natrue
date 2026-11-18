@@ -2,6 +2,7 @@ import { Notice, type TFile } from "obsidian";
 import { t } from "../../i18n";
 import { sanitizeFileTitle } from "../../format/resource-id";
 import type { BranchReference } from "../../domain/branch-reference";
+import { getTopLevelSelectedNodeIds } from "../../domain/tree";
 import type {
   FileResourceRef,
   MindTreeDocument,
@@ -60,6 +61,8 @@ export interface ExchangeOpsHost {
   getPrimarySelectedId(): NodeId | undefined;
   getSelectedIds(): ReadonlySet<NodeId>;
   getDocumentSessionToken(): string;
+  /** False while the session refuses edits, mirroring the view's commit guard. */
+  mutationLocked(): boolean;
   getExportSettings(): ExchangeExportSettings;
   getTextMeasurer(): NodeTextMeasurer | undefined;
   getRootEl(): HTMLElement;
@@ -69,6 +72,11 @@ export interface ExchangeOpsHost {
   readBinary(file: TFile): Promise<ArrayBuffer>;
   fileExists(path: string): boolean;
   createTextFile(path: string, source: string): Promise<{ readonly path: string }>;
+  /**
+   * The node command layer's single delete step. Cut reaches it only after the
+   * clipboard write succeeded, so a failed copy never deletes anything.
+   */
+  deleteTopics(targetNodeIds: NodeId[], structureMode: "branch" | "node-only"): void;
 }
 
 /**
@@ -133,6 +141,9 @@ function resolveExportThemeColors(rootEl: HTMLElement, theme: MindTreeTheme | un
 export class ExchangeOps {
   constructor(private readonly host: ExchangeOpsHost) {}
 
+  /** Single-flight guard: a second cut while the clipboard write is pending is a no-op. */
+  private cutInProgress = false;
+
   private getResourceBadgePresentation(): ResourceBadgePresentation {
     return this.host.getResourceBadgePresentation();
   }
@@ -148,6 +159,41 @@ export class ExchangeOps {
       new Notice(mode === "branch" ? t("notice.branchCopied") : t("notice.markdownCopied"));
     } catch (error) {
       new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
+    }
+  }
+
+  /**
+   * Cut every top-level selected branch, but never the protected root node.
+   * The clipboard payload is written before anything is deleted, so a failed
+   * write leaves the document (and its linked-file metadata) untouched.
+   */
+  async cutSelected(): Promise<void> {
+    if (this.host.mutationLocked()) return;
+    const document = this.host.getDocument();
+    const primarySelectedId = this.host.getPrimarySelectedId();
+    if (!document || !primarySelectedId || this.cutInProgress) return;
+    const sourcePath = this.host.getFile()?.path;
+    const documentSessionToken = this.host.getDocumentSessionToken();
+    const selectedIds = this.host.getSelectedIds();
+    const selected = selectedIds.size > 0 ? selectedIds : [primarySelectedId];
+    const branchRootIds = getTopLevelSelectedNodeIds(document, selected);
+    if (branchRootIds.length === 0) return;
+
+    this.cutInProgress = true;
+    try {
+      // A failed clipboard write must leave the document untouched. This also
+      // retains linked-file metadata so a later paste recreates full branches.
+      await copyBranches(document, branchRootIds, "branch");
+      // Switching files while an asynchronous clipboard write is pending must
+      // never delete matching node IDs from the newly active document.
+      if (this.host.getDocumentSessionToken() !== documentSessionToken || this.host.getFile()?.path !== sourcePath) return;
+      const survivingIds = branchRootIds.filter((id) => Boolean(this.host.getDocument()?.nodes[id]));
+      if (survivingIds.length > 0) this.host.deleteTopics(survivingIds, "branch");
+      new Notice(t("notice.branchCut", { count: survivingIds.length }));
+    } catch (error) {
+      new Notice(t("notice.cutFailed", { message: error instanceof Error ? error.message : String(error) }));
+    } finally {
+      this.cutInProgress = false;
     }
   }
 
