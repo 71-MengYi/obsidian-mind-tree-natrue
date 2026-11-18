@@ -1045,6 +1045,148 @@
   text-align: center;
 }
 
+/* --------------------------------------------------------------------------
+   Node backlinks
+   Notes can embed a reference to one node. The circles under the node box are
+   the collapsed state; hovering or focusing the node expands the note paths
+   into clickable pills. The whole layer is absolutely positioned, so a
+   backlink never participates in the tree layout or changes the node size.
+   -------------------------------------------------------------------------- */
+.mtn-node-backlinks {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  /* Above the connection layer: the expanded list is a transient popover. */
+  z-index: 9;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  width: max-content;
+  max-width: 320px;
+  /* The collapsed dots stay visual-only; input re-enables it per element. */
+  pointer-events: none;
+}
+
+.mtn-node-backlinks:focus-visible {
+  border-radius: 4px;
+  outline: 2px solid var(--interactive-accent);
+  outline-offset: 2px;
+}
+
+/* The row's own top padding keeps a hit area directly under the node, so the
+   pointer can travel from the node body into the expanded list without a gap.
+   Hovering the dots counts as hovering the node, which keeps it expanded. */
+.mtn-backlink-dots {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  min-height: 8px;
+  padding-top: 3px;
+  pointer-events: auto;
+}
+
+.mtn-backlink-dot {
+  flex: 0 0 auto;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--mtn-node-accent, var(--text-muted));
+  opacity: 0.72;
+}
+
+.mtn-backlink-overflow {
+  color: var(--text-muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+
+/* 0fr → 1fr is an animatable height-free expansion: the wrapper keeps its
+   measured width while the list grows downward from zero height. */
+.mtn-backlink-list {
+  display: grid;
+  grid-template-rows: 0fr;
+  width: 100%;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition:
+    grid-template-rows 200ms ease,
+    opacity 200ms ease,
+    visibility 0s linear 200ms;
+}
+
+/* `:focus-within` covers both the wrapper's own tab stop and a focused pill, so
+   the list is fully usable without a pointer. */
+.mtn-node:is(:hover, :focus-within) > .mtn-node-backlinks > .mtn-backlink-list {
+  grid-template-rows: 1fr;
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+  transition:
+    grid-template-rows 200ms ease,
+    opacity 200ms ease,
+    visibility 0s;
+}
+
+.mtn-backlink-pills {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: flex-start;
+  gap: 3px;
+  min-height: 0;
+  max-width: 320px;
+  padding-top: 3px;
+  overflow: hidden;
+}
+
+.mtn-backlink-pill {
+  display: block;
+  flex: 0 0 auto;
+  box-sizing: border-box;
+  max-width: 260px;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
+  padding: 1px 8px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 999px;
+  background: var(--background-modifier-hover);
+  box-shadow: none;
+  color: var(--text-muted);
+  font-family: inherit;
+  font-size: var(--font-ui-smaller, 11px);
+  font-weight: 400;
+  line-height: 16px;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.mtn-backlink-pill:is(:hover, :focus-visible) {
+  background: var(--background-modifier-active-hover);
+  color: var(--text-normal);
+}
+
+/* An inset ring survives the wrapping row's overflow clipping; the host's own
+   outline would be cut off at the list edges. */
+.mtn-backlink-pill:focus-visible {
+  outline: none;
+  box-shadow: inset 0 0 0 2px var(--interactive-accent);
+}
+
+/* The title editor and a drag clone must not carry a second interactive layer. */
+.mtn-node.is-editing > .mtn-node-backlinks,
+.mtn-node.is-drag-hidden > .mtn-node-backlinks,
+.mtn-node.mtn-node-drag-ghost .mtn-node-backlinks {
+  display: none;
+}
+
 .mtn-node.is-drop-before::before,
 .mtn-node.is-drop-after::after {
   content: "";
@@ -2836,6 +2978,7 @@
 
 @media (prefers-reduced-motion: reduce) {
   .mtn-node { transition: none; }
+  .mtn-backlink-list { transition: none; }
 }
 
 /* Hover preview of one theme choice. It sits beside an open menu item, so it

@@ -226,6 +226,11 @@ interface PasteInsertionContext {
 const TEXT_SURFACE_SELECTOR = "input,textarea,[contenteditable='true'],[role='textbox'],.cm-editor";
 /** Host UI that owns the gesture whenever it is painted. */
 const NATIVE_SURFACE_SELECTOR = ".modal-container,.modal,.menu,.popover,.suggestion-container,[role='dialog']";
+/**
+ * Backlink changes arrive in bursts while a note is edited; one reflow per
+ * settled burst is enough because the pills are decorative to the layout.
+ */
+const BACKLINK_RENDER_DEBOUNCE_MS = 200;
 
 /**
  * Canvas navigation belongs to this view session, not to the mind-tree file.
@@ -314,6 +319,10 @@ export class MindTreeView extends TextFileView {
   private markerPopover?: MarkerPopoverHandle;
   /** Right-hand search window, its caches and its revision counter. */
   private searchController?: SearchController;
+  /** Releases this view's subscription to the plugin-wide backlink index. */
+  private backlinkUnsubscribe?: () => void;
+  /** Pending debounced reflow after the backlink index changed. */
+  private backlinkRenderTimer?: number;
   /** Lazily created hover preview for the theme list in the tree settings menu. */
   private themePreview?: ThemePreviewPanel;
   private cutInProgress = false;
@@ -415,6 +424,10 @@ export class MindTreeView extends TextFileView {
     await super.onOpen();
     this.viewClosed = false;
     this.buildShell();
+    // The index is plugin-wide; a view only mirrors the entries of the document
+    // that is currently open and releases them again when it closes.
+    this.backlinkUnsubscribe?.();
+    this.backlinkUnsubscribe = this.plugin.backlinks.subscribe(() => this.scheduleBacklinkRender());
     this.registerEvent(this.app.workspace.on("css-change", () => this.onTextMetricsInvalidated()));
     this.render();
   }
@@ -458,6 +471,7 @@ export class MindTreeView extends TextFileView {
     this.canvasInteractionController = undefined;
     this.searchController?.destroy();
     this.searchController = undefined;
+    this.detachBacklinkIndex();
     this.minimap?.destroy();
     this.minimap = undefined;
     this.shell?.destroy();
@@ -490,6 +504,8 @@ export class MindTreeView extends TextFileView {
     // Only the caches are dropped: the panel outlives the file switch, so
     // destroying the controller here would leave Mod+F and the toolbar inert.
     this.searchController?.reset();
+    // A pending backlink reflow belongs to the document that is being unloaded.
+    this.cancelPendingBacklinkRender();
     this.editingNodeId = undefined;
     this.editingDraftValue = "";
     this.attachSharedSession(file.path);
@@ -2090,6 +2106,9 @@ export class MindTreeView extends TextFileView {
     this.branchColorSlotByNodeId = getBranchColorSlots(document);
     const positionMap = new Map(this.currentLayout.nodes.map((node) => [node.id, node]));
     this.renderConnections(positionMap);
+    // A tree without a persisted identity cannot be referenced by a note, so the
+    // index is never consulted for an identity-less document.
+    const backlinks = document.documentId ? this.plugin.backlinks.entriesFor(document.documentId) : undefined;
     this.nodeRenderer?.render({
       document,
       positions: this.currentLayout.nodes,
@@ -2105,7 +2124,8 @@ export class MindTreeView extends TextFileView {
       nodeWrapWidth: this.plugin.settings.nodeWrapWidth,
       textMeasurer,
       resourceBadgePresentation,
-      imageNodePresentation: this.imageNodePresentation ?? fallbackImageNodePresentation
+      imageNodePresentation: this.imageNodePresentation ?? fallbackImageNodePresentation,
+      backlinks
     }, {
       finishEdit: (nodeId, title) => this.finishEdit(nodeId, title),
       updateEditDraft: (nodeId, title) => this.updateEditDraft(nodeId, title),
@@ -2121,6 +2141,9 @@ export class MindTreeView extends TextFileView {
       },
       openResource: (nodeId) => void this.openResource(nodeId),
       goToLinkedNode: (nodeId) => this.goToLinkedNode(nodeId),
+      // The search panel already owns "open this note and put the caret on this
+      // line", so a backlink reuses that same vault path instead of copying it.
+      openBacklink: (target) => void this.openSearchedFileAtLine(target.path, target.line),
       beginImageResize: (event, nodeId, image) => this.beginImageResize(event, nodeId, image),
       editorReady: (editor) => this.keyboardAvoidanceController?.watch(editor)
     });
@@ -2135,6 +2158,36 @@ export class MindTreeView extends TextFileView {
    */
   private refreshSearchContext(): void {
     this.searchController?.setContext();
+  }
+
+  /**
+   * The index coalesces a burst of note updates into one signal; a short delay
+   * here lets the last signal of a typing/saving burst win before reflowing.
+   */
+  private scheduleBacklinkRender(): void {
+    if (this.viewClosed || !this.document?.documentId) return;
+    this.cancelPendingBacklinkRender();
+    this.backlinkRenderTimer = this.ownerWindow().setTimeout(() => {
+      this.backlinkRenderTimer = undefined;
+      if (this.viewClosed || !this.document?.documentId) return;
+      // Replacing the node DOM mid-edit would discard the open title editor;
+      // the next normal render (edit commit) already picks up the new entries.
+      if (this.editingNodeId) return;
+      this.render();
+    }, BACKLINK_RENDER_DEBOUNCE_MS);
+  }
+
+  private cancelPendingBacklinkRender(): void {
+    if (this.backlinkRenderTimer === undefined) return;
+    this.ownerWindow().clearTimeout(this.backlinkRenderTimer);
+    this.backlinkRenderTimer = undefined;
+  }
+
+  /** Close-time teardown: no timer and no listener may outlive the view. */
+  private detachBacklinkIndex(): void {
+    this.backlinkUnsubscribe?.();
+    this.backlinkUnsubscribe = undefined;
+    this.cancelPendingBacklinkRender();
   }
 
   private renderConnections(positionMap: Map<NodeId, PositionedNode>): void {

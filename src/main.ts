@@ -10,6 +10,8 @@ import { SettingsPersistence, removeLegacyResourceIndex } from "./services/setti
 import { decideDocumentIdentityWrite } from "./services/resource-identity";
 import { MindTreeSessionRegistry, type SharedMindTreeSession } from "./services/mind-tree-session-registry";
 import { MindTreeReferenceService } from "./services/mind-tree-reference";
+import { BacklinkIndexService } from "./services/backlink-index";
+import { isMarkdownPath } from "./format/resource-id";
 import { MindTreeCreationService } from "./services/tree-creation";
 import { TaskNotesService, pluginRegistryOf } from "./services/tasknotes";
 import { PendingConflictStore } from "./services/pending-conflict-store";
@@ -99,6 +101,12 @@ export default class MindTreeNaturePlugin extends Plugin {
   private conflictMaintenance!: PendingConflictMaintenance<TFile>;
   /** Resolves note-embedded branch references without requiring an open view. */
   private references!: MindTreeReferenceService;
+  /**
+   * Reverse direction of `references`: which notes point at which node. It is
+   * plugin-owned and scans in bounded batches, so an open tree can show its
+   * backlinks even when the referencing note is closed.
+   */
+  backlinks!: BacklinkIndexService;
   /** The one path that creates a `.mtn.md`, shared by the UI and the MCP tools. */
   private treeCreation!: MindTreeCreationService<TFile>;
   /**
@@ -228,6 +236,57 @@ export default class MindTreeNaturePlugin extends Plugin {
       }
     }));
     this.registerEvent(this.app.metadataCache.on("changed", notifyReferenceChange));
+    // Backlinks read ordinary notes rather than trees, so they have their own
+    // ports and their own event wiring: every note change is a candidate, while
+    // tree files are never scanned for references.
+    this.backlinks = new BacklinkIndexService({
+      notes: () => this.app.vault.getMarkdownFiles()
+        .filter((file) => !isMindTreePath(file.path))
+        .map((file) => ({ path: file.path, mtime: file.stat.mtime, size: file.stat.size })),
+      noteAt: (path) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (!(file instanceof TFile) || !isMarkdownPath(file.path) || isMindTreePath(file.path)) return undefined;
+        return { path: file.path, mtime: file.stat.mtime, size: file.stat.size };
+      },
+      // A parsed cache with no code section cannot hide a reference block; a
+      // missing cache only means "not known yet", so the note is read instead.
+      mayContainCodeBlock: (path) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (!(file instanceof TFile)) return undefined;
+        const sections = this.app.metadataCache.getFileCache(file)?.sections;
+        if (!sections) return undefined;
+        return sections.some((section) => section.type === "code");
+      },
+      read: (path) => {
+        const file = this.app.vault.getFileByPath(path);
+        if (!(file instanceof TFile)) throw new Error(t("notice.fileNotFound", { path }));
+        return this.app.vault.cachedRead(file);
+      },
+      clock: {
+        setTimeout: (handler, delayMs) => window.setTimeout(handler, delayMs),
+        clearTimeout: (handle) => window.clearTimeout(handle)
+      },
+      reportError: (error) => console.warn("Mind Tree Nature: backlink scan failed", error)
+    });
+    this.register(() => this.backlinks.destroy());
+    const notifyBacklinkSource = (file: { path: string }): void => {
+      if (isMarkdownPath(file.path) && !isMindTreePath(file.path)) this.backlinks.notifyChanged(file.path);
+    };
+    this.registerEvent(this.app.vault.on("create", notifyBacklinkSource));
+    this.registerEvent(this.app.vault.on("modify", notifyBacklinkSource));
+    this.registerEvent(this.app.vault.on("delete", (file) => {
+      // A folder event reports only the folder, so every path below it may be
+      // stale; the index rebuilds in batches instead of guessing children.
+      if (file instanceof TFile) this.backlinks.notifyRemoved(file.path);
+      else this.backlinks.invalidateAll();
+    }));
+    this.registerEvent(this.app.vault.on("rename", (file, oldPath) => {
+      if (file instanceof TFile) this.backlinks.notifyRenamed(oldPath, file.path);
+      else this.backlinks.invalidateAll();
+    }));
+    this.registerEvent(this.app.metadataCache.on("changed", (file) => {
+      if (!isMindTreePath(file.path)) this.backlinks.notifyMetadataChanged(file.path);
+    }));
     // Journal maintenance owns its debounce timers and decisions; vault reads,
     // view refreshes and notices stay here as thin ports.
     this.conflictMaintenance = new PendingConflictMaintenance<TFile>({
@@ -334,6 +393,9 @@ export default class MindTreeNaturePlugin extends Plugin {
     }));
 
     this.app.workspace.onLayoutReady(() => {
+      // The vault file list is only authoritative once layout is ready, and the
+      // scan itself yields between bounded batches so startup stays responsive.
+      this.backlinks.start();
       this.updates.startup(this.settings.autoCheckUpdates);
       void this.rebuildResourceIndex()
         .catch((error: unknown) => this.reportIndexFailure(error))

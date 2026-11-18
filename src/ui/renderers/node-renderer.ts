@@ -1,6 +1,8 @@
 import { nodeTitleMode, type TitleCommitResult } from "../../format/node-title";
 import { renderRichTitleSvg } from "../../render/text-measurer";
 import { setIcon } from "obsidian";
+import type { BacklinkEntries, BacklinkTarget } from "../../domain/backlink";
+import { createBacklinkRenderModel } from "./backlink-render-model";
 import {
   getVisibleNodeMarkers,
   isCustomMarkerCategory
@@ -49,6 +51,11 @@ export interface NodeRenderState {
   readonly textMeasurer: NodeTextMeasurer;
   readonly resourceBadgePresentation: ResourceBadgePresentation;
   readonly imageNodePresentation: ImageNodePresentation;
+  /**
+   * Notes that point at nodes of this tree, keyed by node id. Absent when the
+   * tree has no persisted identity and in previews, which cannot navigate.
+   */
+  readonly backlinks?: BacklinkEntries;
 }
 
 export interface NodeRenderActions {
@@ -64,6 +71,8 @@ export interface NodeRenderActions {
   readonly openResource: (nodeId: NodeId) => void;
   /** Reveal the node this node links to; the view owns selection and viewport. */
   readonly goToLinkedNode: (nodeId: NodeId) => void;
+  /** Open the note that references this node at the reference's own line. */
+  readonly openBacklink?: (target: BacklinkTarget) => void;
   readonly beginImageResize: (event: PointerEvent, nodeId: NodeId, image: ImageNodeVisual) => void;
   readonly editorReady?: (editor: HTMLTextAreaElement) => void;
 }
@@ -146,6 +155,8 @@ export class NodeRenderer {
     this.renderMarkers(element, node, state.resourceBadgePresentation);
     this.renderResourceControls(element, node, visual, actions);
     this.renderFoldControl(element, node, state.foldDirections.get(node.id) ?? "right", actions);
+    // Previews only draw the tree; they have no vault port to open a note with.
+    if (!state.readOnly) this.renderBacklinks(element, node.id, state.backlinks, actions);
 
     if (state.readOnly) {
       // Keep the original geometry/appearance, but previews cannot follow a node
@@ -311,6 +322,60 @@ export class NodeRenderer {
     fold.addEventListener("click", (event) => {
       event.stopPropagation(); actions.toggleCollapsed(node.id);
     });
+  }
+
+  /**
+   * A node that notes point at shows one circle per reference under its box.
+   * The circles are the collapsed state; hovering or focusing the node expands
+   * the note list. The wrapper is absolutely positioned and owns no layout
+   * space, so a backlink never changes node geometry or the tree layout, and
+   * circles stay visual-only while the pills are the real controls.
+   */
+  private renderBacklinks(
+    element: HTMLElement,
+    nodeId: NodeId,
+    backlinks: BacklinkEntries | undefined,
+    actions: NodeRenderActions
+  ): void {
+    const model = createBacklinkRenderModel(backlinks?.get(nodeId));
+    if (!model) return;
+    const wrapper = element.createDiv({
+      cls: "mtn-node-backlinks",
+      attr: {
+        tabindex: "0",
+        role: "group",
+        "aria-label": t("node.backlinks", { count: model.total })
+      }
+    });
+    const dots = wrapper.createDiv({ cls: "mtn-backlink-dots", attr: { "aria-hidden": "true" } });
+    for (let index = 0; index < model.dots; index += 1) dots.createSpan({ cls: "mtn-backlink-dot" });
+    if (model.overflow > 0) {
+      dots.createSpan({ cls: "mtn-backlink-overflow", text: `+${model.overflow}` });
+    }
+    // Touch devices have no hover: a tap on the circles moves focus to the
+    // wrapper, which expands the list through `:focus-within`.
+    dots.addEventListener("click", (event) => {
+      event.stopPropagation();
+      wrapper.focus({ preventScroll: true });
+    });
+    const list = wrapper.createDiv("mtn-backlink-list");
+    const pills = list.createDiv("mtn-backlink-pills");
+    for (const target of model.pills) {
+      const pill = pills.createEl("button", {
+        cls: "mtn-backlink-pill",
+        text: target.path,
+        attr: { type: "button", title: target.path, "aria-label": target.path }
+      });
+      // The wrapper lives inside the node, so a pointer-down here must not
+      // start a drag or a selection; only the note navigation may happen.
+      pill.addEventListener("pointerdown", (event) => event.stopPropagation());
+      pill.addEventListener("dblclick", (event) => event.stopPropagation());
+      pill.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        actions.openBacklink?.(target);
+      });
+    }
   }
 
   private renderResourceControls(

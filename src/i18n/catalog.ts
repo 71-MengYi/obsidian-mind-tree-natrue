@@ -352,6 +352,7 @@ export const EN = {
   "node.mindTreeMarker": "Mind tree",
   "node.drawingMarker": "Drawing",
   "node.resizeImage": "Resize image",
+  "node.backlinks": "{count} references from notes",
 
   "marker.category.progress": "Progress",
   "marker.category.priority": "Priority",
@@ -1109,6 +1110,7 @@ const ZH: Record<TranslationKey, string> = {
   "node.mindTreeMarker": "思维树",
   "node.drawingMarker": "绘图",
   "node.resizeImage": "调整图片大小",
+  "node.backlinks": "{count} 处笔记引用",
 
   "marker.category.progress": "进度",
   "marker.category.priority": "优先级",
