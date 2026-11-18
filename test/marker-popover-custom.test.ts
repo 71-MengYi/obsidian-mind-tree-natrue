@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSync } from "esbuild";
-import { createContext, runInContext } from "node:vm";
+import { loadModule } from "./helpers/module-loader";
 import { DEFAULT_SETTINGS } from "../src/settings-model";
 import type { MindTreeSettings } from "../src/settings-model";
 import type { CustomMarkerDefinition } from "../src/domain/custom-markers";
@@ -12,14 +11,6 @@ import type { MindTreeNode } from "../src/types";
 // rendering and marker semantics instead of a browser. Only the Obsidian
 // boundary (`setIcon`, `setTooltip`, `getLanguage`) and browser scheduling are
 // simulated, the same way the other UI suites do it.
-const bundle = buildSync({
-  entryPoints: ["src/ui/marker-popover.ts"],
-  bundle: true,
-  write: false,
-  format: "cjs",
-  platform: "browser",
-  external: ["obsidian"]
-}).outputFiles[0]!.text;
 
 /** Element stub carrying exactly the helpers the popover and tooltips call. */
 class StubElement {
@@ -146,29 +137,18 @@ class StubDocument {
 }
 
 interface PopoverModule { openMarkerPopover(options: MarkerPopoverOptions): MarkerPopoverHandle }
-const module = { exports: {} as PopoverModule };
-// The bundle runs in its own realm with a stubbed Obsidian boundary. `window`
-// points back at the sandbox because the bundled code reads `window`, and the
-// i18n catalog resolves to the real English strings.
-const sandbox: Record<string, unknown> = {
-  module,
-  exports: module.exports,
-  console,
-  Event,
-  require(id: string) {
-    assert.equal(id, "obsidian");
-    return {
-      // `setIcon` marks the button so a test can prove icons are still used for
-      // the built-in choices but never for a custom emoji or tag.
-      setIcon(button: StubElement, icon: string): void { button.setAttribute("data-icon", icon); },
-      setTooltip(button: StubElement, label: string): void { button.setAttribute("aria-label", label); },
-      getLanguage: () => "en"
-    };
-  }
-};
-sandbox["window"] = sandbox;
-createContext(sandbox);
-runInContext(bundle, sandbox);
+// The graph runs in its own realm with a stubbed Obsidian boundary and the
+// browser `Event` constructor; the i18n catalog resolves to real English strings.
+const module = { exports: loadModule<PopoverModule>("src/ui/marker-popover.ts", {
+  obsidian: {
+    // `setIcon` marks the button so a test can prove icons are still used for
+    // the built-in choices but never for a custom emoji or tag.
+    setIcon(button: StubElement, icon: string): void { button.setAttribute("data-icon", icon); },
+    setTooltip(button: StubElement, label: string): void { button.setAttribute("aria-label", label); },
+    getLanguage: () => "en"
+  },
+  globals: { console, Event }
+}) };
 const { openMarkerPopover } = module.exports;
 
 function definition(id: string, kind: "emoji" | "tag", value: string): CustomMarkerDefinition {

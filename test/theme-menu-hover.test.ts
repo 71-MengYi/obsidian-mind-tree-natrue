@@ -1,10 +1,23 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { buildSync } from "esbuild";
-import { runInNewContext } from "node:vm";
+import { loadModule } from "./helpers/module-loader";
 import { isCompleteThemeRowMapping, isMenuLabelRow, matchThemeRows, type MenuRowLike } from "../src/ui/menus/theme-menu-hover";
 import type { MindTreeTheme } from "../src/types";
+
+interface HoverBindings {
+  bindThemeMenuHover(
+    menu: FakeMenu,
+    themes: readonly string[],
+    handlers: { onEnter: (theme: string, row: FakeRow) => void; onLeave: () => void }
+  ): void;
+}
+// Load before registering tests: Node's runner can swallow top-level errors
+// after test() registrations, which would silently skip the delegated cases.
+const module = { exports: loadModule<HoverBindings>("src/ui/menus/theme-menu-hover.ts", {
+  obsidian: {}, globals: { console }
+}) };
+const { bindThemeMenuHover } = module.exports;
 
 /** Row double: the mapping logic must stay testable without a DOM. */
 interface FakeRowLike extends MenuRowLike {
@@ -98,10 +111,6 @@ test("isCompleteThemeRowMapping gates hover on an exact row-to-theme match", () 
 // "rows appear after binding" and "rows are rebuilt" can be reproduced.
 // ---------------------------------------------------------------------------
 
-const bundle = buildSync({
-  entryPoints: ["src/ui/menus/theme-menu-hover.ts"], bundle: true, write: false, format: "cjs", platform: "browser"
-}).outputFiles[0]!.text;
-
 class Surface extends EventTarget {
   listenerCount = 0;
   override addEventListener(
@@ -185,17 +194,6 @@ class FakeMenu extends Surface {
     return this.rows.filter((row) => row.matches(selector));
   }
 }
-
-interface HoverBindings {
-  bindThemeMenuHover(
-    menu: FakeMenu,
-    themes: readonly string[],
-    handlers: { onEnter: (theme: string, row: FakeRow) => void; onLeave: () => void }
-  ): void;
-}
-const module = { exports: {} as HoverBindings };
-runInNewContext(bundle, { module, exports: module.exports, console });
-const { bindThemeMenuHover } = module.exports;
 
 function themeRows(ids: readonly string[]): FakeRow[] {
   return [new FakeRow("theme-label", ["menu-item", "is-label"]), ...ids.map((id) => new FakeRow(id, ["menu-item"]))];

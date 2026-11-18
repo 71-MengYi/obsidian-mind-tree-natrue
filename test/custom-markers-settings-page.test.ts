@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSync } from "esbuild";
-import { runInNewContext } from "node:vm";
+import { loadModule } from "./helpers/module-loader";
 import {
   MAX_CUSTOM_EMOJI_LENGTH,
   MAX_CUSTOM_MARKER_ENTRIES,
@@ -14,13 +13,9 @@ import { DEFAULT_SETTINGS, type MindTreeSettings } from "../src/settings-model";
 import { EMOJI_CATALOG } from "../src/ui/emoji-data";
 import { unsupportedMcpSettingsPort, type SettingsPagePort } from "../src/ui/settings-pages/ports";
 import { unsupportedAiSettingsPort } from "../src/services/ai/contracts";
-// Exercise the real settings page with only the Obsidian element helpers and
-// the browser events it uses simulated, the same way the other DOM-level tests
-// in this folder isolate the Obsidian boundary.
-const bundle = buildSync({
-  entryPoints: ["src/ui/settings-pages/custom-markers-settings-page.ts"],
-  bundle: true, write: false, format: "cjs", platform: "browser", external: ["obsidian"]
-}).outputFiles[0]!.text;
+// Exercise the real settings page from source with only the Obsidian element
+// helpers and the browser events it uses simulated, the same way the other
+// DOM-level tests in this folder isolate the Obsidian boundary.
 
 interface ElementOptions {
   readonly cls?: string;
@@ -173,22 +168,19 @@ class TestDocument {
 type PageInstance = { readonly element: TestElement };
 type PageConstructor = new (parent: TestElement, port: SettingsPagePort) => PageInstance;
 
-const module = { exports: {} as Record<string, unknown> };
-runInNewContext(bundle, {
-  module,
-  exports: module.exports,
-  console,
-  // `CSS.escape` is supplied the way the browser supplies it, so the page's
-  // focus restoration runs unchanged.
-  CSS: { escape: (value: string) => value.replace(/["\\]/g, (character) => `\\${character}`) },
-  require: (id: string) => {
-    assert.equal(id, "obsidian");
-    return {
+const module = { exports: loadModule<Record<string, unknown>>(
+  "src/ui/settings-pages/custom-markers-settings-page.ts", {
+    obsidian: {
       getLanguage: () => "en",
       setIcon: (element: TestElement, name: string) => { element.icon = name; }
-    };
-  }
-});
+    },
+    globals: {
+      console,
+      // `CSS.escape` is supplied the way the browser supplies it, so the page's
+      // focus restoration runs unchanged.
+      CSS: { escape: (value: string) => value.replace(/["\\]/g, (character) => `\\${character}`) }
+    }
+  }) };
 const Page = module.exports["CustomMarkersSettingsPage"] as PageConstructor;
 
 function at<T>(items: readonly T[], index: number, what: string): T {

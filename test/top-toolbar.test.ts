@@ -1,13 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSync } from "esbuild";
-import { runInNewContext } from "node:vm";
+import { loadModule } from "./helpers/module-loader";
 import type { TopToolbar, TopToolbarActions, TopToolbarLabels } from "../src/ui/components/top-toolbar";
 
-// Exercise the real toolbar with an isolated Obsidian boundary and native-button semantics.
-const bundle = buildSync({ entryPoints: ["src/ui/components/top-toolbar.ts"], bundle: true,
-  write: false, format: "cjs", platform: "browser", external: ["obsidian"] }).outputFiles[0]!.text;
-
+// Exercise the real toolbar from source with an isolated Obsidian boundary and native-button semantics.
 class TestElement extends EventTarget {
   readonly children: TestElement[] = [];
   readonly dataset: Record<string, string> = {};
@@ -29,13 +25,10 @@ class TestElement extends EventTarget {
   click(): void { if (!this.disabled) this.dispatchEvent(new Event("click")); }
 }
 
-const module = { exports: {} as { TopToolbar: new (
+const module = { exports: loadModule<{ TopToolbar: new (
   parent: TestElement, labels: TopToolbarLabels, actions: TopToolbarActions
-) => Pick<TopToolbar, "update" | "destroy"> & { element: TestElement } } };
-runInNewContext(bundle, { module, exports: module.exports, require(id: string) {
-  assert.equal(id, "obsidian");
-  return { setIcon() {} };
-} });
+) => Pick<TopToolbar, "update" | "destroy"> & { element: TestElement } }>(
+  "src/ui/components/top-toolbar.ts", { obsidian: { setIcon() {} } }) };
 
 function fixture() {
   const labels: TopToolbarLabels = {
