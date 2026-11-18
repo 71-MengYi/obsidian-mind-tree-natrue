@@ -1,12 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSync } from "esbuild";
-import { runInNewContext } from "node:vm";
 import { readFileSync } from "node:fs";
+import { loadModule } from "./helpers/module-loader";
 
-// Execute the real controller; only the Obsidian boundary and browser scheduling are simulated.
-const bundle = buildSync({ entryPoints: ["src/ui/adaptive-tooltip.ts"], bundle: true, write: false,
-  format: "cjs", platform: "browser", external: ["obsidian"] }).outputFiles[0]!.text;
+// Execute the real controller from source in its own realm; only the Obsidian
+// boundary and browser scheduling are simulated.
 class Surface extends EventTarget {
   listenerCount = 0;
   override addEventListener(type: string, listener: EventListenerOrEventListenerObject | null, options?: AddEventListenerOptions | boolean): void {
@@ -127,13 +125,13 @@ class TestDocument extends Surface {
   tooltips(): Element[] { return this.body.children.filter((child) => child.className === "mtn-adaptive-tooltip"); }
 }
 interface Controller { destroy(): void }
-const module = { exports: {} as { AdaptiveTooltipController: new (root: Element, standalone?: boolean) => Controller } };
-runInNewContext(bundle, { module, exports: module.exports, console, require(id: string) {
-  assert.equal(id, "obsidian");
-  return { setTooltip(button: Element, label: string, options: { classes: string[] }) {
-    button.setAttribute("aria-label", label); button.nativeClasses = [...options.classes];
-  } };
-} });
+const module = { exports: loadModule<{ AdaptiveTooltipController: new (root: Element, standalone?: boolean) => Controller }>(
+  "src/ui/adaptive-tooltip.ts", {
+    obsidian: { setTooltip(button: Element, label: string, options: { classes: string[] }) {
+      button.setAttribute("aria-label", label); button.nativeClasses = [...options.classes];
+    } },
+    globals: { console }
+  }) };
 function fixture(doc = new TestDocument(), standalone = false) {
   const root = doc.createElement(standalone ? "div" : "section"); doc.body.append(root);
   const button = standalone ? root : doc.createElement("button");

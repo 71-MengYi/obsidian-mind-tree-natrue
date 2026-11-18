@@ -1,17 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSync } from "esbuild";
-import { runInNewContext } from "node:vm";
+import { loadModule } from "./helpers/module-loader";
 import type { NodeRenderer, NodeRenderActions, NodeRenderState } from "../src/ui/renderers/node-renderer";
 import { fallbackResourceBadgePresentation } from "../src/render/resource-badges";
 import { fallbackImageNodePresentation } from "../src/render/image-nodes";
 import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
 import type { MindTreeDocument, MindTreeNode, PositionedNode } from "../src/types";
 
-// Exercise the real renderer with an isolated Obsidian boundary and a minimal DOM.
-const bundle = buildSync({ entryPoints: ["src/ui/renderers/node-renderer.ts"], bundle: true,
-  write: false, format: "cjs", platform: "browser", external: ["obsidian"] }).outputFiles[0]!.text;
-
+// Exercise the real renderer from source with an isolated Obsidian boundary and a minimal DOM.
 class TestElement {
   readonly children: TestElement[] = [];
   readonly dataset: Record<string, string> = {};
@@ -74,14 +70,13 @@ class TestElement {
 
 interface TestEvent { type: string; prevented: boolean; stopped: boolean; preventDefault(): void; stopPropagation(): void }
 
-const module = { exports: {} as { NodeRenderer: new (element: TestElement) => NodeRenderer } };
-runInNewContext(bundle, { module, exports: module.exports, require(id: string) {
-  assert.equal(id, "obsidian");
-  return {
-    setIcon(element: TestElement, icon: string) { element.icon = icon; },
-    getLanguage: () => "en"
-  };
-} });
+const module = { exports: loadModule<{ NodeRenderer: new (element: TestElement) => NodeRenderer }>(
+  "src/ui/renderers/node-renderer.ts", {
+    obsidian: {
+      setIcon(element: TestElement, icon: string) { element.icon = icon; },
+      getLanguage: () => "en"
+    }
+  }) };
 
 function renderNode(node: MindTreeNode, readOnly = false, resourceOpenEnabled?: boolean) {
   const document: MindTreeDocument = {

@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { runInNewContext } from "node:vm";
-import { buildSync } from "esbuild";
+import { loadModule } from "./helpers/module-loader";
 import { DEFAULT_SETTINGS } from "../src/settings-model";
 import { UpdateError, type PluginRelease, type ReleaseClient } from "../src/services/updates/release-client";
 import { UpdateCoordinator, type UpdateRuntime, type UpdateState } from "../src/services/updates/update-coordinator";
@@ -9,10 +8,9 @@ import type { UpdateStore } from "../src/services/updates/update-store";
 import { unsupportedMcpSettingsPort, type SettingsPagePort } from "../src/ui/settings-pages/ports";
 import { unsupportedAiSettingsPort } from "../src/services/ai/contracts";
 
-// Isolate the Obsidian boundary without changing module hooks shared by other tests.
-// The plugin, modal, settings section, translations and coordinator run unchanged.
-const bundles = buildSync({ entryPoints: ["src/main.ts", "src/ui/settings-pages/plugin-update-section.ts"],
-  outdir: "unused", bundle: true, write: false, format: "cjs", platform: "browser", external: ["obsidian", "electron"] }).outputFiles;
+// Isolate the Obsidian boundary without changing module hooks shared by other
+// tests. Each fixture loads the real source graph with a fresh module cache, so
+// the plugin, modal, settings section, translations and coordinator run unchanged.
 
 type ElementOptions = string | { cls?: string; text?: string; attr?: Record<string, string> };
 class TestDocument {
@@ -123,14 +121,9 @@ function fixture(language = "en", notes = "## Changes\n\n- **Improved** navigati
       assert.equal(renderApp, app);
       const call = { source, element, sourcePath, component }; renders.push(call); await render(call);
     } } };
-  const load = (suffix: string): Record<string, unknown> => {
-    const module = { exports: {} };
-    runInNewContext(bundles.find((output) => output.path.replaceAll("\\", "/").endsWith(suffix))!.text,
-      { module, exports: module.exports, structuredClone, console,
-        require: (id: string) => { assert.equal(id, "obsidian"); return obsidian; } });
-    return module.exports;
-  };
-  const Plugin = load("/main.js").default as new (app: TestApp, manifest: { name: string }) => RunningPlugin;
+  const load = (entryPath: string): Record<string, unknown> =>
+    loadModule(entryPath, { obsidian, globals: { structuredClone, console } });
+  const Plugin = load("src/main.ts").default as new (app: TestApp, manifest: { name: string }) => RunningPlugin;
   const plugin = new Plugin(app, { name: "Mind Tree Nature" });
   let release: PluginRelease = { id: 42, version: "1.0.2", notes, manifestText: "{}", assets: {} as PluginRelease["assets"],
     manifest: { id: "mind-tree-nature", version: "1.0.2", minAppVersion: "1.8.7", isDesktopOnly: false } };
@@ -285,7 +278,7 @@ test("closing during async rendering releases resources and ignores late output 
 test("settings View update reopens the cached release without checking or installing", async () => {
   for (const [language, viewText, checkText] of [["en", "View update", "Check for updates"], ["zh", "查看更新", "检查更新"]]) {
     const f = fixture(language); const modal = await f.open(); modal.close();
-    const Section = f.load("/plugin-update-section.js").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
+    const Section = f.load("src/ui/settings-pages/plugin-update-section.ts").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
     const parent = f.app.document.createElement("div");
     const port: SettingsPagePort = { app: {} as SettingsPagePort["app"], settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
       refreshOpenLayouts() {}, rebuildResourceIndex: async () => assert.fail(),
@@ -307,7 +300,7 @@ test("settings View update reopens the cached release without checking or instal
 test("pending restart and actionable write errors are localized without offering another install", async () => {
   for (const language of ["zh", "en"]) {
     const f = fixture(language);
-    const Section = f.load("/plugin-update-section.js").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
+    const Section = f.load("src/ui/settings-pages/plugin-update-section.ts").PluginUpdateSection as new (parent: TestElement, port: SettingsPagePort) => { destroy(): void };
     let state: UpdateState = { phase: "restart-required", currentVersion: "1.0.1", installedVersion: "1.0.2" };
     const port: SettingsPagePort = { app: {} as SettingsPagePort["app"], settings: structuredClone(DEFAULT_SETTINGS), save: async () => undefined,
       refreshOpenLayouts() {}, rebuildResourceIndex: async () => assert.fail(),

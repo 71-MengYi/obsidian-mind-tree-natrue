@@ -1,7 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { buildSync } from "esbuild";
-import { runInNewContext } from "node:vm";
+import { loadModule } from "./helpers/module-loader";
 import { translate } from "../src/i18n/catalog";
 import {
   DEFAULT_SETTINGS,
@@ -18,11 +17,7 @@ import type { SettingsPagePort } from "../src/ui/settings-pages/ports";
 
 // Exercise the real AI settings page with only the Obsidian helpers it uses
 // simulated. `Setting` is the page's single Obsidian dependency, so the shim
-// below stands in for it; everything else the page needs is its own bundle.
-const bundle = buildSync({
-  entryPoints: ["src/ui/settings-pages/ai-settings-page.ts"],
-  bundle: true, write: false, format: "cjs", platform: "browser", external: ["obsidian"]
-}).outputFiles[0]!.text;
+// below stands in for it; everything else the page needs is loaded from source.
 
 interface ElementOptions {
   readonly cls?: string;
@@ -239,32 +234,28 @@ function evaluate(): Sandbox {
   const timers = new Map<number, () => void>();
   let nextTimerId = 1;
   const document = new TestDocument();
-  const module = { exports: {} as Record<string, unknown> };
   class SandboxSetting extends TestSetting {
     constructor(containerEl: TestElement) {
       super(containerEl);
       settings.push(this);
     }
   }
-  runInNewContext(bundle, {
-    module,
-    exports: module.exports,
-    console,
-    // Fake timers: the copy confirmation must be cancellable by `destroy`.
-    setTimeout: (callback: () => void) => {
-      const id = nextTimerId++;
-      timers.set(id, callback);
-      return id;
-    },
-    clearTimeout: (id: number) => { timers.delete(id); },
-    require: (id: string) => {
-      assert.equal(id, "obsidian");
-      // The provider section loads its modals lazily; the stub still needs a
-      // Modal base so a clicked action could never crash on a missing class.
-      return { getLanguage: () => "en", Setting: SandboxSetting, Modal: class {} };
+  const exported = loadModule<Record<string, unknown>>("src/ui/settings-pages/ai-settings-page.ts", {
+    // The provider section loads its modals lazily; the stub still needs a
+    // Modal base so a clicked action could never crash on a missing class.
+    obsidian: { getLanguage: () => "en", Setting: SandboxSetting, Modal: class {} },
+    globals: {
+      console,
+      // Fake timers: the copy confirmation must be cancellable by `destroy`.
+      setTimeout: (callback: () => void) => {
+        const id = nextTimerId++;
+        timers.set(id, callback);
+        return id;
+      },
+      clearTimeout: (id: number) => { timers.delete(id); }
     }
   });
-  return { Page: module.exports["AiSettingsPage"] as PageConstructor, settings, timers, document };
+  return { Page: exported["AiSettingsPage"] as PageConstructor, settings, timers, document };
 }
 
 interface HarnessOptions {
