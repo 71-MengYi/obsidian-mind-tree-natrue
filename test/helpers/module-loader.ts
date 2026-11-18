@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
-import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { closeSync, existsSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { compileFunction, createContext } from "node:vm";
@@ -20,9 +19,9 @@ import { compileFunction, createContext } from "node:vm";
  * The repository pins TypeScript 7's native compiler, whose package only
  * exposes the `tsc` CLI to JavaScript (`ts.transpileModule` belongs to the
  * older JS compiler API). When `transpileModule` is available it is used per
- * module. Otherwise the graph is emitted once with the local `tsc` CLI into a
- * temporary directory; stdio is redirected to a log file instead of a pipe so
- * the confined sandbox permits the child process.
+ * module. Otherwise the graph is emitted once with the local `tsc` CLI into the
+ * repository's ignored `.mtn-test-build/` scratch folder; stdio is redirected to
+ * a log file instead of a pipe so the confined sandbox permits the child process.
  *
  * Each `loadModule` call gets a fresh module cache and VM realm, mirroring one
  * esbuild bundle per entry: fixtures that build several plugin instances must
@@ -130,7 +129,12 @@ function createEmittedBackend(): Backend {
   // and load those CommonJS files. This is the TypeScript-7 fallback only.
   // `noCheck` is safe here: `tsc --noEmit` remains the suite's type gate, while
   // this emit only needs syntax and module transformation.
-  const workDirectory = mkdtempSync(join(tmpdir(), "mtn-module-loader-"));
+  // Keep the emit inside the repository's ignored scratch folder. The confined
+  // DSH sandbox denies child-process writes to the OS temp directory, while the
+  // checkout itself stays writable in both the sandbox and CI.
+  const workRoot = join(repositoryRoot, ".mtn-test-build");
+  mkdirSync(workRoot, { recursive: true });
+  const workDirectory = mkdtempSync(join(workRoot, "module-loader-"));
   const outputDirectory = join(workDirectory, "out");
   const configPath = join(workDirectory, "tsconfig.json");
   const logPath = join(workDirectory, "tsc.log");
