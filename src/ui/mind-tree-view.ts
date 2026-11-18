@@ -43,20 +43,17 @@ import {
   serializeMindTreeFile,
   type ParseMindTreeOptions
 } from "../format/document";
-import { buildLinkedResourcePath, classifyFile, linkedFileTitle, sanitizeFileTitle } from "../format/resource-id";
-import { renderBranchMarkdown } from "../format/outline";
-import { renderBranchMermaid } from "../format/mermaid";
+import { buildLinkedResourcePath, classifyFile, linkedFileTitle } from "../format/resource-id";
 import { t } from "../i18n";
 import { clamp } from "../numeric";
 import { createParseOptions } from "../settings-model";
 import { applyMindTreeThemeDataset } from "./theme-dataset";
+import { ExchangeOps, createViewResourceBadgePresentation } from "./view-ops/exchange-ops";
 import { UpdateActivity } from "../services/updates/update-activity";
 import { UpdateError } from "../services/updates/release-client";
 import type { UpdateViewPresentation } from "../services/updates/workspace-update-host";
 import {
-  copyBranchReference as copyBranchReferenceToClipboard,
   copyBranches,
-  copyPlainText,
   insertBranchReferenceNode,
   resolveBranchReferenceTarget,
   resolveMarkdownBranchLinks,
@@ -64,14 +61,6 @@ import {
   type ClipboardPasteContent
 } from "../services/clipboard";
 import type { BranchReference } from "../domain/branch-reference";
-import { buildCanvasFile, createCanvasPathCandidates } from "../services/canvas-export";
-import {
-  downloadMarkdown,
-  exportBranchPng,
-  prepareImageExportSource,
-  resolveExportNodeId,
-  type ExportThemeColors
-} from "../services/export";
 import { reconcileLinkedFileReferences } from "../services/linked-resource-sync";
 import { CreatedNoteAssociationError, DuplicateResourceIdError, type FileAssociationProgress } from "../services/resource-index";
 import { TaskNotesMoveUnavailableError, TaskNotesUnavailableError } from "../services/tasknotes";
@@ -165,11 +154,7 @@ import {
 import { BrowserNodeTextMeasurer } from "./text-measurer";
 import { fallbackNodeTextMeasurer } from "../render/text-measurer";
 import { BrowserResourceBadgeMeasurer } from "./resource-badges";
-import {
-  createResourceBadgePresentation,
-  fallbackResourceBadgeMeasurer,
-  type ResourceBadgePresentation
-} from "../render/resource-badges";
+import type { ResourceBadgePresentation } from "../render/resource-badges";
 import { BrowserImageNodePresentation } from "./image-nodes";
 import {
   fallbackImageNodePresentation,
@@ -252,6 +237,23 @@ export class MindTreeView extends TextFileView {
   private sourceData = "";
   private documentSession = new DocumentSession();
   private readonly clipboardController: ClipboardController<PasteInsertionContext>;
+  /** Copy/export commands live in their own module; the host keeps state access live. */
+  private readonly exchange = new ExchangeOps({
+    getDocument: () => this.document,
+    getFile: () => this.file,
+    getPrimarySelectedId: () => this.primarySelectedId,
+    getSelectedIds: () => this.selectedIds,
+    getDocumentSessionToken: () => this.documentSessionToken,
+    getExportSettings: () => this.plugin.settings,
+    getTextMeasurer: () => this.textMeasurer,
+    getRootEl: () => this.rootEl,
+    getResourceBadgePresentation: () => this.getResourceBadgePresentation(),
+    buildBranchReference: (file, nodeId, document) => this.plugin.buildBranchReference(file, nodeId, document),
+    resolveVerifiedResource: (resource) => this.plugin.resources.resolveVerified(resource),
+    readBinary: (file) => this.app.vault.readBinary(file),
+    fileExists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
+    createTextFile: (path, source) => this.app.vault.create(path, source)
+  });
   private readonly dragDropController = new DragDropController();
   /** Exact snapshot returned to TextFileView while one queued write is active. */
   private pendingSerializedSource?: string;
@@ -3011,131 +3013,17 @@ export class MindTreeView extends TextFileView {
     }).show(event);
   }
 
-  private async copySelected(mode: "branch" | "markdown"): Promise<void> {
-    if (!this.document || !this.primarySelectedId) return;
-    try {
-      const selected = this.selectedIds.size > 0 ? this.selectedIds : [this.primarySelectedId];
-      await copyBranches(this.document, selected, mode);
-      new Notice(mode === "branch" ? t("notice.branchCopied") : t("notice.markdownCopied"));
-    } catch (error) {
-      new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
-    }
-  }
+  private async copySelected(mode: "branch" | "markdown"): Promise<void> { await this.exchange.copySelected(mode); }
 
-  private async copyBranchReference(nodeId: NodeId): Promise<void> {
-    const document = this.document;
-    const file = this.file;
-    const token = this.documentSessionToken;
-    if (!document || !file || !document.nodes[nodeId]) return;
-    try {
-      const reference = await this.plugin.buildBranchReference(file, nodeId, document);
-      // The reference was resolved against the captured session: a switch or a
-      // node deletion while identity allocation was pending must not report success.
-      if (this.documentSessionToken !== token || !this.document?.nodes[nodeId]) return;
-      await copyBranchReferenceToClipboard(reference);
-      new Notice(t("notice.branchReferenceCopied"));
-    } catch (error) {
-      new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
-    }
-  }
+  private async copyBranchReference(nodeId: NodeId): Promise<void> { await this.exchange.copyBranchReference(nodeId); }
 
-  /**
-   * Copy this branch as Mermaid mindmap code. Only plain text is written: the
-   * fenced block has no structured counterpart and must not inherit the branch
-   * clipboard's custom MIME payload.
-   */
-  private async copyMermaid(nodeId: NodeId): Promise<void> {
-    const document = this.document;
-    const token = this.documentSessionToken;
-    if (!document?.nodes[nodeId]) return;
-    try {
-      const code = renderBranchMermaid(document, nodeId);
-      // The branch may have changed while the menu gesture was pending.
-      if (this.documentSessionToken !== token || !this.document?.nodes[nodeId] || !code) return;
-      await copyPlainText(code);
-      new Notice(t("notice.mermaidCopied"));
-    } catch (error) {
-      new Notice(t("notice.copyFailed", { message: error instanceof Error ? error.message : String(error) }));
-    }
-  }
+  private async copyMermaid(nodeId: NodeId): Promise<void> { await this.exchange.copyMermaid(nodeId); }
 
-  /**
-   * Export a PNG. Without a selection this exports the whole tree: the export
-   * target falls back to the root instead of silently doing nothing.
-   */
-  private async exportSelectedPng(): Promise<void> {
-    const document = this.document;
-    if (!document) return;
-    const nodeId = resolveExportNodeId(document, this.primarySelectedId);
-    try {
-      await exportBranchPng(
-        document,
-        nodeId,
-        this.plugin.settings.pngScale,
-        this.plugin.settings.nodeWrapWidth,
-        document.settings.layoutMode,
-        document.settings.connectionStyle,
-        document.settings.theme,
-        document.settings.nodeShape,
-        this.plugin.settings.nodeAlignment,
-        this.resolveExportThemeColors(),
-        this.textMeasurer ?? fallbackNodeTextMeasurer,
-        this.getResourceBadgePresentation(),
-        async (node) => {
-          if (node.resource?.type !== "file" || node.resource.fileKind !== "image") return undefined;
-          const file = await this.plugin.resources.resolveVerified(node.resource);
-          if (!file) return undefined;
-          return prepareImageExportSource(await this.app.vault.readBinary(file), file.path);
-        }
-      );
-    } catch (error) {
-      new Notice(t("notice.pngFailed", { message: error instanceof Error ? error.message : String(error) }));
-    }
-  }
+  private async exportSelectedPng(): Promise<void> { await this.exchange.exportSelectedPng(); }
 
-  /** Markdown export of a branch, or of the whole tree when nothing is selected. */
-  private exportSelectedMarkdown(): void {
-    const document = this.document;
-    if (!document) return;
-    const nodeId = resolveExportNodeId(document, this.primarySelectedId);
-    downloadMarkdown(renderBranchMarkdown(document, nodeId), document.nodes[nodeId]?.title || document.title);
-  }
+  private exportSelectedMarkdown(): void { this.exchange.exportSelectedMarkdown(); }
 
-  /**
-   * Write an Obsidian Canvas file next to the source `.mtn.md`. A canvas is a
-   * vault file, not a browser download: it goes through `vault.create`, keeps
-   * the tree's folder, and reports the path that actually exists. Name
-   * collisions use the same `-2`/`-3` sequence as other generated files.
-   */
-  private async exportSelectedCanvas(): Promise<void> {
-    const document = this.document;
-    if (!document) return;
-    const nodeId = resolveExportNodeId(document, this.primarySelectedId);
-    try {
-      const canvas = buildCanvasFile(
-        document,
-        nodeId,
-        t("node.untitled"),
-        this.plugin.settings.nodeWrapWidth,
-        document.settings.layoutMode,
-        this.plugin.settings.nodeAlignment,
-        this.textMeasurer ?? fallbackNodeTextMeasurer,
-        this.getResourceBadgePresentation()
-      );
-      // Obsidian saves canvases as pretty-printed JSON; matching that shape keeps
-      // a hand-edited export diffable instead of one very long line.
-      const source = `${JSON.stringify(canvas, null, "\t")}\n`;
-      const directory = this.file?.parent && !this.file.parent.isRoot() ? this.file.parent.path : "";
-      const title = sanitizeFileTitle(document.nodes[nodeId]?.title || document.title) || t("node.untitled");
-      const path = createCanvasPathCandidates(directory, title)
-        .find((candidate) => !this.app.vault.getAbstractFileByPath(candidate));
-      if (!path) throw new Error(t("notice.canvasNameExhausted"));
-      const created = await this.app.vault.create(path, source);
-      new Notice(t("notice.canvasExported", { path: created.path }));
-    } catch (error) {
-      new Notice(t("notice.canvasFailed", { message: error instanceof Error ? error.message : String(error) }));
-    }
-  }
+  private async exportSelectedCanvas(): Promise<void> { await this.exchange.exportSelectedCanvas(); }
 
   private async createNoteForNode(nodeId: NodeId): Promise<void> {
     if (this.commitVisibleEditorDraft() === "rejected") return;
@@ -3592,56 +3480,8 @@ export class MindTreeView extends TextFileView {
     if (targetNodeIds.length > 0) this.openDeleteDialog(targetNodeIds, topicNodeIds, "branch");
   }
 
-  /**
-   * Build one immutable trailing-item profile for the current render/export
-   * pass. It carries the file-badge rules, the user-managed custom marker
-   * registry and the localized accessible names, so every node resolves its
-   * emoji, text tags and file badges from the same snapshot.
-   */
   private getResourceBadgePresentation(): ResourceBadgePresentation {
-    this.resourceBadgeMeasurer?.refreshStyles();
-    return createResourceBadgePresentation(
-      this.plugin.settings,
-      { mindTree: t("node.mindTreeMarker"), drawing: t("node.drawingMarker") },
-      this.resourceBadgeMeasurer ?? fallbackResourceBadgeMeasurer,
-      { emoji: t("marker.category.emoji"), tag: t("marker.category.tag") }
-    );
-  }
-
-  /**
-   * Resolve Obsidian CSS variables before handing colors to SVG. Custom
-   * properties retain `var(...)` tokens when read directly, so a hidden probe
-   * asks the browser for the final computed color in the current light/dark mode.
-   */
-  private resolveExportThemeColors(): ExportThemeColors | undefined {
-    const theme = this.document?.settings.theme;
-    if (theme !== "flat" && theme !== "minimal" && theme !== "floating") return undefined;
-
-    const ownerDocument = this.rootEl.ownerDocument;
-    const ownerWindow = ownerDocument.defaultView;
-    if (!ownerWindow) return undefined;
-    const probe = ownerDocument.createElement("span");
-    probe.style.position = "absolute";
-    probe.style.visibility = "hidden";
-    probe.style.pointerEvents = "none";
-    this.rootEl.appendChild(probe);
-    const resolve = (property: string, fallback: string): string => {
-      probe.style.color = `var(${property}, ${fallback})`;
-      return ownerWindow.getComputedStyle(probe).color.trim() || fallback;
-    };
-    try {
-      return {
-        canvas: resolve("--mtn-canvas-base", "#F7F3E8"),
-        root: resolve("--mtn-theme-root-accent", "#7C3AED"),
-        rootText: resolve("--mtn-theme-root-text", "#FFFFFF"),
-        levelOne: resolve("--mtn-theme-level-one", "#4A4A4A"),
-        levelOneText: resolve("--mtn-theme-level-one-text", "#FFFFFF"),
-        descendant: resolve("--mtn-theme-descendant", "#E2E0DB"),
-        descendantText: resolve("--mtn-theme-descendant-text", "#2F2F2F")
-      };
-    } finally {
-      probe.remove();
-    }
+    return createViewResourceBadgePresentation(this.plugin.settings, this.resourceBadgeMeasurer);
   }
 
   /** Return the de-duplicated topic union represented by the current selection. */
