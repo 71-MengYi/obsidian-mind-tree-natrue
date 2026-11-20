@@ -1,5 +1,14 @@
 # memory
 
+## 2026-11-21 · 版本号提升脚本与 release commit 流程（`chore`）
+
+**结论（为什么不再 amend）**：`manifest.json` 的 `version` 是「发布事件」的属性，不是某个功能提交的属性。以前把 bump 塞进收尾提交、事后 `git commit --amend` 有三个实伤：① 已 push 的提交需要 force-push，仓库有并发 session 时危险；② 标签可能落在 amend 之前的提交上，`manifest.json` 与 tag 不一致，release.yml 的 Preflight 直接失败；③ `git log -- manifest.json` 的时间线被折叠，看不出哪天发的版。
+
+**落点**：新增 `scripts/bump-version.mjs`（`node scripts/bump-version.mjs <patch|minor|major|X.Y.Z>`）——只替换 `manifest.json` 的 `version` 值（保留键序与格式）、把新版本按「新在前」写入 `versions.json`（值取 `minAppVersion`）、校验必须是合法 X.Y.Z 且严格大于当前版本。`package.json` 的 `0.1.0` 保持不动（`npm version` 会改它并自动建提交和标签，导致 manifest 与 tag 不一致，不要用）。
+
+**标准发布流程**：平时 feat/fix/docs 不碰版本号 → 决定发布时跑脚本 → `git commit -m "chore(release): X.Y.Z"` → push → 打同名标签并 push。
+`AGENTS.md` §1（版本号与命令表）、§6（发布）、§12.1 已同步；仓库现状：`versions.json` 以前只有 `0.1.0`，落后于标签到 `1.2.0`，本次 1.2.1 发布起按版本补齐。
+
 ## 2026-11-19 · 版本快照 / 反向引用 / Canvas 导出 / UI 测试装载器（`feat`，团队协作，纯文档同步收尾）
 
 **用户决策（口径）**

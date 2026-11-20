@@ -33,7 +33,7 @@
 | 技术栈 | TypeScript（strict）+ 无 UI 框架的命令式 DOM/SVG + esbuild 打包 + `node:test` 单测 |
 | 运行环境 | Obsidian ≥ **1.8.7**，桌面端与移动端（`manifest.json` 的 `isDesktopOnly: false`） |
 | 包管理 | **npm**（CI 用 `npm ci`）。仓库里同时存在 `pnpm-lock.yaml` / `pnpm-workspace.yaml`，但以 npm 为准 |
-| 版本号 | 发布版本看 `manifest.json`（当前 `1.1.5`）；`package.json` 的 `0.1.0` **不是**发布版本 |
+| 版本号 | 发布版本看 `manifest.json`（当前 `1.2.1`）；`package.json` 的 `0.1.0` **不是**发布版本。改版本号一律走 `node scripts/bump-version.mjs`（见 §6） |
 | 程序入口 | `src/main.ts`（`MindTreeNaturePlugin`）→ `npm run build` → 根目录 `main.js`（构建产物，已 gitignore） |
 | 最低 Node | ≥ 20（`.github/workflows/release.yml` 硬校验） |
 
@@ -48,6 +48,7 @@
 | `npm run dev` | esbuild watch（调试用） | 本地调试 |
 | `node .github/scripts/check-runs.mjs` | 查 GitHub Actions 运行状态与最新 Release（无需登录） | 排查 CI/发布 |
 | `node .github/scripts/verify-release.mjs <tag>` | 按插件更新器规则自检线上 Release 资产 | 发布后 |
+| `node scripts/bump-version.mjs <patch\|minor\|major\|X.Y.Z>` | 提升 `manifest.json` 版本并写入 `versions.json` | 决定发布时（见 §6） |
 
 > 沙箱基线：全量 **1232 pass / 0 fail**（112 个测试文件），无“必然失败”文件；UI 隔离测试已改用 `test/helpers/module-loader.ts` 装载真实 TS 源码，不再依赖 esbuild `buildSync`。官方 `npm test`（`tsx`）仍需提权，因为 tsx/esbuild 要 spawn 子进程走管道；受限沙箱用装载器直接跑 `node:test` 即可。可复现命令与原因见 `docs/memory.md`。
 
@@ -330,6 +331,8 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 **发布**（`.github/workflows/release.yml`）：推 `X.Y.Z` 标签触发 → 校验标签严格等于 `manifest.json` 的 `version`（不接受 `v` 前缀或后缀）→ 构建 → **先建 draft、传完三个资产、再发布并标 Latest** → 跑 `.github/scripts/verify-release.mjs` 自检。插件内置更新器与 BRAT 都读 `releases/latest`，所以草稿/预发布资产不全会让用户拿不到更新。`versions.json` 记录 `版本 → Obsidian 最低版本`，提交社区目录时补齐。
 
+**版本号与发布提交**：版本号属于「发布事件」，不属于某个功能提交。平时的 `feat` / `fix` / `docs` 提交**不要**碰 `manifest.json`；决定发布时才 `node scripts/bump-version.mjs <patch|minor|major|X.Y.Z>`（只改 `manifest.json` 的 `version`，按新在前写入 `versions.json`），然后提交成一个独立的 `chore(release): X.Y.Z`，再打同名标签推送。**不要**用 `git commit --amend` 把版本号塞回上一个提交（已 push 的提交要 force-push，且标签可能落在 amend 前的提交上导致 Preflight 失败），也**不要**用 `npm version`（它会改 `package.json` 并自动建提交和标签，`manifest.json` 不会同步）。
+
 ---
 
 ## 7. 硬性规则
@@ -446,7 +449,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 12. 容易踩的坑
 
-1. **版本号双轨**：`manifest.json` 是 `1.1.5`，`package.json` 是 `0.1.0`。发布版本只看 `manifest.json`，且必须与标签严格一致（`X.Y.Z`，无前后缀）。
+1. **版本号双轨**：`manifest.json` 是 `1.2.1`，`package.json` 是 `0.1.0`。发布版本只看 `manifest.json`，且必须与标签严格一致（`X.Y.Z`，无前后缀）。改版本号只走 `node scripts/bump-version.mjs`，并在独立的 `chore(release): X.Y.Z` 提交里完成——不要 amend 上一个提交，也不要 `npm version`。
 2. **`test/styles.test.ts` 是"源码字符串测试"**：它直接读取 `styles.css` 与 `src/ui/mind-tree-view.ts`、`src/ui/renderers/node-renderer.ts`。改 CSS 类名、或改这两个文件里的类名字符串，可能连带弄红它——改前先看断言。
 3. **i18n 占位符必须成对**：`{version}`、`{path}` 等在两语言中必须一致，缺一个 `test/i18n.test.ts` 就报错。
 4. **barrel 与已删 shim**：`src/ui/modals.ts`、`src/ui/clipboard-controller.ts` 已在 2026-10-11 删除（前者由 `ui/modals/index.ts` 承接，后者零引用）；`src/ui/components/index.ts`、`src/ui/controllers/index.ts`、`src/ui/renderers/index.ts`、`src/ui/menus/index.ts` 仍是 barrel，且**不是全目录**（controllers 缺 `delete-details-controller`、menus 缺 `theme-menu-hover`）——新代码优先直接从真实模块导入，别再往 shim 里加逻辑。
