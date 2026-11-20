@@ -80,6 +80,29 @@ export type NodeMarker =
   | { type: "emoji"; value: string }
   | { type: "tag"; value: string };
 
+/**
+ * Outline-numbering styles offered by the "节点编号" menu group. The first two
+ * styles are hierarchical (a child label carries the ancestor counters), the
+ * remaining four only fill the sibling position at every depth.
+ */
+export type NodeNumberingFormat = "decimal" | "chinese" | "lowerRoman" | "upperRoman" | "upperAlpha" | "lowerAlpha";
+/** `level` numbers only the direct children, `descendants` numbers the whole subtree. */
+export type NodeNumberingScope = "level" | "descendants";
+/** `restart` starts a fresh sequence, `continue` appends to the ancestor path. */
+export type NodeNumberingStart = "restart" | "continue";
+
+/**
+ * Numbering is stored on the node whose children carry the labels, so labels
+ * are derived from live tree order and never rewrite a title: inserting,
+ * reordering or removing a child renumbers the siblings the next time the tree
+ * renders, and removing the configuration restores the plain title.
+ */
+export interface NodeNumbering {
+  format: NodeNumberingFormat;
+  scope: NodeNumberingScope;
+  start: NodeNumberingStart;
+}
+
 export interface NodeStyle {
   color?: string;
   background?: string;
@@ -103,6 +126,8 @@ export interface MindTreeNode {
    */
   nodeLink?: NodeId;
   markers?: NodeMarker[];
+  /** Numbers the children of this node; see `NodeNumbering`. */
+  numbering?: NodeNumbering;
   collapsed?: boolean;
   titleSync?: "off" | "bidirectional";
   style?: NodeStyle;

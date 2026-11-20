@@ -456,6 +456,7 @@ function nodeToMachineData(node: MindTreeNode): Record<string, unknown> {
     ...(node.resource ? { resource: node.resource } : {}),
     ...(node.nodeLink ? { nodeLink: node.nodeLink } : {}),
     ...(node.markers && node.markers.length > 0 ? { markers: node.markers } : {}),
+    ...(node.numbering ? { numbering: node.numbering } : {}),
     ...(node.collapsed ? { collapsed: true } : {}),
     ...(node.titleSync ? { titleSync: node.titleSync } : {}),
     ...(node.style ? { style: node.style } : {}),

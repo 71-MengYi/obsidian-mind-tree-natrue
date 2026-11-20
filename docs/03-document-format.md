@@ -128,6 +128,8 @@ interface MindTreeNode {
   /** 单向节点关联的目标节点 id；可选，最多一条出边。不复制子树、不同步数据。 */
   nodeLink?: NodeId;
   markers?: NodeMarker[];
+  /** 本节点的子节点编号配置；标签在渲染时由树结构派生，不写进标题。 */
+  numbering?: NodeNumbering;
   collapsed?: boolean;
   titleSync?: 'off' | 'bidirectional';
   style?: NodeStyle;
@@ -171,6 +173,8 @@ type ResourceRef =
 `nodeLink` 是同一文档内的单向节点引用（“关联节点”），只进入压缩 JSON：它不复制、不移动、不同步任何节点，改动它不得改变任一节点的 `childIds`。读取时会丢弃指向不存在节点或指向自身的值（与不可达节点同样属于可修复的防御性清理，不使文件失效）；删除节点时指向它的引用同步清除。剪贴板与文本导入产生的副本永远不携带 `nodeLink`。因为只是可选增量字段，它不提升 `schemaVersion`，也不进入 YAML。
 
 `nodeLink` 与 `resource` 在**创建时**互斥（发起关联的节点不能有资源，已被节点关联的节点也不再接受新的文件关联），但读取不做互斥清理：历史数据若同时含两者，两者都原样保留，只由尾部渲染（链接标志占用唯一的“关联槽位”）与右键菜单体现互斥，不静默丢弃任何字段。
+
+`numbering` 是节点编号配置，只进入压缩 JSON，形如 `{ "format": "decimal", "scope": "level", "start": "restart" }`：它记录“这个节点的子节点如何编号”，编号标签本身**不写进标题**，而是每次渲染、导出和大纲生成时按当前 `childIds` 顺序重新派生，因此新增/删除/拖拽节点会自动重排编号，移除配置即恢复纯标题。`format` 为六种样式之一（`decimal`、`chinese`、`lowerRoman`、`upperRoman`、`upperAlpha`、`lowerAlpha`），`scope` 为 `level`（仅直接子节点）或 `descendants`（整棵子树），`start` 为 `restart`（从 1 重新开始）或 `continue`（接续祖先编号路径，祖先未编号时等同于 `restart`）。未知 `format`、非法 `scope`/`start` 或非对象值在读取时整条丢弃，不使文件失效；该字段不提升 `schemaVersion`，也不进入 YAML。
 
 `fileSubtype: 'excalidraw'` 是关联文件 Frontmatter 的派生缓存，仅当 `excalidraw-plugin` 为 `raw` 或 `parsed` 时存在；文件名和扩展名不参与判断。关联文件可解析时以当前 Frontmatter 校正该缓存，文件暂时无法解析时保留最后状态。该字段不改变 Markdown 文件的 `fileKind: 'note'`。普通非 Markdown 文件的扩展名显示标签由 `pathHint` 与全局插件设置在运行时派生，不属于节点字段，也不进入本格式。
 

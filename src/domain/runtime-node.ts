@@ -1,4 +1,5 @@
 import { normalizeNodeMarkers } from "./markers";
+import { normalizeNodeNumbering } from "./node-numbering";
 import { asRecord, assertSafeRecordKey, createSafeRecord, stringValue } from "../input-limits";
 import { isSafeHttpUrl } from "./url";
 import type { MindTreeNode, NodeStyle, ResourceRef } from "../types";
@@ -39,6 +40,8 @@ export function normalizeRuntimeNode(id: string, value: unknown): MindTreeNode {
   if (nodeLink && nodeLink !== id) node.nodeLink = nodeLink;
   const markers = normalizeNodeMarkers(record["markers"]);
   if (markers.length > 0) node.markers = markers;
+  const numbering = normalizeNodeNumbering(record["numbering"]);
+  if (numbering) node.numbering = numbering;
   if (typeof record["collapsed"] === "boolean") node.collapsed = record["collapsed"];
   if (record["titleSync"] === "off" || record["titleSync"] === "bidirectional") {
     node.titleSync = record["titleSync"];
@@ -52,7 +55,7 @@ export function normalizeRuntimeNode(id: string, value: unknown): MindTreeNode {
   const nestedUnknown = asRecord(record["unknownFields"]);
   if (nestedUnknown) copyUnknownFields(nestedUnknown, unknownFields, new Set());
   copyUnknownFields(record, unknownFields, new Set([
-    "id", "title", "childIds", "resource", "nodeLink", "markers", "collapsed",
+    "id", "title", "childIds", "resource", "nodeLink", "markers", "numbering", "collapsed",
     "titleSync", "style", "createdAt", "updatedAt", "unknownFields"
   ]));
   if (Object.keys(unknownFields).length > 0) node.unknownFields = unknownFields;

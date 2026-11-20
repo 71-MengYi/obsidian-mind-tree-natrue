@@ -41,6 +41,7 @@ import { buildLinkedResourcePath, classifyFile, linkedFileTitle } from "../forma
 import { t } from "../i18n";
 import { clamp } from "../numeric";
 import { createParseOptions } from "../settings-model";
+import { clearNodeNumbering, setNodeNumbering } from "../domain/node-numbering";
 import { applyMindTreeThemeDataset } from "./theme-dataset";
 import { ExchangeOps, createViewResourceBadgePresentation } from "./view-ops/exchange-ops";
 import { NodeOps } from "./view-ops/node-ops";
@@ -2833,6 +2834,14 @@ export class MindTreeView extends TextFileView {
         delete draftNode.titleSync;
       }),
       showMarkers: () => this.showMarkerPopover(nodeId, { x: event.clientX, y: event.clientY }),
+      // Numbering is a session command: the labels are derived on render, so the
+      // mutation only stores the configuration on the branch root.
+      numberChildren: (format, scope, start) => this.commit((draft) => {
+        setNodeNumbering(getNode(draft, nodeId), format, scope, start);
+      }, nodeId),
+      clearNumbering: (scope) => this.commit((draft) => {
+        clearNodeNumbering(draft, nodeId, scope);
+      }, nodeId),
       unlinkNode: () => this.unlinkNode(nodeId),
       addChild: () => { this.selectOnly(nodeId); this.addChildNode(); },
       addSibling: () => {

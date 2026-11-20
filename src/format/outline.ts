@@ -1,6 +1,7 @@
 import { parseNodeTitle, nodeTitleMode, escapeTitleMarkdown } from "./node-title";
 import type { MindTreeDocument, MindTreeNode, NodeId } from "../types";
 import { renderNodeMarkerSuffix } from "../domain/markers";
+import { computeNodeNumbering } from "../domain/node-numbering";
 import { DEFAULT_NODE_TITLE } from "../domain/tree";
 import { collectNodeLinks, type NodeLinkEdge } from "../domain/node-link";
 import { isSafeHttpUrl } from "../domain/url";
@@ -23,7 +24,7 @@ export function outlineBlockId(nodeId: NodeId): string | undefined {
 export function renderOutline(document: MindTreeDocument, startId = document.rootId): string {
   const lines: string[] = [OUTLINE_START];
   const edges = collectNodeLinks(document);
-  renderNode(document, startId, 0, lines, new Set(), linkParticipantIds(edges));
+  renderNode(document, startId, 0, lines, new Set(), linkParticipantIds(edges), computeNodeNumbering(document));
   // The link field belongs inside the outline markers: the serializer only
   // regenerates the text between OUTLINE_START and OUTLINE_END, so anything
   // written after them would accumulate as user prose across saves.
@@ -41,7 +42,7 @@ export function renderOutline(document: MindTreeDocument, startId = document.roo
 /** Branch fragments carry the `^id` suffix but not the document link field. */
 export function renderBranchMarkdown(document: MindTreeDocument, startId: NodeId): string {
   const lines: string[] = [];
-  renderNode(document, startId, 0, lines, new Set(), linkParticipantIds(collectNodeLinks(document)));
+  renderNode(document, startId, 0, lines, new Set(), linkParticipantIds(collectNodeLinks(document)), computeNodeNumbering(document));
   return lines.join("\n");
 }
 
@@ -60,13 +61,18 @@ function renderNode(
   depth: number,
   lines: string[],
   visiting: Set<NodeId>,
-  participants: ReadonlySet<NodeId>
+  participants: ReadonlySet<NodeId>,
+  numbering: ReadonlyMap<NodeId, string>
 ): void {
   const node = document.nodes[nodeId];
   if (!node || visiting.has(nodeId)) return;
   visiting.add(nodeId);
-  lines.push(`${"  ".repeat(depth)}- ${renderNodeLabel(node, nodeId === document.rootId, participants.has(nodeId))}`);
-  for (const childId of node.childIds) renderNode(document, childId, depth + 1, lines, visiting, participants);
+  const label = renderNodeLabel(node, nodeId === document.rootId, participants.has(nodeId));
+  // The derived label precedes the link syntax so the outline keeps reading
+  // like a numbered list in Markdown previews and in `[[#^id]]` references.
+  const prefix = numbering.get(nodeId) ?? "";
+  lines.push(`${"  ".repeat(depth)}- ${prefix}${label}`);
+  for (const childId of node.childIds) renderNode(document, childId, depth + 1, lines, visiting, participants, numbering);
   visiting.delete(nodeId);
 }
 

@@ -12,6 +12,7 @@ import type {
   PositionedNode
 } from "../types";
 import { DEFAULT_NODE_TITLE, collectBranchIds } from "../domain/tree";
+import { computeNodeNumbering, numberedNodeTitle } from "../domain/node-numbering";
 import {
   getIconNodeMarkers,
   getNodeHighlightColor
@@ -120,6 +121,9 @@ export function renderBranchSvg(
     imagePresentation
   );
   const positions = new Map(layout.nodes.map((node) => [node.id, node]));
+  // Derived from the same document layoutTree measured, so the SVG text and the
+  // node box cannot disagree about whether a number is shown.
+  const numberingLabels = computeNodeNumbering(document);
   const branchColorSlots = getBranchColorSlots(document);
   const palette = getThemePreset(theme);
   const tierPalette = palette.nodes;
@@ -168,7 +172,7 @@ export function renderBranchSvg(
     // Use the same title-only track as the DOM renderer. Trailing markers and
     // file controls change the outer rectangle, never wrapping or shifting text.
     const textWidth = Math.max(1, shifted.contentWidth - NODE_HORIZONTAL_INSETS);
-    const measurement = textMeasurer.measure(node.title || DEFAULT_NODE_TITLE, position.depth, nodeWrapWidth, nodeTitleMode(node, position.depth));
+    const measurement = textMeasurer.measure(numberedNodeTitle(node, numberingLabels) || DEFAULT_NODE_TITLE, position.depth, nodeWrapWidth, nodeTitleMode(node, position.depth));
     const lines = measurement.lines;
     const captionTop = imageAsset
       ? shifted.y + NODE_VERTICAL_PADDING + imageAsset.height + IMAGE_CAPTION_GAP

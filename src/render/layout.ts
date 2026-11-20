@@ -1,4 +1,5 @@
 import { nodeTitleMode } from "../format/node-title";
+import { computeNodeNumbering, numberedNodeTitle } from "../domain/node-numbering";
 import { getDepth } from "../domain/tree";
 import type {
   MindTreeDocument,
@@ -284,6 +285,9 @@ export function layoutTree(
 ): TreeLayout {
   const relativeDepthById = new Map<NodeId, number>();
   const startDepth = getDepth(document, startId);
+  // Labels are derived from the document, so every caller (canvas, previews,
+  // PNG/SVG export) measures the same numbered title without passing state.
+  const numberingLabels = computeNodeNumbering(document);
 
   interface SubtreeBlock {
     nodes: PositionedNode[];
@@ -299,7 +303,7 @@ export function layoutTree(
     const actualDepth = Number.isFinite(startDepth) ? startDepth + relativeDepth : relativeDepth;
     const size = getNodeBoxSize(
       actualDepth,
-      node.title,
+      numberedNodeTitle(node, numberingLabels),
       nodeWrapWidth,
       node,
       textMeasurer,

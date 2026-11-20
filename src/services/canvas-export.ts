@@ -5,6 +5,7 @@ import type {
   NodeId
 } from "../types";
 import { DEFAULT_NODE_WRAP_WIDTH, layoutTree } from "../render/layout";
+import { computeNodeNumbering, numberedNodeTitle } from "../domain/node-numbering";
 import {
   fallbackResourceBadgePresentation,
   type ResourceBadgePresentation
@@ -108,6 +109,7 @@ export function buildCanvasFile(
   );
   const usedIds = new Set<string>();
   const canvasIdByNodeId = new Map<NodeId, string>();
+  const numberingLabels = computeNodeNumbering(document);
   const nodes = layout.nodes.map((position): CanvasTextNode => {
     const id = uniqueId(`n-${position.id}`, usedIds);
     if (!canvasIdByNodeId.has(position.id)) canvasIdByNodeId.set(position.id, id);
@@ -116,7 +118,9 @@ export function buildCanvasFile(
       type: "text",
       // An untitled node must still be visible and selectable in the canvas, so
       // the caller's localized placeholder replaces the empty string.
-      text: document.nodes[position.id]?.title || fallbackTitle,
+      text: document.nodes[position.id]
+        ? (numberedNodeTitle(document.nodes[position.id]!, numberingLabels) || fallbackTitle)
+        : fallbackTitle,
       x: position.x + CANVAS_EXPORT_MARGIN,
       y: position.y + CANVAS_EXPORT_MARGIN,
       width: position.width,

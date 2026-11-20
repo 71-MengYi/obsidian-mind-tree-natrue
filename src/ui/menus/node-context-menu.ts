@@ -1,9 +1,11 @@
 import { Menu } from "obsidian";
 import { t } from "../../i18n";
+import type { NodeNumberingFormat, NodeNumberingScope, NodeNumberingStart } from "../../types";
 import { CHAIN_BROKEN_ICON } from "../icons";
 import { guardNodeMenuAction, nodeResourceMenuItemOrder } from "../ui-contracts";
 import { copyAsGroup, copyBranchRow, exportGroup } from "./copy-export-menu";
 import { addMenuGroup, addMenuRow, supportsSubmenus } from "./menu-groups";
+import { addNodeNumberingMenu } from "./node-numbering-menu";
 
 export interface NodeContextMenuState {
   readonly hasFileResource: boolean;
@@ -34,6 +36,12 @@ export interface NodeContextMenuActions {
   readonly showMarkers: () => void;
   /** Remove every link this node takes part in. */
   readonly unlinkNode: () => void;
+  readonly numberChildren: (
+    format: NodeNumberingFormat,
+    scope: NodeNumberingScope,
+    start: NodeNumberingStart
+  ) => void;
+  readonly clearNumbering: (scope: "level" | "all") => void;
   readonly addChild: () => void;
   readonly addSibling: () => void;
   readonly toggleCollapsed: () => void;
@@ -63,6 +71,8 @@ export class NodeContextMenu {
     const menu = new Menu();
     const { state, actions } = this;
     const guarded = (action: () => void): (() => void) => guardNodeMenuAction(actions.isCurrent, action);
+    // One probe per menu; every nested group and the numbering rows share it.
+    const nested = supportsSubmenus(() => new Menu());
     for (const id of nodeResourceMenuItemOrder(state)) {
       menu.addItem((item) => {
         switch (id) {
@@ -80,6 +90,16 @@ export class NodeContextMenu {
       });
     }
     menu.addItem((item) => item.setTitle(t("toolbar.markers")).setIcon("tags").onClick(guarded(actions.showMarkers)));
+    // The numbering group sits directly below the marker row and owns its own
+    // two nested levels (action -> style).
+    addNodeNumberingMenu(menu, nested, {
+      numberChildren: (format, scope, start) => {
+        if (actions.isCurrent()) actions.numberChildren(format, scope, start);
+      },
+      clearNumbering: (scope) => {
+        if (actions.isCurrent()) actions.clearNumbering(scope);
+      }
+    }, state.hasChildren);
     if (state.nodeLinked) {
       // The creation entry is gone: a node link is made by pasting a copied
       // branch reference, so the menu only ever offers the removal row.
@@ -107,7 +127,6 @@ export class NodeContextMenu {
     addMenuRow(menu, copyBranchRow({ copyBranch: guarded(actions.copyBranch) }));
     // Both groups are the same descriptions the toolbar menus render, so the two
     // surfaces cannot drift apart; stale menus are revalidated on every row.
-    const nested = supportsSubmenus(() => new Menu());
     addMenuGroup(menu, copyAsGroup({
       copyBranchReference: guarded(actions.copyBranchReference),
       copyOutline: guarded(actions.copyOutline),

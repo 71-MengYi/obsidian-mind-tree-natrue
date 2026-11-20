@@ -911,6 +911,21 @@
 
 **仍未完成**：① 仍未在真实 Obsidian 内复现/验收；② 若用户重测后 Tab 仍缩进别的笔记，说明「未被绘制」判据没命中该宿主的隐藏方式（例如宿主用 `visibility:hidden` 之外的裁剪/离屏方案，或该宿主版本没有 `checkVisibility`），下一步改用「事件目标最近的 `.workspace-leaf` 是否为 `.mod-active`」或直接比较 `document.activeElement` 所在 leaf 与当前 leaf；③ WCAG 2.1.2 键盘出口那条既有取舍没变。
 
+## 2026-11-19 · 节点编号（右键菜单「节点标记」下方）
+
+**需求口径（用户确认）**：编号配置随节点保存，标题只在前端显示前缀；「从上层继续」接续祖先编号路径（父级 `3.` → 子级 `3.1`，祖先未编号时等同 restart）；编号要出现在画布、PNG/SVG/Canvas 导出与 Markdown 大纲。
+
+**落点**：
+- 领域纯函数 `src/domain/node-numbering.ts`：`NODE_NUMBERING_FORMATS`、`formatNodeNumberLabel`、`computeNodeNumbering`（按当前 `childIds` 派生标签，`owned` 标志区分“本级配置产生的路径”和“祖先路径”，保证 `descendants + restart` 仍是 `1.`→`1.1`→`1.1.1`，`continue` 只在配置起点接续祖先）、`clearNodeNumbering`、`numberedNodeTitle`。
+- 类型与持久化：`types.ts` 新增 `NodeNumbering`（`format/scope/start`），`MindTreeNode.numbering`；`domain/runtime-node.ts` 归一化（非法值整条丢弃）；`format/document.ts` 的 `nodeToMachineData` 白名单补 `numbering`（**漏这里会表现为保存后重开编号丢失**）。
+- 渲染：编号标签是派生值，不写标题。`render/layout.ts` 在 `layoutTree` 内 `computeNodeNumbering` 一次并参与标题测量；`ui/renderers/node-renderer.ts` 在 `render()` 里重算同一份 map（编辑态仍显示原始 `node.title`）；`services/export.ts`、`services/canvas-export.ts`、`format/outline.ts` 各自派生，因此画布/导出/大纲一致，且无需给 `layoutTree` 增加参数。
+- 菜单：`ui/menus/node-numbering-menu.ts`（`addNodeNumberingMenu`，两级嵌套：动作 → 六种形式；无嵌套能力时平铺成「动作 · 形式」26 行；无子节点时四条编号行动作置灰），`node-context-menu.ts` 在标记行后调用并把 `supportsSubmenus` 探针提到 `show()` 顶部复用；`ui/mind-tree-view.ts` 新增 `numberChildren` / `clearNumbering` 两个 `commit` 命令（可撤销）。i18n 新增 `menu.numbering*` 与 `menu.numberingFormat.*` 双语文案。
+- 测试：`test/node-numbering.test.ts`（14 条：六种形式、中文/罗马/字母转换、scope/start 组合、移除、归一化、文件往返、大纲前缀、布局宽度变化）、`test/node-numbering-menu.test.ts`（5 条，用 `loadModule` + obsidian `getLanguage` 桩，覆盖两级嵌套、20 条平铺、无子节点置灰）。
+
+**验证**：`npm run check` 0 错误；替代运行器全量 **1251 tests / 1251 pass / 0 fail**（含新增 19 条）。
+
+
+
 
 
 

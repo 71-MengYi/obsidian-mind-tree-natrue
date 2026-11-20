@@ -1,4 +1,5 @@
 import { nodeTitleMode, type TitleCommitResult } from "../../format/node-title";
+import { computeNodeNumbering, numberedNodeTitle } from "../../domain/node-numbering";
 import { renderRichTitleSvg } from "../../render/text-measurer";
 import { setIcon } from "obsidian";
 import type { BacklinkEntries, BacklinkTarget } from "../../domain/backlink";
@@ -80,11 +81,14 @@ export interface NodeRenderActions {
 /** Creates title, editor, badges, resource controls and fold controls for nodes. */
 export class NodeRenderer {
   private focusEditor?: () => void;
+  /** Derived from the document on every render; never persisted on the title. */
+  private numberingLabels: ReadonlyMap<NodeId, string> = new Map();
 
   constructor(readonly element: HTMLElement) {}
 
   render(state: NodeRenderState, actions: NodeRenderActions): void {
     this.focusEditor = undefined;
+    this.numberingLabels = computeNodeNumbering(state.document);
     this.element.empty();
     this.element.style.width = `${state.width}px`;
     this.element.style.height = `${state.height}px`;
@@ -198,7 +202,7 @@ export class NodeRenderer {
     position: PositionedNode,
     state: NodeRenderState
   ): void {
-    const title = node.title || t("node.untitled");
+    const title = numberedNodeTitle(node, this.numberingLabels) || t("node.untitled");
     const measurement = state.textMeasurer.measure(title, position.depth, state.nodeWrapWidth, nodeTitleMode(node, position.depth));
     const titleElement = element.createDiv("mtn-node-title");
     if (measurement.richLines) {
