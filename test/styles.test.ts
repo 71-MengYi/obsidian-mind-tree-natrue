@@ -39,9 +39,9 @@ test("resource controls reuse the same static gray icon and conditional sync ind
   assert.match(rule, /box-shadow:\s*none;/);
   assert.match(nodeRendererSource, /if \(!visual\.hasResourceControls\) return;/);
   assert.match(nodeRendererSource, /if \(visual\.titleSyncDisabled\)/);
-  // The open control shows the resource's own icon (note, web page, picture…),
-  // so the renderer no longer hard-codes the shared share-square glyph.
-  assert.match(nodeRendererSource, /setIcon\(openButton, resolveResourceOpenIcon\(node\)\)/);
+  // The open control shows the resource's own icon (note, web page, picture…)
+  // and swaps to the warning mark only when the resource is unopenable.
+  assert.match(nodeRendererSource, /setIcon\(openButton, visual\.resourceInvalid \? CHAIN_BROKEN_ICON : resolveResourceOpenIcon\(node\)\)/);
   assert.doesNotMatch(nodeRendererSource, /SHARE_SQUARE_ICON/);
   assert.match(nodeRendererSource, /openButton\.addEventListener\("click", \(event\) => \{\s*event\.preventDefault\(\); event\.stopPropagation\(\); actions\.openResource\(node\.id\);/);
 });

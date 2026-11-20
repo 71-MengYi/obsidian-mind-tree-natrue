@@ -421,7 +421,10 @@ export default class MindTreeNaturePlugin extends Plugin {
       this.registerEvent(this.app.vault.on("delete", (file) => {
         this.resources.removePath(file.path);
         for (const leaf of this.app.workspace.getLeavesOfType(MIND_TREE_VIEW_TYPE)) {
-          if (leaf.view instanceof MindTreeView && leaf.view.file?.path === file.path) leaf.view.checkExternalVersion();
+          if (!(leaf.view instanceof MindTreeView)) continue;
+          if (leaf.view.file?.path === file.path) leaf.view.checkExternalVersion();
+          // A deleted linked file turns its node's open control into a warning.
+          leaf.view.handleResourceAvailabilityChanged();
         }
         this.scheduleConflictCleanup();
       }));

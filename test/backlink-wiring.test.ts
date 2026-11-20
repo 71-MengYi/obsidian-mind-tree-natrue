@@ -71,7 +71,8 @@ test("the view subscribes to the index, debounces the reflow and unsubscribes", 
     view,
     /const backlinks = document\.documentId \? this\.plugin\.backlinks\.entriesFor\(document\.documentId\) : undefined;/
   );
-  assert.match(view, /imageNodePresentation: this\.imageNodePresentation \?\? fallbackImageNodePresentation,\s*backlinks\s*\}, \{/);
+  // More runtime-only fields may follow, so assert the adjacency only.
+  assert.match(view, /imageNodePresentation: this\.imageNodePresentation \?\? fallbackImageNodePresentation,\s*backlinks,/);
 });
 
 test("a pill opens its note through the existing search open-and-locate path", () => {

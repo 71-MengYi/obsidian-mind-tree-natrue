@@ -857,6 +857,12 @@
   stroke-width: 2px;
 }
 
+.mtn-node-controls > .mtn-resource-open.is-missing,
+.mtn-node-controls > .mtn-resource-open.is-missing:hover,
+.mtn-node-controls > .mtn-resource-open.is-missing:active {
+  color: var(--text-error);
+}
+
 /* The open control uses Obsidian's built-in Lucide icons (24-unit viewBox), so
    it keeps Lucide's own 2px stroke instead of the 100-unit custom-icon scale. */
 .mtn-node-controls > .mtn-resource-open svg { stroke-width: 2px; }

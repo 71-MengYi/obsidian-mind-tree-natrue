@@ -9,7 +9,8 @@ import {
   type CustomMarkerDefinition
 } from "../domain/custom-markers";
 import { isMarkdownPath, isMindTreePath, stripNonMarkdownResourceId } from "../format/resource-id";
-import type { MindTreeNode } from "../types";
+import { isSafeHttpUrl } from "../domain/url";
+import type { FileResourceRef, MindTreeNode, ResourceRef } from "../types";
 
 /**
  * Every trailing item a node can show. `emoji` and `tag` are user-managed
@@ -500,4 +501,25 @@ export function resolveResourceOpenIconKind(node?: Readonly<MindTreeNode>): Reso
 /** Icon name handed to Obsidian's `setIcon` for the node's trailing open control. */
 export function resolveResourceOpenIcon(node?: Readonly<MindTreeNode>): string {
   return RESOURCE_OPEN_ICON_NAMES[resolveResourceOpenIconKind(node)];
+}
+
+/**
+ * Answers whether the vault currently holds the file behind a reference.
+ * Undefined means "not verified yet": during a cold index the caller must not
+ * paint a healthy link as broken, so no warning is raised from an unknown.
+ */
+export type FileResourceResolutionCheck = (reference: FileResourceRef) => boolean;
+
+/**
+ * A resource is invalid when opening it can only fail: a URL that is not
+ * http(s), or a file the verified index cannot resolve. Only the reference is
+ * inspected here, so the caller owns the vault lookup and this stays pure.
+ */
+export function isResourceInvalid(
+  resource: ResourceRef | undefined,
+  isFileResolved?: FileResourceResolutionCheck
+): boolean {
+  if (!resource) return false;
+  if (resource.type === "url") return !isSafeHttpUrl(resource.url);
+  return isFileResolved ? !isFileResolved(resource) : false;
 }

@@ -938,6 +938,26 @@
 
 **待人工验收**：在真实 Obsidian 里逐类确认图标——尤其 `git-fork` / `archive` / `table` / `code` / `music` / `video` 在当前 Obsidian 版本的 Lucide 集中存在；任何一个不存在就是空按钮，只能从该版本图标表里换名。笔记内嵌分支视图与图片节点同样走这条映射，一并看。
 
+## 2026-11-21 · 失效资源显示红色断开图标（`feat`）
+
+**需求口径（用户）**：已失效的资源，原打开资源按钮的图标用红色断开链接图标替代，提示资源失效。
+
+**判定口径**：URL 用既有 `isSafeHttpUrl`（非 `http`/`https` 即失效）；文件用资源索引解析。**关键门禁**：只有 `ResourceIndexService.isVerified()`（转 `catalog.isFullyVerified()`）之后才允许把“解析不到”判为失效，否则启动瞬间索引未建完会把正常文件标红。纯函数 `isResourceInvalid(resource, isFileResolved?)` 放在 `render/resource-badges.ts`，不拿 vault 引用，回调由调用方注入。
+
+**落点**：
+- `services/resource-index.ts` 新增 `isVerified()`；`render/resource-badges.ts` 新增 `isResourceInvalid()`（URL 恒判、文件仅在拿到回调时判）。
+- `ui/renderers/node-render-model.ts`：`NodeVisualState.resourceInvalid` + `createNodeVisualState()` 第 6 参（默认 `false`，`ui-modules.test.ts` 的 3 参调用不受影响），并 `&& controls.hasOpenButton` 防止无按钮时置真。
+- `ui/renderers/node-renderer.ts`：`NodeRenderState.invalidResourceNodeIds?: ReadonlySet<NodeId>`，打开按钮追加 `is-missing` 类，图标换 `CHAIN_BROKEN_ICON`（已有的自制断开链图标），`aria-label` 换 `node.resourceInvalid`；点击仍走 `openResource`（既有 `fileNotFound`/`invalidLink` 提示）。
+- `ui/mind-tree-view.ts`：运行时字段 `invalidResourceNodeIds`、`handleResourceAvailabilityChanged()`、`refreshInvalidResourceNodeIds()`（集合相等才返回 false）、`collectInvalidResourceNodeIds()`；`render()` 在 `nodeRenderer.render()` 前重算并传入；`handleResourceMetadataChange()` 也重算（文件重建后图标能恢复）。
+- `main.ts`：vault `delete` 处理器把原来的单行 `instanceof` 循环改成 `continue` 形式，并调用 `leaf.view.handleResourceAvailabilityChanged()`（先 `resources.removePath`）。
+- `styles.css`：`.mtn-node-controls > .mtn-resource-open.is-missing` 三态 `color: var(--text-error)`（红色），正常态仍是 `--text-muted`。
+- i18n 新增 `node.resourceInvalid`（EN/ZH）。
+- 测试：`test/resource-badges.test.ts` +1（失效判定矩阵）、`test/node-renderer.test.ts` +1（图标/类/无障碍名，点击仍回调）、`test/styles.test.ts` 增加红色规则与条件 `setIcon` 断言、新建 `test/resource-validity-wiring.test.ts`（5 条：索引门禁、视图派生与传入、删除事件接线、渲染分支、红色 CSS）。`test/backlink-wiring.test.ts` 的原断言钉死“`backlinks` 后紧跟 `}, {`”，新字段插在 `backlinks` 之后，已放宽为只断言相邻两项。
+
+**验证**：`npm run check` 0 错误；全量 **1260 tests / 1260 pass / 0 fail**。
+
+**未完成 / 注意**：只读树预览（版本历史双栏、主题悬浮预览、笔记内嵌分支视图）没有资源索引能力，`ReadOnlyTreePreview` 未传 `invalidResourceNodeIds`，因此预览里失效资源仍显示类型图标；若要在内嵌视图也标红，需要给 `MindTreeReferenceEmbedPorts` 增加解析端口。`npm run build` 仍是沙箱 esbuild `spawn EPERM`。
+
 
 
 

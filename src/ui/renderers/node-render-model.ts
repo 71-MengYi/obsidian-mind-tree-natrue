@@ -19,6 +19,8 @@ export interface NodeVisualState {
   readonly nodeLinkTargetId?: NodeId;
   /** The link target no longer exists, so the mark cannot navigate anywhere. */
   readonly nodeLinkMissing: boolean;
+  /** The linked resource cannot be opened, so the open control warns instead. */
+  readonly resourceInvalid: boolean;
   readonly markerDisplayWidth: number;
   /** Ordered trailing items: custom markers and derived resource badges. */
   readonly markers: readonly ResourceBadge[];
@@ -34,7 +36,8 @@ export function createNodeVisualState(
   selected: boolean,
   editing: boolean,
   resourceBadgePresentation: ResourceBadgePresentation = fallbackResourceBadgePresentation,
-  nodeExists?: (nodeId: NodeId) => boolean
+  nodeExists?: (nodeId: NodeId) => boolean,
+  resourceInvalid = false
 ): NodeVisualState {
   const controls = getNodeResourceControls(node);
   const markerGeometry = getNodeMarkerGeometry(node, resourceBadgePresentation);
@@ -48,6 +51,7 @@ export function createNodeVisualState(
     titleSyncDisabled: controls.titleSyncDisabled,
     ...(nodeLinkTargetId ? { nodeLinkTargetId } : {}),
     nodeLinkMissing: Boolean(nodeLinkTargetId && nodeExists && !nodeExists(nodeLinkTargetId)),
+    resourceInvalid: resourceInvalid && controls.hasOpenButton,
     markerDisplayWidth: markerGeometry.width,
     markers: markerGeometry.markers,
     highlight: getNodeHighlightColor(node),

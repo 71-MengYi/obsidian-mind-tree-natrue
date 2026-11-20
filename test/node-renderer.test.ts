@@ -78,7 +78,12 @@ const module = { exports: loadModule<{ NodeRenderer: new (element: TestElement) 
     }
   }) };
 
-function renderNode(node: MindTreeNode, readOnly = false, resourceOpenEnabled?: boolean) {
+function renderNode(
+  node: MindTreeNode,
+  readOnly = false,
+  resourceOpenEnabled?: boolean,
+  invalidResourceNodeIds?: ReadonlySet<string>
+) {
   const document: MindTreeDocument = {
     settings: { layoutMode: "right", recursiveScan: false, collectionMode: "off", theme: "vibrant",
       connectionStyle: "theme", nodeShape: "rounded" },
@@ -101,7 +106,8 @@ function renderNode(node: MindTreeNode, readOnly = false, resourceOpenEnabled?: 
     resourceBadgePresentation: fallbackResourceBadgePresentation,
     imageNodePresentation: fallbackImageNodePresentation,
     readOnly,
-    resourceOpenEnabled
+    resourceOpenEnabled,
+    invalidResourceNodeIds
   };
   const container = new TestElement();
   new module.exports.NodeRenderer(container).render(state, actions);
@@ -149,6 +155,26 @@ test("the open control shows the icon of the linked resource kind", () => {
   assert.equal(iconFor({ type: "file", resourceId: "tree", pathHint: "Other.mtn.md", fileKind: "note" }), "git-fork");
   assert.equal(iconFor({ type: "file", resourceId: "pdf", pathHint: "a.pdf", fileKind: "attachment" }), "file-text");
   assert.equal(iconFor({ type: "file", resourceId: "bin", pathHint: "a.bin", fileKind: "attachment" }), "file");
+});
+
+test("an unopenable resource shows the red warning mark in the open slot", () => {
+  const node: MindTreeNode = { ...baseNode(), resource: { type: "url", url: "https://example.com" } };
+  const { controls, calls } = renderNode(node, false, undefined, new Set([node.id]));
+  const open = controls.querySelectorAll(".mtn-resource-open")[0]!;
+  // Same slot, same click, different identity: the node reports the failure
+  // before the user tries to open it.
+  assert.equal(open.icon, "mtn-fa-chain-broken");
+  assert.ok(open.classes.has("is-missing"));
+  assert.equal(open.attributes["aria-label"], "The linked resource is no longer available");
+  open.click();
+  assert.deepEqual(calls, ["openResource"]);
+
+  // A healthy resource keeps its type icon and never carries the warning class.
+  const healthy = renderNode(node);
+  const healthyOpen = healthy.controls.querySelectorAll(".mtn-resource-open")[0]!;
+  assert.equal(healthyOpen.icon, "globe");
+  assert.equal(healthyOpen.classes.has("is-missing"), false);
+  assert.equal(healthyOpen.attributes["aria-label"], "Open linked resource");
 });
 
 test("a stale resource on a linked node keeps only the link mark", () => {

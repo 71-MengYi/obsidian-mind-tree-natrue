@@ -16,6 +16,7 @@ import {
   resolveResourceOpenIcon,
   type ResourceBadgePresentation
 } from "../../render/resource-badges";
+import { CHAIN_BROKEN_ICON } from "../icons";
 import {
   getNodeSizeClass,
   getNodeTitleEditorSize,
@@ -57,6 +58,12 @@ export interface NodeRenderState {
    * tree has no persisted identity and in previews, which cannot navigate.
    */
   readonly backlinks?: BacklinkEntries;
+  /**
+   * Nodes whose linked resource can no longer be opened. Their trailing open
+   * control keeps its slot but shows the red broken-link mark and reports the
+   * failure instead of the resource icon.
+   */
+  readonly invalidResourceNodeIds?: ReadonlySet<NodeId>;
 }
 
 export interface NodeRenderActions {
@@ -124,7 +131,8 @@ export class NodeRenderer {
       state.selectedIds.has(node.id),
       state.editingNodeId === node.id,
       state.resourceBadgePresentation,
-      (nodeId) => Boolean(state.document.nodes[nodeId])
+      (nodeId) => Boolean(state.document.nodes[nodeId]),
+      state.invalidResourceNodeIds?.has(node.id) === true
     );
     element.toggleClass("is-selected", visual.selected);
     element.toggleClass("is-editing", visual.editing);
@@ -417,11 +425,17 @@ export class NodeRenderer {
     // link takes that slot instead of reserving a second one, so the rendered
     // box always matches the reserved control width.
     if (!visual.hasResource) return;
+    // A resource that can no longer be opened keeps the same slot and button
+    // semantics, but the icon switches to the red broken-link mark so the node
+    // itself reports the failure before the user clicks.
     const openButton = controls.createEl("button", {
-      cls: "mtn-resource-open",
-      attr: { type: "button", "aria-label": t("node.openLinkedResource") }
+      cls: `mtn-resource-open${visual.resourceInvalid ? " is-missing" : ""}`,
+      attr: {
+        type: "button",
+        "aria-label": visual.resourceInvalid ? t("node.resourceInvalid") : t("node.openLinkedResource")
+      }
     });
-    setIcon(openButton, resolveResourceOpenIcon(node));
+    setIcon(openButton, visual.resourceInvalid ? CHAIN_BROKEN_ICON : resolveResourceOpenIcon(node));
     openButton.addEventListener("pointerdown", (event) => event.stopPropagation());
     openButton.addEventListener("dblclick", (event) => event.stopPropagation());
     openButton.addEventListener("click", (event) => {

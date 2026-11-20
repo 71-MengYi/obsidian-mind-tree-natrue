@@ -131,6 +131,13 @@ export class ResourceIndexService {
 
   /** Rendering never reads disk or turns unverified persisted hints into identities. */
   resolve(reference: FileResourceRef): TFile | undefined { return this.catalog.resolve(reference); }
+
+  /**
+   * True once the current catalog generation has verified the whole vault. Until
+   * then a missing lookup only means "not indexed yet", so callers that warn
+   * about unresolved references must wait for this flag.
+   */
+  isVerified(): boolean { return this.catalog.isFullyVerified(); }
   resolveVerified(reference: FileResourceRef): Promise<TFile | undefined> {
     return this.catalog.resolveVerified(reference);
   }

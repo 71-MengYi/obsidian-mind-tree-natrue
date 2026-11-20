@@ -21,6 +21,7 @@ import {
   resolveResourceBadges,
   resolveResourceOpenIcon,
   resolveResourceOpenIconKind,
+  isResourceInvalid,
   type FileBadgeRules,
   type ResourceBadgeMeasurer
 } from "../src/render/resource-badges";
@@ -569,4 +570,18 @@ test("the open control icon follows the linked resource kind", () => {
   // An unknown suffix stays on Obsidian's generic file icon instead of guessing.
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "blob.bin", fileKind: "attachment" }), "file");
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "noext", fileKind: "attachment" }), "file");
+});
+
+test("a resource is invalid only when opening it can only fail", () => {
+  assert.equal(isResourceInvalid(undefined), false);
+  // URLs never query the vault; an unusable protocol is always invalid.
+  assert.equal(isResourceInvalid({ type: "url", url: "https://example.com" }), false);
+  assert.equal(isResourceInvalid({ type: "url", url: "javascript:alert(1)" }), true);
+  assert.equal(isResourceInvalid({ type: "url", url: "not a url" }), true);
+
+  const file = { type: "file", resourceId: "a", pathHint: "a.md", fileKind: "note" } as const;
+  // Without a verified index the caller cannot know, so nothing is flagged.
+  assert.equal(isResourceInvalid(file), false);
+  assert.equal(isResourceInvalid(file, () => true), false);
+  assert.equal(isResourceInvalid(file, () => false), true);
 });

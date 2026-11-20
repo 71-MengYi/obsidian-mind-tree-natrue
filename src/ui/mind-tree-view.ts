@@ -147,7 +147,7 @@ import {
 import { BrowserNodeTextMeasurer } from "./text-measurer";
 import { fallbackNodeTextMeasurer } from "../render/text-measurer";
 import { BrowserResourceBadgeMeasurer } from "./resource-badges";
-import type { ResourceBadgePresentation } from "../render/resource-badges";
+import { isResourceInvalid, type ResourceBadgePresentation } from "../render/resource-badges";
 import { BrowserImageNodePresentation } from "./image-nodes";
 import {
   fallbackImageNodePresentation,
@@ -337,6 +337,11 @@ export class MindTreeView extends TextFileView {
   private connectionRenderer?: ConnectionRenderer;
   private nodeLayerEl!: HTMLElement;
   private nodeRenderer?: NodeRenderer;
+  /**
+   * Runtime-only: nodes whose linked resource can no longer be opened. Derived
+   * from the resource index on every reflow, never persisted.
+   */
+  private invalidResourceNodeIds: ReadonlySet<NodeId> = new Set<NodeId>();
   private canvasInteractionController?: CanvasInteractionController;
   private nodeDragController?: NodeDragController;
   private imageResizeController?: ImageResizeController;
@@ -1903,10 +1908,51 @@ export class MindTreeView extends TextFileView {
     const document = this.document;
     if (!document || !Object.values(document.nodes).some((node) =>
       node.resource?.type === "file" && node.resource.resourceId === resourceId)) return;
+    // A re-indexed file may have come back after being deleted, so the warning
+    // mark is re-derived before the reflow that draws it.
+    this.refreshInvalidResourceNodeIds();
     this.imageNodePresentation?.invalidate(resourceId);
     const anchor = this.captureLayoutViewportAnchor();
     const changed = this.applySystemMutation((draft) => this.reconcileLinkedResources(draft));
     if (!changed) this.render(anchor);
+  }
+
+  /**
+   * main.ts changed the resource index outside this view (a linked file was
+   * deleted). Only the trailing open control reflects that, so reflow solely
+   * when the set of unopenable resources actually differs.
+   */
+  handleResourceAvailabilityChanged(): void {
+    if (!this.document) return;
+    if (this.refreshInvalidResourceNodeIds()) this.render();
+  }
+
+  /** Returns true when the derived set differs from the rendered one. */
+  private refreshInvalidResourceNodeIds(): boolean {
+    const next = this.collectInvalidResourceNodeIds();
+    if (next.size === this.invalidResourceNodeIds.size
+      && [...next].every((id) => this.invalidResourceNodeIds.has(id))) return false;
+    this.invalidResourceNodeIds = next;
+    return true;
+  }
+
+  /**
+   * A failed lookup in a partially verified index only means "not indexed yet",
+   * so no file is reported broken until the catalog has verified the vault. An
+   * unusable URL needs no vault state and is always reported.
+   */
+  private collectInvalidResourceNodeIds(): ReadonlySet<NodeId> {
+    const ids = new Set<NodeId>();
+    const document = this.document;
+    if (!document) return ids;
+    const resources = this.plugin.resources;
+    const isFileResolved: ((reference: FileResourceRef) => boolean) | undefined = resources.isVerified()
+      ? (reference) => resources.resolve(reference) !== undefined
+      : undefined;
+    for (const node of Object.values(document.nodes)) {
+      if (isResourceInvalid(node.resource, isFileResolved)) ids.add(node.id);
+    }
+    return ids;
   }
 
   /**
@@ -2067,6 +2113,7 @@ export class MindTreeView extends TextFileView {
     // A tree without a persisted identity cannot be referenced by a note, so the
     // index is never consulted for an identity-less document.
     const backlinks = document.documentId ? this.plugin.backlinks.entriesFor(document.documentId) : undefined;
+    this.refreshInvalidResourceNodeIds();
     this.nodeRenderer?.render({
       document,
       positions: this.currentLayout.nodes,
@@ -2083,7 +2130,8 @@ export class MindTreeView extends TextFileView {
       textMeasurer,
       resourceBadgePresentation,
       imageNodePresentation: this.imageNodePresentation ?? fallbackImageNodePresentation,
-      backlinks
+      backlinks,
+      invalidResourceNodeIds: this.invalidResourceNodeIds
     }, {
       finishEdit: (nodeId, title) => this.finishEdit(nodeId, title),
       updateEditDraft: (nodeId, title) => this.updateEditDraft(nodeId, title),
