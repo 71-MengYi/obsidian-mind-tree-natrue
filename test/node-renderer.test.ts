@@ -133,9 +133,22 @@ test("a resource node keeps its open control and never renders a link mark", () 
   assert.equal(controls.querySelectorAll(".mtn-link-mark").length, 0);
   const open = controls.querySelectorAll(".mtn-resource-open");
   assert.equal(open.length, 1);
-  assert.equal(open[0]!.icon, "mtn-fa-share-square-o");
+  // A linked note shows the note icon instead of a generic share glyph.
+  assert.equal(open[0]!.icon, "file-text");
   open[0]!.click();
   assert.deepEqual(calls, ["openResource"]);
+});
+
+test("the open control shows the icon of the linked resource kind", () => {
+  const iconFor = (resource: MindTreeNode["resource"]): string => {
+    const { controls } = renderNode({ ...baseNode(), resource });
+    return controls.querySelectorAll(".mtn-resource-open")[0]!.icon as string;
+  };
+  assert.equal(iconFor({ type: "url", url: "https://example.com" }), "globe");
+  assert.equal(iconFor({ type: "file", resourceId: "pic", pathHint: "pic.png", fileKind: "image" }), "image");
+  assert.equal(iconFor({ type: "file", resourceId: "tree", pathHint: "Other.mtn.md", fileKind: "note" }), "git-fork");
+  assert.equal(iconFor({ type: "file", resourceId: "pdf", pathHint: "a.pdf", fileKind: "attachment" }), "file-text");
+  assert.equal(iconFor({ type: "file", resourceId: "bin", pathHint: "a.bin", fileKind: "attachment" }), "file");
 });
 
 test("a stale resource on a linked node keeps only the link mark", () => {

@@ -857,9 +857,9 @@
   stroke-width: 2px;
 }
 
-/* Registered Obsidian icons use a 100-unit viewBox, so this outline needs a
-   proportionally larger stroke than the adjacent 24-unit Lucide status icon. */
-.mtn-node-controls > .mtn-resource-open svg { stroke-width: 8px; }
+/* The open control uses Obsidian's built-in Lucide icons (24-unit viewBox), so
+   it keeps Lucide's own 2px stroke instead of the 100-unit custom-icon scale. */
+.mtn-node-controls > .mtn-resource-open svg { stroke-width: 2px; }
 
 .mtn-title-input {
   -webkit-touch-callout: default;

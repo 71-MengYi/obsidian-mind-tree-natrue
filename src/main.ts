@@ -57,8 +57,6 @@ import { fetchChatModelIds } from "./services/ai/model-catalog";
 import {
   CHAIN_BROKEN_ICON,
   CHAIN_BROKEN_ICON_SVG,
-  SHARE_SQUARE_ICON,
-  SHARE_SQUARE_ICON_SVG,
 } from "./ui/icons";
 import { MindTreeView } from "./ui/mind-tree-view";
 import { MindTreeReferenceRenderChild, type MindTreeReferenceEmbedPorts } from "./ui/components/mind-tree-reference-embed";
@@ -340,8 +338,6 @@ export default class MindTreeNaturePlugin extends Plugin {
       }
     });
     if (isMcpSupported({ isDesktop: !Platform.isMobile })) this.initializeMcpServer();
-    addIcon(SHARE_SQUARE_ICON, SHARE_SQUARE_ICON_SVG);
-    this.register(() => removeIcon(SHARE_SQUARE_ICON));
     addIcon(CHAIN_BROKEN_ICON, CHAIN_BROKEN_ICON_SVG);
     this.register(() => removeIcon(CHAIN_BROKEN_ICON));
     // A reference block is user-editable note text: parse defensively and let the

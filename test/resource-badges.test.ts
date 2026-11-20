@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { addNode, createEmptyDocument } from "../src/domain/tree";
 import type { CustomMarkerDefinition } from "../src/domain/custom-markers";
+import type { MindTreeNode } from "../src/types";
 import { renderOutline } from "../src/format/outline";
 import { renderBranchSvg } from "../src/services/export";
 import { fallbackNodeTextMeasurer } from "../src/render/text-measurer";
@@ -18,6 +19,8 @@ import {
   normalizeFileBadgeAlias,
   normalizeFileBadgeExtension,
   resolveResourceBadges,
+  resolveResourceOpenIcon,
+  resolveResourceOpenIconKind,
   type FileBadgeRules,
   type ResourceBadgeMeasurer
 } from "../src/render/resource-badges";
@@ -528,4 +531,42 @@ test("a node link owns the single trailing control slot and suppresses a stale r
   assert.deepEqual(getNodeResourceControls(node), {
     hasOpenButton: true, hasNodeLink: false, titleSyncDisabled: false, width: 22, height: 20
   });
+});
+
+test("the open control icon follows the linked resource kind", () => {
+  const kindOf = (resource: MindTreeNode["resource"]): string => {
+    const node: MindTreeNode = {
+      id: "n", title: "T", childIds: [], createdAt: "now", updatedAt: "now", resource
+    };
+    return resolveResourceOpenIconKind(node);
+  };
+  const iconOf = (resource: MindTreeNode["resource"]): string => {
+    const node: MindTreeNode = {
+      id: "n", title: "T", childIds: [], createdAt: "now", updatedAt: "now", resource
+    };
+    return resolveResourceOpenIcon(node);
+  };
+  // No resource never renders a control; the fallback stays generic on purpose.
+  assert.equal(resolveResourceOpenIconKind(undefined), "file");
+  assert.equal(resolveResourceOpenIcon(undefined), "file");
+
+  assert.equal(kindOf({ type: "url", url: "https://example.com" }), "url");
+  assert.equal(iconOf({ type: "url", url: "https://example.com" }), "globe");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "Note.md", fileKind: "note" }), "file-text");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "pic.PNG", fileKind: "image" }), "image");
+  // A mind tree keeps its own icon even though it is also a Markdown note, and
+  // the stable resource-id suffix must not hide the `.mtn.md` extension.
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "Tree.mtn.md", fileKind: "note" }), "git-fork");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "Tree~mtn-abc12.mtn.md", fileKind: "note" }), "git-fork");
+
+  // Attachment families fall back to the suffix, with compound suffixes kept.
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "song.mp3", fileKind: "attachment" }), "music");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "clip.mp4", fileKind: "attachment" }), "video");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "pack.tar.gz", fileKind: "attachment" }), "archive");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "script.ts", fileKind: "attachment" }), "code");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "rows.csv", fileKind: "attachment" }), "table");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "doc.pdf", fileKind: "attachment" }), "file-text");
+  // An unknown suffix stays on Obsidian's generic file icon instead of guessing.
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "blob.bin", fileKind: "attachment" }), "file");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "noext", fileKind: "attachment" }), "file");
 });

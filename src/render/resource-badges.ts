@@ -8,7 +8,7 @@ import {
   customMarkerDefinitionsByKind,
   type CustomMarkerDefinition
 } from "../domain/custom-markers";
-import { isMarkdownPath, stripNonMarkdownResourceId } from "../format/resource-id";
+import { isMarkdownPath, isMindTreePath, stripNonMarkdownResourceId } from "../format/resource-id";
 import type { MindTreeNode } from "../types";
 
 /**
@@ -413,4 +413,91 @@ export function getNodeResourceControls(node?: Readonly<MindTreeNode>): NodeReso
     width: count * (RESOURCE_CONTROL_SIZE + RESOURCE_CONTROL_GAP),
     height: hasOpenButton || hasNodeLink ? RESOURCE_CONTROL_SIZE : 0
   };
+}
+
+/**
+ * Coarse family of the trailing open control. Derived only from the reference
+ * the node already stores, so the icon never becomes node data and never needs
+ * the vault to resolve a file.
+ */
+export type ResourceOpenIconKind =
+  | "url"
+  | "mind-tree"
+  | "note"
+  | "image"
+  | "audio"
+  | "video"
+  | "archive"
+  | "code"
+  | "table"
+  | "file";
+
+/**
+ * Obsidian ships Lucide icons under these names. An unknown name renders an
+ * empty button, so the mapping stays on long-standing ids instead of guessing
+ * a per-extension icon.
+ */
+const RESOURCE_OPEN_ICON_NAMES: Readonly<Record<ResourceOpenIconKind, string>> = {
+  url: "globe",
+  "mind-tree": "git-fork",
+  note: "file-text",
+  image: "image",
+  audio: "music",
+  video: "video",
+  archive: "archive",
+  code: "code",
+  table: "table",
+  file: "file"
+};
+
+const SOUND_EXTENSIONS: ReadonlySet<string> = new Set([
+  "mp3", "wav", "m4a", "aac", "flac", "ogg", "oga", "opus", "wma", "aiff"
+]);
+const VIDEO_EXTENSIONS: ReadonlySet<string> = new Set([
+  "mp4", "m4v", "mov", "webm", "mkv", "avi", "wmv", "flv", "ogv"
+]);
+const ARCHIVE_EXTENSIONS: ReadonlySet<string> = new Set([
+  "zip", "tar", "gz", "tgz", "bz2", "xz", "7z", "rar", "zst"
+]);
+const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
+  "js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "jsonc", "css", "scss", "sass",
+  "less", "html", "htm", "xml", "yml", "yaml", "py", "sh", "bash", "zsh", "ps1",
+  "go", "rs", "java", "kt", "kts", "c", "h", "cpp", "hpp", "cs", "rb", "php",
+  "lua", "sql", "toml", "ini", "canvas", "excalidraw"
+]);
+const TABLE_EXTENSIONS: ReadonlySet<string> = new Set(["csv", "tsv", "xlsx", "xls", "ods"]);
+/** Text-like documents keep the note icon even though they are attachments. */
+const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  "pdf", "doc", "docx", "txt", "rtf", "odt", "md", "markdown", "mdx", "rmd"
+]);
+
+/**
+ * A URL is a web page, a mind-tree file is navigation between trees and a
+ * linked image is shown as a picture, so those three never depend on the
+ * filename suffix. Everything else falls back to its attachment family, with an
+ * unclassified file keeping Obsidian's generic file icon.
+ */
+export function resolveResourceOpenIconKind(node?: Readonly<MindTreeNode>): ResourceOpenIconKind {
+  const resource = node?.resource;
+  if (!resource) return "file";
+  if (resource.type === "url") return "url";
+  if (isMindTreePath(resource.pathHint)) return "mind-tree";
+  if (resource.fileKind === "note") return "note";
+  if (resource.fileKind === "image") return "image";
+  // `deriveFileBadgeExtension` strips a trailing stable resource id and normalizes
+  // compound suffixes, so `x.7z` and `x.tar.gz` classify like their badge does.
+  const extension = deriveFileBadgeExtension(resource.pathHint)?.split(".").at(-1);
+  if (!extension) return "file";
+  if (SOUND_EXTENSIONS.has(extension)) return "audio";
+  if (VIDEO_EXTENSIONS.has(extension)) return "video";
+  if (ARCHIVE_EXTENSIONS.has(extension)) return "archive";
+  if (CODE_EXTENSIONS.has(extension)) return "code";
+  if (TABLE_EXTENSIONS.has(extension)) return "table";
+  if (TEXT_EXTENSIONS.has(extension)) return "note";
+  return "file";
+}
+
+/** Icon name handed to Obsidian's `setIcon` for the node's trailing open control. */
+export function resolveResourceOpenIcon(node?: Readonly<MindTreeNode>): string {
+  return RESOURCE_OPEN_ICON_NAMES[resolveResourceOpenIconKind(node)];
 }

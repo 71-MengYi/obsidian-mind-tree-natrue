@@ -11,9 +11,9 @@ import {
 import { t } from "../../i18n";
 import type { MindTreeDocument, MindTreeNode, NodeId, PositionedNode } from "../../types";
 import type { FoldDirection } from "../fold-direction";
-import { SHARE_SQUARE_ICON } from "../icons";
 import {
   getNodeMarkerGeometry,
+  resolveResourceOpenIcon,
   type ResourceBadgePresentation
 } from "../../render/resource-badges";
 import {
@@ -418,10 +418,10 @@ export class NodeRenderer {
     // box always matches the reserved control width.
     if (!visual.hasResource) return;
     const openButton = controls.createEl("button", {
-      cls: "mtn-resource-open fa-share-square-o",
+      cls: "mtn-resource-open",
       attr: { type: "button", "aria-label": t("node.openLinkedResource") }
     });
-    setIcon(openButton, SHARE_SQUARE_ICON);
+    setIcon(openButton, resolveResourceOpenIcon(node));
     openButton.addEventListener("pointerdown", (event) => event.stopPropagation());
     openButton.addEventListener("dblclick", (event) => event.stopPropagation());
     openButton.addEventListener("click", (event) => {

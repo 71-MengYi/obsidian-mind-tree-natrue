@@ -924,6 +924,20 @@
 
 **验证**：`npm run check` 0 错误；替代运行器全量 **1251 tests / 1251 pass / 0 fail**（含新增 19 条）。
 
+## 2026-11-21 · 打开资源按钮按资源类型显示图标（`feat`）
+
+**需求口径（用户确认）**：关联了资源的节点，尾部「打开资源」图标改成该资源类型对应的图标——md 文档用笔记图标，URL 用网页/IE 图标，图片用图片图标等。
+
+**落点**：
+- 纯函数 `src/render/resource-badges.ts` 新增 `resolveResourceOpenIconKind()` / `resolveResourceOpenIcon()`：URL → `globe`；`isMindTreePath(pathHint)` → `git-fork`（`.mtn.md` 也算 markdown，必须先判）；`fileKind: "note"` → `file-text`；`fileKind: "image"` → `image`；附件按 `deriveFileBadgeExtension()`（会剥掉稳定资源 id、保留 `tar.gz` 这类复合后缀）映射 `music`/`video`/`archive`/`code`/`table`/`file-text`，未知后缀与无后缀回退 `file`。图标名只用 Obsidian 长期存在的 Lucide id——`setIcon` 遇到未注册名字只会渲染空按钮，不要凭后缀猜图标。
+- `ui/renderers/node-renderer.ts` 的打开按钮改调 `setIcon(openButton, resolveResourceOpenIcon(node))`，并去掉遗留的 `fa-share-square-o` 类；`styles.css` 里该按钮的 `stroke-width` 由 `8px` 改回 `2px`（8px 是为 100 viewBox 的自制图标准备的，内置 Lucide 是 24 viewBox）。
+- 删除已无引用的自制图标 `SHARE_SQUARE_ICON` / `SHARE_SQUARE_ICON_SVG`（`src/ui/icons.ts`）及其 `addIcon`/`removeIcon` 注册（`src/main.ts`）；「Obsidian 注册图标是 100×100 viewBox」的注释移到 `CHAIN_BROKEN_ICON_SVG` 上方。
+- 测试：`test/resource-badges.test.ts` 新增 1 条（类型、后缀、复合后缀、资源 id 后缀、未知后缀）；`test/node-renderer.test.ts` 把笔记节点断言改为 `file-text` 并新增 5 种资源用例；`test/styles.test.ts` 的源码字符串断言改为正则匹配新 `setIcon(...)` 且 `doesNotMatch(SHARE_SQUARE_ICON)`。
+
+**验证**：`npm run check` 0 错误；替代运行器（`.mtn-test-build/register.mjs` + `node --experimental-transform-types --import "file:///D:/Code/obsidian-mind-tree-natrue/.mtn-test-build/register.mjs" --test --test-isolation=none "test/*.test.ts"`）全量 **1253 tests / 1253 pass / 0 fail**。`npm run build` 仍报 esbuild `spawn EPERM`（沙箱环境限制，与本次改动无关），本轮未产出 `main.js`。
+
+**待人工验收**：在真实 Obsidian 里逐类确认图标——尤其 `git-fork` / `archive` / `table` / `code` / `music` / `video` 在当前 Obsidian 版本的 Lucide 集中存在；任何一个不存在就是空按钮，只能从该版本图标表里换名。笔记内嵌分支视图与图片节点同样走这条映射，一并看。
+
 
 
 
