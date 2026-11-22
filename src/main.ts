@@ -314,6 +314,16 @@ export default class MindTreeNaturePlugin extends Plugin {
     // creation path, so a tree made by a tool is the same tree a user would get.
     this.treeCreation = new MindTreeCreationService<TFile>({
       fileExists: (path) => Boolean(this.app.vault.getAbstractFileByPath(path)),
+      // A tree created from a node names its own folder, and that folder does
+      // not exist on the first creation: create every missing segment first.
+      ensureFolder: async (directory) => {
+        const segments = normalizePath(directory).split("/").filter(Boolean);
+        let current = "";
+        for (const segment of segments) {
+          current = current ? `${current}/${segment}` : segment;
+          if (!this.app.vault.getAbstractFileByPath(current)) await this.app.vault.createFolder(current);
+        }
+      },
       createFile: async (path, source) => {
         const file = await this.app.vault.create(path, source);
         // The parsed document is the identity the caller reports back, so a new
@@ -953,6 +963,16 @@ export default class MindTreeNaturePlugin extends Plugin {
       }
       if (active && active !== leaf && leaves.includes(active)) await this.app.workspace.revealLeaf(leaf);
     }
+  }
+
+  /**
+   * Create a tree for the node menu without taking focus: the calling view
+   * links the new file into the tree the user is editing, so navigating away
+   * would hide the result of the command.
+   */
+  async createMindTreeFile(title: string, folderPath: string): Promise<TFile> {
+    const created = await this.treeCreation.create({ title, folderPath, focus: false });
+    return created.file;
   }
 
   /** Allocate a destination only if a tree does not already have an owner. */

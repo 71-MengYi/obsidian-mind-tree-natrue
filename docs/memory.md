@@ -7,7 +7,7 @@
 **落点**：新增 `scripts/bump-version.mjs`（`node scripts/bump-version.mjs <patch|minor|major|X.Y.Z>`）——只替换 `manifest.json` 的 `version` 值（保留键序与格式）、把新版本按「新在前」写入 `versions.json`（值取 `minAppVersion`）、校验必须是合法 X.Y.Z 且严格大于当前版本。`package.json` 的 `0.1.0` 保持不动（`npm version` 会改它并自动建提交和标签，导致 manifest 与 tag 不一致，不要用）。
 
 **标准发布流程**：平时 feat/fix/docs 不碰版本号 → 决定发布时跑脚本 → `git commit -m "chore(release): X.Y.Z"` → push → 打同名标签并 push。
-`AGENTS.md` §1（版本号与命令表）、§6（发布）、§12.1 已同步；仓库现状：`versions.json` 以前只有 `0.1.0`，落后于标签到 `1.2.0`，本次 1.2.1 发布起按版本补齐。
+`AGENTS.md` §1（版本号与命令表）、§6（发布）、§12.1 已同步；
 
 ## 2026-11-19 · 版本快照 / 反向引用 / Canvas 导出 / UI 测试装载器（`feat`，团队协作，纯文档同步收尾）
 
@@ -978,6 +978,26 @@
 **验证**：`npm run check` 0 错误；全量 **1260 tests / 1260 pass / 0 fail**。`npm run build` 仍受沙箱 esbuild `spawn EPERM` 限制。
 
 **待人工验收**：真实 Obsidian 逐类看字形（`file-audio` / `file-video` / `file-archive` / `file-spreadsheet` / `layout-dashboard` / `globe-2`），确认失效红色断开图标仍正常，并顺手看 `.base`（Bases）是否也需要单独图标。
+
+## 2026-11-23 · 右键菜单「从此创建」分组 + 创建新思维树（`feat`）
+
+**结论（需求）**：文字节点右键菜单改为 ①关联已有文件 ②从此创建（子菜单：添加笔记 / 创建 TaskNote / 从模板添加文件 / 创建新思维树）③链接网页。节点已参与关联（有资源或 nodeLink）时，整个创建组与两条 link 行都隐藏。
+
+**落点**：
+- `ui/ui-contracts.ts`：新增 `CREATE_FROM_MENU_ORDER = ["add-note","create-task-note","add-file-template","create-tree"]`；`nodeResourceMenuItemOrder` 改返回 `NodeResourceMenuEntryId[]`（含组父行 `create-from`），`NodeMenuGroupId` 增加 `create-from`。
+- `ui/menus/node-context-menu.ts`：资源段改为 `rowFor(id)` 行描述 + `addMenuGroup` 渲染 `create-from`（宿主无子菜单能力时由 `addMenuGroup` 平铺，顺序不变）。
+- `services/tree-creation.ts` 新增纯函数 `createMindTreeSubfolderPath(base, title)`：`<base>/<清洗标题>`，标题清洗后为空则退回 base。
+- `ui/view-ops/resource-ops.ts` 新增 `createMindTreeForNode`：捕获目标 → `createMindTree` 建树（`focus:false`）→ `resources.ensureStableReference` → `associateFileWithTarget`；文件已建但关联失效时保留并提示真实路径。
+- `main.ts` 新增 `createMindTreeFile(title, folderPath)`，复用 `MindTreeCreationService`（与 Ribbon/命令/MCP 同源），新树不抢焦点。
+- i18n：`menu.createFrom` / `menu.createMindTree` / `notice.createdMindTree` / `notice.createdMindTreeNotLinked`（双语）。
+
+**坑**：`test/tasknotes.test.ts` 有一组源码字符串断言钉住旧的 `items.push("add-note", …, "link-web")` 与 `item.setTitle(...)` 写法，改菜单必须同步（已改为断言 `CREATE_FROM_MENU_ORDER`、`items.push("link-file","create-from","link-web")` 与 `{ title: t(...)`）。`edit` 偶发 `ReplaceFileW EIO (Win32 1175)`，原样重试即成功。
+
+**验证**：`npm run check` 0 错误；全量（`.mtn-test-build/register.mjs` 替代运行器）**1262 / 1262 / 0 fail**，新增 2 条（菜单分组顺序、子路径构造）。`npm run build` 未跑，沙箱 esbuild `spawn EPERM` 预期仍在。
+
+**待人工验收**：真实 Obsidian 里的子菜单悬停展开、移动端滑动子菜单、无子菜单宿主的平铺顺序，以及新树创建后节点徽标能打开新树。
+
+**缺陷修复（2026-11-23，用户实测）**：点「创建新思维树」时文件夹与文件都没生成，提示 `ENOENT: no such file`。原因：`vault.create` **不创建父目录**，而本功能传入的是全新子目录 `<树目录>/<节点标题>/`；旧的建树调用方（Ribbon/命令/MCP）只会传已存在的目录，所以 `MindTreeCreationService` 从来没有目录创建步骤。修法：`MindTreeCreationPorts` 增加 `ensureFolder(directory)`，`create()` 在首写前调用（传入归一化后的目录，根目录为空串）；`main.ts` 的端口按路径逐段 `vault.createFolder`。测试：`test/tree-creation.test.ts` 新增「creation ensures the destination folder before the first write」（fixture 记录 `ensured`），全量 **1263 / 1263 / 0 fail**。**沙箱注意**：`npm run build` 的 esbuild Node API 会 `spawn EPERM`，直接用 `./node_modules/@esbuild/win32-x64/esbuild.exe src/main.ts --bundle --external:obsidian --external:electron --external:@codemirror/state --external:@codemirror/view --external:@lezer/common --external:@lezer/highlight --external:@lezer/lr --format=cjs --target=es2018 --tree-shaking=true --outfile=main.js` 可正常产出（未加 `--sourcemap`，与生产构建一致）。
 
 
 

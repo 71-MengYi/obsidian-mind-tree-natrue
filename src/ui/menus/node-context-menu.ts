@@ -2,9 +2,9 @@ import { Menu } from "obsidian";
 import { t } from "../../i18n";
 import type { NodeNumberingFormat, NodeNumberingScope, NodeNumberingStart } from "../../types";
 import { CHAIN_BROKEN_ICON } from "../icons";
-import { guardNodeMenuAction, nodeResourceMenuItemOrder } from "../ui-contracts";
+import { CREATE_FROM_MENU_ORDER, guardNodeMenuAction, nodeResourceMenuItemOrder, type NodeResourceMenuItemId } from "../ui-contracts";
 import { copyAsGroup, copyBranchRow, exportGroup } from "./copy-export-menu";
-import { addMenuGroup, addMenuRow, supportsSubmenus } from "./menu-groups";
+import { addMenuGroup, addMenuRow, supportsSubmenus, type MenuRow } from "./menu-groups";
 import { addNodeNumberingMenu } from "./node-numbering-menu";
 
 export interface NodeContextMenuState {
@@ -28,6 +28,8 @@ export interface NodeContextMenuActions {
   /** Create a task note through the optional TaskNotes companion plugin. */
   readonly createTaskNote: () => void;
   readonly addFileFromTemplate: () => void;
+  /** Create a new mind tree under a folder named after this node, then link it. */
+  readonly createMindTree: () => void;
   readonly linkFile: () => void;
   readonly linkWeb: () => void;
   readonly openResource: () => void;
@@ -73,21 +75,37 @@ export class NodeContextMenu {
     const guarded = (action: () => void): (() => void) => guardNodeMenuAction(actions.isCurrent, action);
     // One probe per menu; every nested group and the numbering rows share it.
     const nested = supportsSubmenus(() => new Menu());
+    /** One row description per resource command, shared by direct rows and the group. */
+    const rowFor = (id: NodeResourceMenuItemId): MenuRow | undefined => {
+      switch (id) {
+        case "title-sync": return {
+          title: state.titleSyncEnabled ? t("menu.disableTitleSync") : t("menu.enableTitleSync"),
+          icon: state.titleSyncEnabled ? "unlink" : "refresh-cw", run: guarded(actions.toggleTitleSync)
+        };
+        case "add-note": return { title: t("menu.addNote"), icon: "file-plus-2", run: guarded(actions.addNote) };
+        case "create-task-note": return { title: t("menu.createTaskNote"), icon: "list-todo", run: guarded(actions.createTaskNote) };
+        case "add-file-template": return { title: t("menu.addFileFromTemplate"), icon: "copy-plus", run: guarded(actions.addFileFromTemplate) };
+        case "create-tree": return { title: t("menu.createMindTree"), icon: "list-tree", run: guarded(actions.createMindTree) };
+        case "link-file": return { title: t("menu.linkFile"), icon: "file-search", run: guarded(actions.linkFile) };
+        case "link-web": return { title: t("menu.linkWeb"), icon: "link", run: guarded(actions.linkWeb) };
+        case "open-resource": return { title: t("menu.openResource"), icon: "external-link", run: guarded(actions.openResource) };
+        case "open-default-app": return { title: t("menu.openDefaultApp"), icon: "app-window", run: guarded(actions.openDefaultApp) };
+        case "unlink-resource": return { title: t("menu.unlinkResource"), icon: CHAIN_BROKEN_ICON, run: guarded(actions.unlinkResource) };
+      }
+    };
     for (const id of nodeResourceMenuItemOrder(state)) {
-      menu.addItem((item) => {
-        switch (id) {
-          case "title-sync": return item.setTitle(state.titleSyncEnabled ? t("menu.disableTitleSync") : t("menu.enableTitleSync"))
-            .setIcon(state.titleSyncEnabled ? "unlink" : "refresh-cw").onClick(guarded(actions.toggleTitleSync));
-          case "add-note": return item.setTitle(t("menu.addNote")).setIcon("file-plus-2").onClick(guarded(actions.addNote));
-          case "create-task-note": return item.setTitle(t("menu.createTaskNote")).setIcon("list-todo").onClick(guarded(actions.createTaskNote));
-          case "add-file-template": return item.setTitle(t("menu.addFileFromTemplate")).setIcon("copy-plus").onClick(guarded(actions.addFileFromTemplate));
-          case "link-file": return item.setTitle(t("menu.linkFile")).setIcon("file-search").onClick(guarded(actions.linkFile));
-          case "link-web": return item.setTitle(t("menu.linkWeb")).setIcon("link").onClick(guarded(actions.linkWeb));
-          case "open-resource": return item.setTitle(t("menu.openResource")).setIcon("external-link").onClick(guarded(actions.openResource));
-          case "open-default-app": return item.setTitle(t("menu.openDefaultApp")).setIcon("app-window").onClick(guarded(actions.openDefaultApp));
-          case "unlink-resource": return item.setTitle(t("menu.unlinkResource")).setIcon(CHAIN_BROKEN_ICON).onClick(guarded(actions.unlinkResource));
-        }
-      });
+      if (id === "create-from") {
+        // The four creation commands live under one parent row; on app builds
+        // without nested menus they stay direct rows in the same place.
+        addMenuGroup(menu, {
+          title: t("menu.createFrom"),
+          icon: "file-plus",
+          rows: CREATE_FROM_MENU_ORDER.map(rowFor).filter((row): row is MenuRow => row !== undefined)
+        }, nested);
+        continue;
+      }
+      const row = rowFor(id);
+      if (row) addMenuRow(menu, row);
     }
     menu.addItem((item) => item.setTitle(t("toolbar.markers")).setIcon("tags").onClick(guarded(actions.showMarkers)));
     // The numbering group sits directly below the marker row and owns its own

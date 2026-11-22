@@ -33,7 +33,7 @@
 | 技术栈 | TypeScript（strict）+ 无 UI 框架的命令式 DOM/SVG + esbuild 打包 + `node:test` 单测 |
 | 运行环境 | Obsidian ≥ **1.8.7**，桌面端与移动端（`manifest.json` 的 `isDesktopOnly: false`） |
 | 包管理 | **npm**（CI 用 `npm ci`，锁文件 `package-lock.json`）；仓库不再保留 pnpm 锁与 workspace 配置 |
-| 版本号 | 发布版本看 `manifest.json`（当前 `1.2.1`）；`package.json` 的 `0.1.0` **不是**发布版本。改版本号一律走 `node scripts/bump-version.mjs`（见 §6） |
+| 版本号 | 发布版本看 `manifest.json`；`package.json` 的 `0.1.0` **不是**发布版本。改版本号一律走 `node scripts/bump-version.mjs`（见 §6） |
 | 程序入口 | `src/main.ts`（`MindTreeNaturePlugin`）→ `npm run build` → 根目录 `main.js`（构建产物，已 gitignore） |
 | 最低 Node | ≥ 20（`.github/workflows/release.yml` 硬校验） |
 
@@ -448,7 +448,7 @@ src/domain/ + types.ts 纯数据与树操作（可脱离 Obsidian 独立测试�
 
 ## 12. 容易踩的坑
 
-1. **版本号双轨**：`manifest.json` 是 `1.2.1`，`package.json` 是 `0.1.0`。发布版本只看 `manifest.json`，且必须与标签严格一致（`X.Y.Z`，无前后缀）。改版本号只走 `node scripts/bump-version.mjs`，并在独立的 `chore(release): X.Y.Z` 提交里完成——不要 amend 上一个提交，也不要 `npm version`。
+1. **版本号双轨**：发布版本只看 `manifest.json`，且必须与标签严格一致（`X.Y.Z`，无前后缀）。改版本号只走 `node scripts/bump-version.mjs`，并在独立的 `chore(release): X.Y.Z` 提交里完成——不要 amend 上一个提交，也不要 `npm version`。
 2. **`test/styles.test.ts` 是"源码字符串测试"**：它直接读取 `styles.css` 与 `src/ui/mind-tree-view.ts`、`src/ui/renderers/node-renderer.ts`。改 CSS 类名、或改这两个文件里的类名字符串，可能连带弄红它——改前先看断言。
 3. **i18n 占位符必须成对**：`{version}`、`{path}` 等在两语言中必须一致，缺一个 `test/i18n.test.ts` 就报错。
 4. **barrel 与已删 shim**：`src/ui/modals.ts`、`src/ui/clipboard-controller.ts` 已在 2026-10-11 删除（前者由 `ui/modals/index.ts` 承接，后者零引用）；`src/ui/components/index.ts`、`src/ui/controllers/index.ts`、`src/ui/renderers/index.ts`、`src/ui/menus/index.ts` 仍是 barrel，且**不是全目录**（controllers 缺 `delete-details-controller`、menus 缺 `theme-menu-hover`）——新代码优先直接从真实模块导入，别再往 shim 里加逻辑。

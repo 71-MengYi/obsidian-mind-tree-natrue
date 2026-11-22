@@ -14,8 +14,16 @@ export const KEYBOARD_HELP_ACTIONS = [
 ] as const;
 
 export type NodeResourceMenuItemId =
-  | "title-sync" | "add-note" | "create-task-note" | "add-file-template" | "link-file" | "link-web"
+  | "title-sync" | "add-note" | "create-task-note" | "add-file-template" | "create-tree"
+  | "link-file" | "link-web"
   | "open-resource" | "open-default-app" | "unlink-resource";
+
+/**
+ * Rows of the "create from here" submenu. Every row creates one file and links
+ * it to the node, so they share one group instead of five direct rows.
+ */
+export const CREATE_FROM_MENU_ORDER: readonly NodeResourceMenuItemId[] =
+  ["add-note", "create-task-note", "add-file-template", "create-tree"];
 
 /** Rows of the nested "copy as…" group shared by the node menu and the toolbar. */
 export type CopyAsMenuItemId = "copy-as-reference" | "copy-as-outline" | "copy-as-mermaid";
@@ -29,9 +37,12 @@ export type NodeMenuItemId = NodeResourceMenuItemId
   | "move-files" | "copy-branch";
 
 /** Parent rows whose commands live in a nested menu on both surfaces. */
-export type NodeMenuGroupId = "copy-as" | "export";
+export type NodeMenuGroupId = "create-from" | "copy-as" | "export";
 
 export type NodeMenuEntryId = NodeMenuItemId | NodeMenuGroupId;
+
+/** The resource section is direct rows plus the one creation group. */
+export type NodeResourceMenuEntryId = NodeResourceMenuItemId | "create-from";
 
 /** The one order both the node menu and the toolbar copy menu render. */
 export const COPY_AS_MENU_ORDER: readonly CopyAsMenuItemId[] =
@@ -56,15 +67,15 @@ export function nodeResourceMenuItemOrder(
     /** A node link already counts as this node's association. */
     readonly nodeLinked?: boolean;
   }
-): NodeResourceMenuItemId[] {
-  const items: NodeResourceMenuItemId[] = [];
+): NodeResourceMenuEntryId[] {
+  const items: NodeResourceMenuEntryId[] = [];
   if (state.hasFileResource) items.push("title-sync");
   // Creating or linking a resource is not offered once the node links another
   // node: the node link occupies that association slot.
-  // The optional TaskNote row sits directly below the plain note row: both
-  // create one file and link it, so they share the same unlinked-node section.
+  // For a plain text node the link row leads, the creation commands share one
+  // nested group, and the web link stays a direct row below it.
   if (!state.hasResource && !state.nodeLinked) {
-    items.push("add-note", "create-task-note", "add-file-template", "link-file", "link-web");
+    items.push("link-file", "create-from", "link-web");
   }
   if (state.hasResource) {
     items.push("open-resource");

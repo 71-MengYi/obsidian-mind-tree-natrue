@@ -38,6 +38,7 @@ import {
   TemplateTargetChangedError,
   type TemplateFileResult
 } from "../../services/template-files";
+import { createMindTreeSubfolderPath } from "../../services/tree-creation";
 import type { MindTreeSettings } from "../../settings-model";
 
 /**
@@ -76,6 +77,8 @@ export interface ResourceOpsHost {
   runMoveFilesCommand(references: FileResourceRef[], destinationFolder: string): void;
   runCreateNoteCommand(nodeId: NodeId): void;
   runCreateFileFromTemplateCommand(target: AssociationTarget, template: TFile): void;
+  /** Creates the tree file with the shared creation service; focus stays put. */
+  createMindTree(title: string, folderPath: string): Promise<TFile>;
   /** Association/identity error translation shared with the collection layer. */
   describeResourceError(error: unknown): string;
   getApp(): App;
@@ -140,6 +143,48 @@ export class ResourceOps {
     };
     if (node.title.trim()) await create(node.title);
     else new TextPromptModal(this.host.getApp(), t("modal.createNote.title"), "", t("modal.createNote.placeholder"), t("action.create"), (value) => void create(value)).open();
+  }
+
+  /**
+   * Create a fresh mind tree for this node.
+   *
+   * The new tree lives in a subfolder of the current tree's folder whose name
+   * and `.mtn.md` name both follow the node text, and the file is linked to the
+   * node instead of stealing focus: the user keeps editing the tree they are in
+   * and opens the child tree from the node's badge.
+   */
+  async createMindTreeForNode(nodeId: NodeId): Promise<void> {
+    if (this.host.commitVisibleEditorDraft() === "rejected") return;
+    const target = this.captureAssociationTarget(nodeId);
+    if (!target) return;
+    const node = this.host.getDocument()!.nodes[nodeId]!;
+    const create = async (source: string): Promise<void> => {
+      const title = fileTitleFromNode(source);
+      if (title === undefined) { new Notice(t("title.codeOrMath")); return; }
+      await this.host.createFileOnce(`${target.documentSessionToken}:${nodeId}`, async () => {
+        let created: { file: TFile; reference: FileResourceRef } | undefined;
+        try {
+          // The optional title dialog may outlive the tree or its unlinked node.
+          this.requireAssociationTarget(target);
+          const treeDirectory = this.host.getFile()?.parent?.isRoot() ? "" : this.host.getFile()?.parent?.path ?? "";
+          const file = await this.host.createMindTree(title, createMindTreeSubfolderPath(treeDirectory, title));
+          const reference = await this.host.getResources().ensureStableReference(file);
+          created = { file, reference };
+          this.associateFileWithTarget(target, file, reference, file.basename);
+        } catch (error) {
+          const message = this.host.describeResourceError(error);
+          if (created) {
+            // Like a normal new note, the created tree is retained: report its
+            // real path instead of deleting it or silently forgetting it.
+            new Notice(t("notice.createdMindTreeNotLinked", { path: created.file.path, message }));
+          } else new Notice(t("notice.createTreeFailed", { message }));
+          return;
+        }
+        if (created) new Notice(t("notice.createdMindTree", { path: created.file.path }));
+      });
+    };
+    if (node.title.trim()) await create(node.title);
+    else new TextPromptModal(this.host.getApp(), t("tree.create"), t("tree.newName"), t("tree.namePlaceholder"), t("action.create"), (value) => void create(value)).open();
   }
 
   /** Capture the destination before the picker can outlive its original view. */

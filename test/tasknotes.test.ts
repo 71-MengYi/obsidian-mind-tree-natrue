@@ -211,15 +211,17 @@ test("the node menu offers Create TaskNote below Add note only for unlinked node
   const menu = source("ui/menus/node-context-menu.ts");
   const view = source("ui/mind-tree-view.ts");
   const main = source("main.ts");
-  // Ordering is the contract: the TaskNote row sits directly under Add note.
-  assert.match(contracts, /items\.push\("add-note", "create-task-note", "add-file-template", "link-file", "link-web"\)/);
+  // Ordering is the contract: the link row leads, the creation group follows,
+  // and the TaskNote row sits directly under Add note inside that group.
+  assert.match(contracts, /\["add-note", "create-task-note", "add-file-template", "create-tree"\]/);
+  assert.match(contracts, /items\.push\("link-file", "create-from", "link-web"\)/);
   // A resource or a node link still suppresses every creation row, this one included.
   const guarded = contracts.slice(
     contracts.indexOf("if (!state.hasResource && !state.nodeLinked)"),
     contracts.indexOf("if (state.hasResource)")
   );
-  assert.match(guarded, /"create-task-note"/);
-  assert.match(menu, /case "create-task-note": return item\.setTitle\(t\("menu\.createTaskNote"\)\)/);
+  assert.match(guarded, /"create-from"/);
+  assert.match(menu, /case "create-task-note": return \{ title: t\("menu\.createTaskNote"\)/);
   assert.match(view, /createTaskNote: \(\) => void this\.createTaskNoteForNode\(nodeId\)/);
   assert.match(view, /private async createTaskNoteForNode\(nodeId: NodeId\)/);
   assert.match(view, /const taskNotes = this\.plugin\.taskNotes;/);

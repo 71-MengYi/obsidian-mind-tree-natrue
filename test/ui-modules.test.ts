@@ -5,7 +5,7 @@ import { createCanvasLabelId } from "../src/ui/components/canvas-shell";
 import { createBottomStatusBarState } from "../src/ui/components/models";
 import { DisposerBag } from "../src/ui/components/ui-object";
 import { createNodeVisualState } from "../src/ui/renderers/node-render-model";
-import { guardNodeMenuAction, COPY_AS_MENU_ORDER, EXPORT_MENU_ORDER, KEYBOARD_HELP_ACTIONS, nodeMenuItemOrder, nodeResourceMenuItemOrder, TOP_TOOLBAR_ORDER } from "../src/ui/ui-contracts";
+import { CREATE_FROM_MENU_ORDER, guardNodeMenuAction, COPY_AS_MENU_ORDER, EXPORT_MENU_ORDER, KEYBOARD_HELP_ACTIONS, nodeMenuItemOrder, nodeResourceMenuItemOrder, TOP_TOOLBAR_ORDER } from "../src/ui/ui-contracts";
 
 test("each canvas receives a unique labelled-by target", () => {
   const first = createCanvasLabelId();
@@ -41,7 +41,12 @@ test("toolbar and keyboard help expose the established semantic order", () => {
 
 test("node menu description changes only for applicable resource and tree state", () => {
   const plain = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: true, nodeLinked: false });
-  assert.deepEqual(plain.slice(0, 5), ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"]);
+  assert.deepEqual(plain.slice(0, 3), ["link-file", "create-from", "link-web"]);
+  // The creation commands are rows of the nested group, never direct entries.
+  for (const item of CREATE_FROM_MENU_ORDER) {
+    assert.equal(plain.includes(item), false);
+  }
+  assert.equal(plain.indexOf("markers"), 3);
   assert.ok(plain.includes("add-sibling"));
   assert.ok(plain.includes("toggle-collapse"));
   assert.ok(plain.includes("move-files"));
@@ -63,9 +68,20 @@ test("node menu description changes only for applicable resource and tree state"
   // the resource open/remove entries are not offered without a real resource.
   const nodeLinkedOnly = nodeMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, isRoot: false, hasChildren: false, nodeLinked: true });
   assert.deepEqual(nodeLinkedOnly.slice(0, 3), ["markers", "node-link", "add-child"]);
-  for (const item of ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"] as const) {
+  for (const item of ["link-file", "create-from", "link-web"] as const) {
     assert.equal(nodeLinkedOnly.includes(item), false);
   }
+});
+
+test("the creation commands share one nested group directly below the link row", () => {
+  assert.deepEqual(CREATE_FROM_MENU_ORDER, ["add-note", "create-task-note", "add-file-template", "create-tree"]);
+  assert.equal(new Set(CREATE_FROM_MENU_ORDER).size, CREATE_FROM_MENU_ORDER.length);
+  // "Link existing file" leads, the creation group follows and the web link
+  // closes the section; no creation command stays a direct row.
+  assert.deepEqual(nodeResourceMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true }),
+    ["link-file", "create-from", "link-web"]);
+  // A node link owns the association slot, so neither row nor group appears.
+  assert.deepEqual(nodeResourceMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp: true, nodeLinked: true }), []);
 });
 
 test("both menu surfaces share one copy-as order and one export order", () => {
@@ -80,7 +96,7 @@ test("both menu surfaces share one copy-as order and one export order", () => {
 test("resource menu never offers replacement, and default-app opening is desktop-only for files and URLs", () => {
   for (const isDesktopApp of [true, false]) {
     assert.deepEqual(nodeResourceMenuItemOrder({ hasFileResource: false, hasResource: false, isDesktopApp }),
-      ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"]);
+      ["link-file", "create-from", "link-web"]);
     for (const hasFileResource of [true, false]) {
       const expected = [
         ...(hasFileResource ? ["title-sync"] : []), "open-resource",
@@ -88,7 +104,7 @@ test("resource menu never offers replacement, and default-app opening is desktop
       ];
       const menu = nodeResourceMenuItemOrder({ hasFileResource, hasResource: true, isDesktopApp });
       assert.deepEqual(menu, expected);
-      for (const item of ["add-note", "create-task-note", "add-file-template", "link-file", "link-web"] as const) {
+      for (const item of ["link-file", "create-from", "link-web"] as const) {
         assert.equal(menu.includes(item), false);
       }
     }

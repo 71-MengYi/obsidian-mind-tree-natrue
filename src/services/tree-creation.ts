@@ -56,6 +56,21 @@ export function createMindTreePathCandidates(
   return candidates;
 }
 
+/**
+ * The folder a tree created "from this node" lives in.
+ *
+ * The node menu promise is one folder name and one tree name that both follow
+ * the source node's text, so the folder is the sanitised title under the tree's
+ * own folder and the `.mtn.md` file inside it carries the same title. Pure, so
+ * the rule is unit-testable without a vault.
+ */
+export function createMindTreeSubfolderPath(baseDirectory: string, title: string): string {
+  const cleanDirectory = normalizeDirectory(baseDirectory);
+  const cleanTitle = sanitizeMindTreeTitle(title);
+  if (!cleanTitle) return cleanDirectory;
+  return cleanDirectory ? `${cleanDirectory}/${cleanTitle}` : cleanTitle;
+}
+
 export interface MindTreeCreatedFile<TFile> {
   file: TFile;
   /** The parsed document of what was just written, so no second disk read is needed. */
@@ -64,6 +79,8 @@ export interface MindTreeCreatedFile<TFile> {
 
 export interface MindTreeCreationPorts<TFile> {
   fileExists(path: string): boolean;
+  /** Creates the folder (and its missing parents) before the first write. */
+  ensureFolder(directory: string): Promise<void>;
   createFile(path: string, source: string): Promise<MindTreeCreatedFile<TFile>>;
   /** Adds the initial child nodes to the tree just created, in order. */
   appendChildren(file: TFile, titles: readonly string[]): Promise<NodeId[]>;
@@ -101,6 +118,10 @@ export class MindTreeCreationService<TFile> {
     // Only reachable if a thousand same-named trees exist; refusing is safer
     // than looping forever or silently reusing one of them.
     if (!path) throw new Error(t("mcp.error.duplicateTitle", { title: safeTitle }));
+    // A tree created from a node names its own folder, so that folder usually
+    // does not exist yet: the adapter fails the first write with ENOENT when
+    // the parent is missing, and Obsidian never creates it implicitly.
+    await this.ports.ensureFolder(normalizeDirectory(input.folderPath ?? ""));
     const created = await this.ports.createFile(path, createMindTreeFile(safeTitle));
     const childTitles = (input.children ?? [])
       .map((child) => child.trim())

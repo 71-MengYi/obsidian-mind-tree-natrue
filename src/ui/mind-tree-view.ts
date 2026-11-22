@@ -275,6 +275,7 @@ export class MindTreeView extends TextFileView {
     runMoveFilesCommand: (references, folderPath) => { void this.moveFilesToFolder(references, folderPath); },
     runCreateNoteCommand: (nodeId) => { void this.createNoteForNode(nodeId); },
     runCreateFileFromTemplateCommand: (target, template) => { void this.createFileFromTemplate(target, template); },
+    createMindTree: (title, folderPath) => this.plugin.createMindTreeFile(title, folderPath),
     describeResourceError: (error) => this.describeResourceError(error),
     getApp: () => this.app,
     getLeaf: () => this.leaf,
@@ -396,7 +397,7 @@ export class MindTreeView extends TextFileView {
     // delete workflow's asynchronous boundary now lives on the command object.
     this.register(this.updateActivity.observe(this, [
       "onCanvasFileDrop", "insertClipboardImages", "insertResolvedBranches", "importText",
-      "createNoteForNode", "createFileFromTemplate", "moveFilesToFolder", "enableTitleSync",
+      "createNoteForNode", "createMindTreeForNode", "createFileFromTemplate", "moveFilesToFolder", "enableTitleSync",
       "cutSelected", "collectCandidates"
     ]));
     this.register(this.updateActivity.observe(this.nodeOps, ["executeDeleteBranch"]));
@@ -2872,6 +2873,7 @@ export class MindTreeView extends TextFileView {
       addNote: () => void this.createNoteForNode(nodeId),
       createTaskNote: () => void this.createTaskNoteForNode(nodeId),
       addFileFromTemplate: () => this.showTemplateFilePicker(nodeId),
+      createMindTree: () => void this.createMindTreeForNode(nodeId),
       linkFile: () => this.linkExistingFile(nodeId),
       linkWeb: () => this.linkUrl(nodeId),
       openResource: () => void this.openResource(nodeId),
@@ -3024,6 +3026,7 @@ export class MindTreeView extends TextFileView {
   private async exportSelectedCanvas(): Promise<void> { await this.exchange.exportSelectedCanvas(); }
 
   private async createNoteForNode(nodeId: NodeId): Promise<void> { await this.resourceOps.createNoteForNode(nodeId); }
+  private async createMindTreeForNode(nodeId: NodeId): Promise<void> { await this.resourceOps.createMindTreeForNode(nodeId); }
 
   /**
    * Create a task note through the optional TaskNotes plugin, move it into this

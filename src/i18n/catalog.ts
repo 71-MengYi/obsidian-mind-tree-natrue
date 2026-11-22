@@ -109,6 +109,8 @@ export const EN = {
   "tree.invalidName": "Enter a valid file name.",
   "action.create": "Create",
   "notice.createTreeFailed": "Unable to create mind tree: {message}",
+  "notice.createdMindTree": "Mind tree created and linked: {path}",
+  "notice.createdMindTreeNotLinked": "Mind tree created but not linked: {path}\n{message}",
 
   "mcp.error.invalidArguments": "Invalid tool arguments: {detail}",
   "mcp.error.treeNotFound": "No mind tree matches {target}. Use list_trees to see the available trees.",
@@ -374,9 +376,11 @@ export const EN = {
 
   "menu.disableTitleSync": "Stop syncing file name",
   "menu.enableTitleSync": "Sync file name",
+  "menu.createFrom": "Create from here",
   "menu.addNote": "Add note",
   "menu.createTaskNote": "Create TaskNote",
   "menu.addFileFromTemplate": "Add file from template",
+  "menu.createMindTree": "Create new mind tree",
   "menu.linkFile": "Link existing file",
   "menu.linkWeb": "Link web page",
   "menu.openResource": "Open resource",
@@ -881,6 +885,8 @@ const ZH: Record<TranslationKey, string> = {
   "tree.invalidName": "请输入有效的文件名。",
   "action.create": "创建",
   "notice.createTreeFailed": "无法创建思维树：{message}",
+  "notice.createdMindTree": "已创建思维树并关联：{path}",
+  "notice.createdMindTreeNotLinked": "思维树已创建，但未能关联：{path}\n{message}",
 
   "mcp.error.invalidArguments": "工具参数不合法：{detail}",
   "mcp.error.treeNotFound": "没有匹配 {target} 的思维树。可用 list_trees 查看现有思维树。",
@@ -1146,9 +1152,11 @@ const ZH: Record<TranslationKey, string> = {
 
   "menu.disableTitleSync": "停止同步文件名",
   "menu.enableTitleSync": "同步文件名",
+  "menu.createFrom": "从此创建",
   "menu.addNote": "添加笔记",
   "menu.createTaskNote": "创建 TaskNote",
   "menu.addFileFromTemplate": "从模板添加文件",
+  "menu.createMindTree": "创建新思维树",
   "menu.linkFile": "关联已有文件",
   "menu.linkWeb": "链接网页",
   "menu.openResource": "打开资源",

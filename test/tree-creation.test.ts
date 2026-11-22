@@ -20,7 +20,7 @@ const hooks = registerHooks({
       : next(url, context);
   }
 });
-const { MindTreeCreationService, createMindTreePathCandidates, sanitizeMindTreeTitle } =
+const { MindTreeCreationService, createMindTreePathCandidates, createMindTreeSubfolderPath, sanitizeMindTreeTitle } =
   await import("../src/services/tree-creation");
 const { parseMindTreeFile, serializeMindTreeFile } = await import("../src/format/document");
 const { addNode } = await import("../src/domain/tree");
@@ -35,10 +35,12 @@ function fixture(existing: readonly string[] = [], alwaysPresent = false) {
   const sources = new Map<string, string>();
   for (const path of existing) sources.set(path, "existing");
   const created: string[] = [];
+  const ensured: string[] = [];
   const appended: Array<{ path: string; titles: string[] }> = [];
   const activated: Array<{ path: string; focus: boolean }> = [];
   const service = new MindTreeCreationService<StoredFile>({
     fileExists: (path) => alwaysPresent || sources.has(path),
+    ensureFolder: async (directory) => { ensured.push(directory); },
     createFile: async (path, source) => {
       created.push(path);
       sources.set(path, source);
@@ -56,7 +58,7 @@ function fixture(existing: readonly string[] = [], alwaysPresent = false) {
     activate: async (file, focus) => { activated.push({ path: file.path, focus }); }
   });
   const documentAt = (path: string) => parseMindTreeFile(sources.get(path) ?? "").document;
-  return { service, sources, created, appended, activated, documentAt };
+  return { service, sources, created, ensured, appended, activated, documentAt };
 }
 
 test("a tree title is sanitised with the shared file-name rules", () => {
@@ -64,6 +66,36 @@ test("a tree title is sanitised with the shared file-name rules", () => {
   assert.equal(sanitizeMindTreeTitle("  A   B \n C  "), "A B C");
   assert.equal(sanitizeMindTreeTitle("///"), "");
   assert.equal(sanitizeMindTreeTitle(""), "");
+});
+
+test("a tree created from a node keeps one name for its folder and its file", () => {
+  // Folder and `.mtn.md` both follow the node text, so the subpath is
+  // <tree folder>/<title>/<title>.mtn.md.
+  assert.equal(createMindTreeSubfolderPath("", "Topic"), "Topic");
+  assert.equal(createMindTreeSubfolderPath("Notes/Tree", "Topic"), "Notes/Tree/Topic");
+  assert.deepEqual(createMindTreePathCandidates(createMindTreeSubfolderPath("Notes", "Topic"), "Topic", 2),
+    ["Notes/Topic/Topic.mtn.md", "Notes/Topic/Topic 2.mtn.md"]);
+  // Windows separators, stray slashes and illegal characters are normalised by
+  // the same rules tree creation and resource renaming already share.
+  assert.equal(createMindTreeSubfolderPath("\\\\Notes\\\\Tree\\\\", " a/b:c "), "Notes/Tree/a b c");
+  // A blank or fully illegal text yields no folder of its own instead of a
+  // directory with an empty segment.
+  assert.equal(createMindTreeSubfolderPath("Notes", ""), "Notes");
+  assert.equal(createMindTreeSubfolderPath("Notes", "///"), "Notes");
+  assert.equal(createMindTreeSubfolderPath("", "///"), "");
+});
+
+test("creation ensures the destination folder before the first write", async () => {
+  const sub = fixture();
+  await sub.service.create({ title: "Topic", folderPath: "\\\\Notes\\\\Topic\\\\" });
+  // The folder is normalised once and created before the file: without it the
+  // adapter fails the first write with ENOENT and nothing is created at all.
+  assert.deepEqual(sub.ensured, ["Notes/Topic"]);
+  assert.deepEqual(sub.created, ["Notes/Topic/Topic.mtn.md"]);
+  const root = fixture();
+  await root.service.create({ title: "Root" });
+  assert.deepEqual(root.ensured, [""]);
+  assert.deepEqual(root.created, ["Root.mtn.md"]);
 });
 
 test("path candidates follow the numbered collision sequence", () => {
