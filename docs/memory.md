@@ -967,6 +967,18 @@
 
 **未完成 / 注意**：只读树预览（版本历史双栏、主题悬浮预览、笔记内嵌分支视图）没有资源索引能力，`ReadOnlyTreePreview` 未传 `invalidResourceNodeIds`，因此预览里失效资源仍显示类型图标；若要在内嵌视图也标红，需要给 `MindTreeReferenceEmbedPorts` 增加解析端口。`npm run build` 仍是沙箱 esbuild `spawn EPERM`。
 
+## 2026-11-23 · 资源图标换成 Obsidian 内置图标（Canvas 用官方 `layout-dashboard`）（`fix`）
+
+**结论（用户提问）**：Obsidian 自己的 Canvas 图标是 **`layout-dashboard`**。安装包里 bookmark 项与 `canvas:new-file` 命令都直接 `A(el,"lucide-layout-dashboard")`。`setIcon` 传无前缀 id 等价：包内 `o.startsWith("lucide-")` 分支会把 `lucide-x` 还原成 `x` 查表。
+
+**关键坑（已存在的真缺陷）**：上一轮用的 `globe` / `music` / `archive` / `code` / `table` 在 Obsidian 内置图标表里**不存在**，`setIcon` 遇未注册 id 会静默渲染空按钮——表现是打开按钮位置只剩空白。核对办法：直接读安装包 `C:\Program Files\Obsidian\resources\obsidian.asar`，用 `node -e` 做 latin1 `includes(JSON.stringify(name))` 批量检查；**不要**用 `grep -a` 扫这个 24MB 单行包，会跑几分钟并被 150s 守卫杀掉。已确认存在于包内的 file-* 家族：`file-text`、`file-image`、`file-audio`、`file-video`、`file-archive`、`file-code`、`file-spreadsheet`、`file-json`、`file`；URL 官方用 `globe-2`（`globe` 不存在）；Canvas 用 `layout-dashboard`。另外 Obsidian 的**文件浏览器本身不给文件单独画类型图标**（文件项只显示扩展名 tag，`.md` 连 tag 都隐藏），类型图标来自各 view 类（pdf→`file-text`、image→`image`、audio→`file-audio`），所以「和官方一致」按 view 图标的 file-* 家族取。
+
+**落点**：`render/resource-badges.ts` 的 `RESOURCE_OPEN_ICON_NAMES` 全量替换：url→`globe-2`、note→`file-text`、image→`image`、**canvas→`layout-dashboard`**、audio→`file-audio`、video→`file-video`、archive→`file-archive`、code→`file-code`、table→`file-spreadsheet`、mind-tree→`git-fork`、file→`file`。新增 `canvas` kind：`CODE_EXTENSIONS` 移除 `canvas`，扩展名判定在 video/archive/code 之前单独返回 `canvas`。docs/02 §5.5、docs/05 §9、README 双语同步；测试断言改为新 id（含 `Board.canvas` → `layout-dashboard`）。
+
+**验证**：`npm run check` 0 错误；全量 **1260 tests / 1260 pass / 0 fail**。`npm run build` 仍受沙箱 esbuild `spawn EPERM` 限制。
+
+**待人工验收**：真实 Obsidian 逐类看字形（`file-audio` / `file-video` / `file-archive` / `file-spreadsheet` / `layout-dashboard` / `globe-2`），确认失效红色断开图标仍正常，并顺手看 `.base`（Bases）是否也需要单独图标。
+
 
 
 

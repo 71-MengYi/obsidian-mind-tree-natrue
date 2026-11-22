@@ -150,7 +150,7 @@ test("the open control shows the icon of the linked resource kind", () => {
     const { controls } = renderNode({ ...baseNode(), resource });
     return controls.querySelectorAll(".mtn-resource-open")[0]!.icon as string;
   };
-  assert.equal(iconFor({ type: "url", url: "https://example.com" }), "globe");
+  assert.equal(iconFor({ type: "url", url: "https://example.com" }), "globe-2");
   assert.equal(iconFor({ type: "file", resourceId: "pic", pathHint: "pic.png", fileKind: "image" }), "image");
   assert.equal(iconFor({ type: "file", resourceId: "tree", pathHint: "Other.mtn.md", fileKind: "note" }), "git-fork");
   assert.equal(iconFor({ type: "file", resourceId: "pdf", pathHint: "a.pdf", fileKind: "attachment" }), "file-text");
@@ -172,7 +172,7 @@ test("an unopenable resource shows the red warning mark in the open slot", () =>
   // A healthy resource keeps its type icon and never carries the warning class.
   const healthy = renderNode(node);
   const healthyOpen = healthy.controls.querySelectorAll(".mtn-resource-open")[0]!;
-  assert.equal(healthyOpen.icon, "globe");
+  assert.equal(healthyOpen.icon, "globe-2");
   assert.equal(healthyOpen.classes.has("is-missing"), false);
   assert.equal(healthyOpen.attributes["aria-label"], "Open linked resource");
 });

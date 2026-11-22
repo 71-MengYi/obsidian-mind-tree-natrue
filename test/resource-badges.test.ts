@@ -552,7 +552,7 @@ test("the open control icon follows the linked resource kind", () => {
   assert.equal(resolveResourceOpenIcon(undefined), "file");
 
   assert.equal(kindOf({ type: "url", url: "https://example.com" }), "url");
-  assert.equal(iconOf({ type: "url", url: "https://example.com" }), "globe");
+  assert.equal(iconOf({ type: "url", url: "https://example.com" }), "globe-2");
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "Note.md", fileKind: "note" }), "file-text");
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "pic.PNG", fileKind: "image" }), "image");
   // A mind tree keeps its own icon even though it is also a Markdown note, and
@@ -561,11 +561,13 @@ test("the open control icon follows the linked resource kind", () => {
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "Tree~mtn-abc12.mtn.md", fileKind: "note" }), "git-fork");
 
   // Attachment families fall back to the suffix, with compound suffixes kept.
-  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "song.mp3", fileKind: "attachment" }), "music");
-  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "clip.mp4", fileKind: "attachment" }), "video");
-  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "pack.tar.gz", fileKind: "attachment" }), "archive");
-  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "script.ts", fileKind: "attachment" }), "code");
-  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "rows.csv", fileKind: "attachment" }), "table");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "song.mp3", fileKind: "attachment" }), "file-audio");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "clip.mp4", fileKind: "attachment" }), "file-video");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "pack.tar.gz", fileKind: "attachment" }), "file-archive");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "script.ts", fileKind: "attachment" }), "file-code");
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "rows.csv", fileKind: "attachment" }), "file-spreadsheet");
+  // Canvas files keep Obsidian's own canvas mark, not the code/JSON family.
+  assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "Board.canvas", fileKind: "attachment" }), "layout-dashboard");
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "doc.pdf", fileKind: "attachment" }), "file-text");
   // An unknown suffix stays on Obsidian's generic file icon instead of guessing.
   assert.equal(iconOf({ type: "file", resourceId: "a", pathHint: "blob.bin", fileKind: "attachment" }), "file");

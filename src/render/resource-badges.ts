@@ -426,6 +426,7 @@ export type ResourceOpenIconKind =
   | "mind-tree"
   | "note"
   | "image"
+  | "canvas"
   | "audio"
   | "video"
   | "archive"
@@ -434,20 +435,23 @@ export type ResourceOpenIconKind =
   | "file";
 
 /**
- * Obsidian ships Lucide icons under these names. An unknown name renders an
- * empty button, so the mapping stays on long-standing ids instead of guessing
- * a per-extension icon.
+ * Icon ids that exist in Obsidian's bundled Lucide subset. An unregistered name
+ * renders an empty button, so every entry here must stay on that set; the canvas
+ * mark is the one Obsidian itself uses for `.canvas` files (`layout-dashboard`,
+ * the same id its file commands and bookmarks register), and the file-* family
+ * mirrors the icons Obsidian gives its own pdf/audio/image views.
  */
 const RESOURCE_OPEN_ICON_NAMES: Readonly<Record<ResourceOpenIconKind, string>> = {
-  url: "globe",
+  url: "globe-2",
   "mind-tree": "git-fork",
   note: "file-text",
   image: "image",
-  audio: "music",
-  video: "video",
-  archive: "archive",
-  code: "code",
-  table: "table",
+  canvas: "layout-dashboard",
+  audio: "file-audio",
+  video: "file-video",
+  archive: "file-archive",
+  code: "file-code",
+  table: "file-spreadsheet",
   file: "file"
 };
 
@@ -464,7 +468,7 @@ const CODE_EXTENSIONS: ReadonlySet<string> = new Set([
   "js", "mjs", "cjs", "jsx", "ts", "tsx", "json", "jsonc", "css", "scss", "sass",
   "less", "html", "htm", "xml", "yml", "yaml", "py", "sh", "bash", "zsh", "ps1",
   "go", "rs", "java", "kt", "kts", "c", "h", "cpp", "hpp", "cs", "rb", "php",
-  "lua", "sql", "toml", "ini", "canvas", "excalidraw"
+  "lua", "sql", "toml", "ini", "excalidraw"
 ]);
 const TABLE_EXTENSIONS: ReadonlySet<string> = new Set(["csv", "tsv", "xlsx", "xls", "ods"]);
 /** Text-like documents keep the note icon even though they are attachments. */
@@ -473,10 +477,11 @@ const TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
 ]);
 
 /**
- * A URL is a web page, a mind-tree file is navigation between trees and a
- * linked image is shown as a picture, so those three never depend on the
- * filename suffix. Everything else falls back to its attachment family, with an
- * unclassified file keeping Obsidian's generic file icon.
+ * A URL is a web page, a mind-tree file is navigation between trees, a canvas
+ * file keeps Obsidian's own canvas mark and a linked image is shown as a
+ * picture, so those never depend on a generic attachment family. Everything
+ * else falls back to its suffix, with an unclassified file keeping Obsidian's
+ * generic file icon.
  */
 export function resolveResourceOpenIconKind(node?: Readonly<MindTreeNode>): ResourceOpenIconKind {
   const resource = node?.resource;
@@ -489,6 +494,7 @@ export function resolveResourceOpenIconKind(node?: Readonly<MindTreeNode>): Reso
   // compound suffixes, so `x.7z` and `x.tar.gz` classify like their badge does.
   const extension = deriveFileBadgeExtension(resource.pathHint)?.split(".").at(-1);
   if (!extension) return "file";
+  if (extension === "canvas") return "canvas";
   if (SOUND_EXTENSIONS.has(extension)) return "audio";
   if (VIDEO_EXTENSIONS.has(extension)) return "video";
   if (ARCHIVE_EXTENSIONS.has(extension)) return "archive";
