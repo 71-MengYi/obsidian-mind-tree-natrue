@@ -1632,23 +1632,37 @@
 }
 
 /* Local version history: metadata list on the left, the shared read-only tree
-   renderer on the right. The preview owns its own canvas and never writes. */
+   renderer on the right. The preview owns its own canvas and never writes.
+   The content is a fixed-height flex column so the action row (and the restore
+   button) is always visible instead of being pushed below the modal viewport
+   by the tall preview pane. */
 .mtn-snapshot-modal {
   width: min(980px, calc(100vw - 32px));
+}
+
+.mtn-snapshot-modal .modal-content {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(80vh, 760px);
+  overflow: hidden;
 }
 
 .mtn-snapshot-layout {
   display: grid;
   grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
   gap: 12px;
-  min-height: 420px;
-  max-height: min(70vh, 620px);
+  flex: 1 1 auto;
+  min-height: 0;
+  max-height: none;
+  overflow: auto;
 }
 
 .mtn-snapshot-list {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  min-height: 0;
   padding-inline-end: 4px;
   overflow-y: auto;
 }
@@ -1692,7 +1706,7 @@
 .mtn-snapshot-preview {
   position: relative;
   flex: 1;
-  min-height: 380px;
+  min-height: 240px;
   overflow: hidden;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s, 6px);
@@ -1705,22 +1719,25 @@
 
 .mtn-snapshot-actions {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
   gap: 8px;
-  margin-top: 12px;
+  margin-top: 0;
 }
 
 @media (max-width: 720px) {
   .mtn-snapshot-layout {
     grid-template-columns: minmax(0, 1fr);
-    max-height: none;
+    overflow-y: auto;
   }
 
   .mtn-snapshot-list {
+    flex: none;
     max-height: 160px;
   }
 
   .mtn-snapshot-preview {
+    flex: none;
     min-height: 300px;
   }
 }
