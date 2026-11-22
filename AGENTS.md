@@ -32,7 +32,7 @@
 | 项目 | **Mind Tree Nature** —— Obsidian「离线优先」思维导图插件，以 `.mtn.md` 为载体 |
 | 技术栈 | TypeScript（strict）+ 无 UI 框架的命令式 DOM/SVG + esbuild 打包 + `node:test` 单测 |
 | 运行环境 | Obsidian ≥ **1.8.7**，桌面端与移动端（`manifest.json` 的 `isDesktopOnly: false`） |
-| 包管理 | **npm**（CI 用 `npm ci`）。仓库里同时存在 `pnpm-lock.yaml` / `pnpm-workspace.yaml`，但以 npm 为准 |
+| 包管理 | **npm**（CI 用 `npm ci`，锁文件 `package-lock.json`）；仓库不再保留 pnpm 锁与 workspace 配置 |
 | 版本号 | 发布版本看 `manifest.json`（当前 `1.2.1`）；`package.json` 的 `0.1.0` **不是**发布版本。改版本号一律走 `node scripts/bump-version.mjs`（见 §6） |
 | 程序入口 | `src/main.ts`（`MindTreeNaturePlugin`）→ `npm run build` → 根目录 `main.js`（构建产物，已 gitignore） |
 | 最低 Node | ≥ 20（`.github/workflows/release.yml` 硬校验） |
@@ -74,7 +74,6 @@ mind-tree-nature/
 ├── tsconfig.json               strict + noUncheckedIndexedAccess，include = src/**、test/**
 ├── esbuild.config.mjs          打包配置（entry=src/main.ts，cjs，external=obsidian/electron/codemirror…）
 ├── package-lock.json           npm 锁文件（CI 使用）
-├── pnpm-lock.yaml / pnpm-workspace.yaml   历史遗留，不作为构建依据
 ├── README.md / README.en.md    用户文档（中文 / 英文，改用户可见行为要同步两份）
 ├── LICENSE                     MIT
 ├── THIRD_PARTY_NOTICES.md      第三方声明（主题与部分布局改编自 Light Mindmap）
