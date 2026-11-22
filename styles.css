@@ -1671,9 +1671,11 @@
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: 2px;
+  gap: 4px;
   width: 100%;
-  padding: 8px 10px;
+  min-height: 46px;
+  padding: 10px 12px;
+  line-height: 1.45;
   border: 1px solid var(--background-modifier-border);
   border-radius: var(--radius-s, 6px);
   text-align: start;
